@@ -82,7 +82,6 @@ contract StakedHemi is OwnableUpgradeable {
 
     // --- Internal helpers ---
     function _checkpoint(address addr, LockedBalance memory oldLocked, LockedBalance memory newLocked) internal {
-        // Reference: sample.vy _checkpoint
         Point memory lastPoint = pointHistory[epoch];
         uint256 lastCheckpoint = lastPoint.ts;
         uint256 blockSlope = 0; // dblock/dt
@@ -149,13 +148,12 @@ contract StakedHemi is OwnableUpgradeable {
         LockedBalance memory lockedBalance,
         int128 depositType
     ) internal {
-        // Implement deposit logic as in sample.vy
+        // Implement deposit logic as in
     }
 
     // --- External functions ---
 
     function createLock(uint256 value, uint256 unlockTime) external {
-        // Reference: sample.vy create_lock
         if (value == 0) revert AmountIsZero();
 
         LockedBalance memory userLock = locked[msg.sender];
@@ -186,15 +184,15 @@ contract StakedHemi is OwnableUpgradeable {
     }
 
     function depositFor(address addr, uint256 value) external {
-        // Implement depositFor logic as in sample.vy
+        // Implement depositFor logic as in
     }
 
     function increaseAmount(uint256 value) external {
-        // Implement increaseAmount logic as in sample.vy
+        // Implement increaseAmount logic as in
     }
 
     function increaseUnlockTime(uint256 unlockTime) external {
-        // Implement increaseUnlockTime logic as in sample.vy
+        // Implement increaseUnlockTime logic as in
     }
 
     function withdraw() external {
