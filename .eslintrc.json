@@ -1,0 +1,14 @@
+{
+  "extends": [
+    "eslint:recommended",
+    "plugin:@typescript-eslint/eslint-recommended",
+    "plugin:@typescript-eslint/recommended",
+    "plugin:mocha/recommended"
+  ],
+  "root": true,
+  "parser": "@typescript-eslint/parser",
+  "plugins": ["@typescript-eslint", "prettier", "mocha"],
+  "rules": {
+    "jsdoc/require-jsdoc": "off"
+  }
+}

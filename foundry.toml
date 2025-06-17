@@ -1,0 +1,7 @@
+[profile]
+src = 'src'
+test = 'test'
+script = 'script'
+
+[solidity]
+version = '0.8.30'
