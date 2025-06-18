@@ -86,22 +86,31 @@ contract StakedHemi is ERC721EnumerableUpgradeable, OwnableUpgradeable, Reentran
         nextTokenId = 1;
     }
 
-    /// @inheritdoc IVotingEscrow
     function checkpoint() external nonReentrant {
         _checkpoint(0, LockedBalance(0, 0), LockedBalance(0, 0));
     }
 
-    function createLock(uint256 amount_, uint256 lockDuration_) external returns (uint256 tokenId) {
-        tokenId = _createLock(amount_, lockDuration_, msg.sender);
+    function createLock(uint256 amount_, uint256 lockDuration_) external returns (uint256 _tokenId) {
+        _tokenId = _createLock(amount_, lockDuration_, msg.sender);
     }
 
     // TODO: allow this to specific role?
     function createLockFor(uint256 amount_, uint256 lockDuration_, address account_)
         external
-        returns (uint256 tokenId)
+        returns (uint256 _tokenId)
     {
         if (account_ == address(0)) revert AddressIsNull();
-        tokenId = _createLock(amount_, lockDuration_, account_);
+        _tokenId = _createLock(amount_, lockDuration_, account_);
+    }
+
+    function depositFor(uint256 tokenId_, uint256 amount_) external nonReentrant {
+        _increaseAmountFor(tokenId_, amount_);
+    }
+
+    function increaseAmount(uint256 tokenId_, uint256 amount_) external nonReentrant {
+        address _sender = _msgSender();
+        if (_ownerOf(tokenId_) != _sender) revert NotOwner();
+        _increaseAmountFor(tokenId_, amount_);
     }
 
     function withdraw(uint256 tokenId_) external nonReentrant {
@@ -153,6 +162,20 @@ contract StakedHemi is ERC721EnumerableUpgradeable, OwnableUpgradeable, Reentran
 
         _depositFor(tokenId, amount_, unlockTime, locked[tokenId]);
         return tokenId;
+    }
+
+    function _increaseAmountFor(uint256 tokenId_, uint256 amount_) internal {
+        LockedBalance memory _oldLocked = locked[tokenId_];
+
+        if (amount_ == 0) revert AmountIsZero();
+        if (_oldLocked.amount <= 0) revert NoExistingLock();
+        if (_oldLocked.end <= block.timestamp) revert LockExpired();
+
+        // TODO: Implement this
+        // _checkpointDelegatee(_delegates[tokenId_], amount_, true);
+        _depositFor(tokenId_, amount_, 0, _oldLocked);
+
+        // TODO: emit event
     }
 
     function _update(address to, uint256 tokenId, address auth)
@@ -366,5 +389,10 @@ contract StakedHemi is ERC721EnumerableUpgradeable, OwnableUpgradeable, Reentran
 
         emit Deposit(from, tokenId_, amount_, _newLocked.end, block.timestamp);
         // emit Supply(supplyBefore, supplyBefore + amount_);
+    }
+
+    // Add this view function to StakedHemi.sol for testing
+    function getUserPoint(uint256 tokenId_, uint256 epoch_) external view returns (Point memory) {
+        return userPointHistory[tokenId_][epoch_];
     }
 }

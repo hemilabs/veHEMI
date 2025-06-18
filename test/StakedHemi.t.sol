@@ -145,4 +145,110 @@ contract StakedHemiTest is Test {
         assertEq(stakedHemi.ownerOf(tokenId1), user, "Owner of tokenId1 should be user");
         assertEq(stakedHemi.ownerOf(tokenId2), user, "Owner of tokenId2 should be user");
     }
+
+    function testDepositForIncreasesLockAmount() public {
+        uint256 amount = 10 ether;
+        uint256 extra = 5 ether;
+        uint256 unlockTime = block.timestamp + 4 weeks;
+
+        // User creates a lock
+        vm.prank(user);
+        uint256 tokenId = stakedHemi.createLock(amount, unlockTime);
+
+        // Another user deposits for this lock
+        address depositor = address(0xCAFE);
+        hemi.mint(depositor, 100 ether);
+        vm.prank(depositor);
+        hemi.approve(address(stakedHemi), type(uint256).max);
+
+        vm.prank(depositor);
+        stakedHemi.depositFor(tokenId, extra);
+
+        // Check locked amount increased
+        (int128 lockedAmount,) = stakedHemi.locked(tokenId);
+        assertEq(uint256(uint128(lockedAmount)), amount + extra, "depositFor did not increase lock amount");
+    }
+
+    function testIncreaseAmountIncreasesLockAmount() public {
+        uint256 amount = 20 ether;
+        uint256 extra = 7 ether;
+        uint256 unlockTime = block.timestamp + 8 weeks;
+
+        // User creates a lock
+        vm.prank(user);
+        uint256 tokenId = stakedHemi.createLock(amount, unlockTime);
+
+        // User increases their lock amount
+        vm.prank(user);
+        stakedHemi.increaseAmount(tokenId, extra);
+
+        // Check locked amount increased
+        (int128 lockedAmount,) = stakedHemi.locked(tokenId);
+        assertEq(uint256(uint128(lockedAmount)), amount + extra, "increaseAmount did not increase lock amount");
+    }
+
+    function testCheckpointUpdatesUserPointHistory() public {
+        uint256 amount_ = 10 ether;
+        uint256 unlockTime_ = block.timestamp + 4 weeks;
+
+        // User creates a lock
+        vm.prank(user);
+        uint256 tokenId_ = stakedHemi.createLock(amount_, unlockTime_);
+
+        // Get user epoch before checkpoint
+        uint256 userEpochBefore_ = stakedHemi.userPointEpoch(tokenId_);
+
+        // Call checkpoint with old and new locked (simulate increase)
+        (int128 oldAmount_, uint256 oldEnd_) = stakedHemi.locked(tokenId_);
+        StakedHemi.LockedBalance memory oldLocked_ = StakedHemi.LockedBalance(oldAmount_, oldEnd_);
+        StakedHemi.LockedBalance memory newLocked_ =
+            StakedHemi.LockedBalance(oldAmount_ + int128(int256(1 ether)), oldEnd_);
+
+        // Only owner can call internal, so use a helper or make _checkpoint public for testing
+        vm.prank(address(stakedHemi));
+        stakedHemi.checkpoint();
+
+        // User epoch should increase
+        uint256 userEpochAfter_ = stakedHemi.userPointEpoch(tokenId_);
+        console2.log(" testCheckpointUpdatesUserPointHistory ~ userEpochAfter_:", userEpochAfter_);
+        assertEq(userEpochAfter_, 1, "User epoch not incremented");
+
+        // User point history should be updated
+        StakedHemi.Point memory pt_ = stakedHemi.getUserPoint(tokenId_, userEpochAfter_);
+        assertEq(pt_.amount, uint256(uint128(newLocked_.amount)), "User point not updated");
+    }
+
+    function testCheckpoint() public {
+        uint256 amount_ = 10 ether;
+        uint256 unlockTime_ = block.timestamp + 52 weeks;
+
+        // User creates a lock
+        vm.prank(user);
+        uint256 tokenId_ = stakedHemi.createLock(amount_, unlockTime_);
+
+        // Get user epoch after lock creation
+        uint256 userEpoch_ = stakedHemi.userPointEpoch(tokenId_);
+
+        // Store initial values for later comparison
+        uint256 initialHemiAmount_ = amount_;
+
+        // Increase amount through normal methods
+        uint256 extraAmount_ = 5 ether;
+        // vm.warp(block.timestamp + 10 weeks); // Simulate time passing
+        vm.prank(user);
+        stakedHemi.increaseAmount(tokenId_, extraAmount_);
+
+        // User epoch should increase
+        uint256 newUserEpoch_ = stakedHemi.userPointEpoch(tokenId_);
+        console.log(" testCheckpoint ~ newUserEpoch_:", newUserEpoch_);
+        assertEq(newUserEpoch_, userEpoch_ + 1, "User epoch not incremented");
+
+        // Get the locked balance to verify it increased
+        (int128 lockedAmount_,) = stakedHemi.locked(tokenId_);
+        assertEq(uint256(uint128(lockedAmount_)), amount_ + extraAmount_, "Locked amount not updated correctly");
+
+        // Check global state
+        uint256 globalEpoch_ = stakedHemi.epoch();
+        assertTrue(globalEpoch_ > 0, "Global epoch should be updated");
+    }
 }
