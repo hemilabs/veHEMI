@@ -86,6 +86,11 @@ contract StakedHemi is ERC721EnumerableUpgradeable, OwnableUpgradeable, Reentran
         nextTokenId = 1;
     }
 
+    /// @inheritdoc IVotingEscrow
+    function checkpoint() external nonReentrant {
+        _checkpoint(0, LockedBalance(0, 0), LockedBalance(0, 0));
+    }
+
     function createLock(uint256 amount_, uint256 lockDuration_) external returns (uint256 tokenId) {
         tokenId = _createLock(amount_, lockDuration_, msg.sender);
     }

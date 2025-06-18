@@ -111,4 +111,38 @@ contract StakedHemiTest is Test {
         vm.expectRevert("NFT is non-transferable");
         stakedHemi.safeTransferFrom(user, address(0xABCD), tokenId);
     }
+
+    function testERC721EnumerableFunctions() public {
+        uint256 amount1 = 1 ether;
+        uint256 amount2 = 2 ether;
+        uint256 unlockTime = block.timestamp + 1 weeks;
+
+        // User creates two locks (two NFTs)
+        vm.prank(user);
+        uint256 tokenId1 = stakedHemi.createLock(amount1, unlockTime);
+
+        vm.prank(user);
+        uint256 tokenId2 = stakedHemi.createLock(amount2, unlockTime + 1 weeks);
+
+        // Check balanceOf (number of NFTs owned)
+        uint256 balance = stakedHemi.balanceOf(user);
+        assertEq(balance, 2, "User should own 2 NFTs");
+
+        // Check tokenOfOwnerByIndex
+        uint256 foundTokenId1 = stakedHemi.tokenOfOwnerByIndex(user, 0);
+        uint256 foundTokenId2 = stakedHemi.tokenOfOwnerByIndex(user, 1);
+        assertTrue(
+            (foundTokenId1 == tokenId1 && foundTokenId2 == tokenId2)
+                || (foundTokenId1 == tokenId2 && foundTokenId2 == tokenId1),
+            "tokenOfOwnerByIndex should return both tokenIds"
+        );
+
+        // Check totalSupply increases
+        uint256 total = stakedHemi.totalSupply();
+        assertEq(total, 2, "Total supply should be 2");
+
+        // Check ownerOf returns correct owner
+        assertEq(stakedHemi.ownerOf(tokenId1), user, "Owner of tokenId1 should be user");
+        assertEq(stakedHemi.ownerOf(tokenId2), user, "Owner of tokenId2 should be user");
+    }
 }
