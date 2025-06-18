@@ -10,6 +10,7 @@ import {
     ERC721Upgradeable
 } from "@openzeppelin/contracts-upgradeable/token/ERC721/extensions/ERC721EnumerableUpgradeable.sol";
 import {ReentrancyGuardTransient} from "@openzeppelin/contracts/utils/ReentrancyGuardTransient.sol";
+import {IRewardDistributor} from "./interfaces/IRewardDistributor.sol";
 /**
  * StakedHemi (aka stHEMI) is a vesting and yield system based off of Curve’s veCRV mechanism.
  * Users may lock up their HEMI for up to 4 years for four times the amount of stHEMI (e.g. 100 HEMI locked for 4 years returns 400 stHEMI).
@@ -46,6 +47,7 @@ contract StakedHemi is ERC721EnumerableUpgradeable, OwnableUpgradeable, Reentran
     uint256 public supply;
     uint256 public epoch;
     uint256 public nextTokenId;
+    IRewardDistributor public rewardDistributor; // may be 0x0
     mapping(uint256 => Point) public pointHistory; // epoch -> Point
     mapping(uint256 => mapping(uint256 => Point)) public userPointHistory; // tokenId -> Point[userEpoch]
     mapping(uint256 => uint256) public userPointEpoch; // tokenId -> epoch
@@ -76,7 +78,7 @@ contract StakedHemi is ERC721EnumerableUpgradeable, OwnableUpgradeable, Reentran
         _disableInitializers();
     }
 
-    function initialize(address owner_) external initializer {
+    function initialize(address owner_, address rewardDistributor_) external initializer {
         require(owner_ != address(0), "Owner is zero");
         __ERC721_init("StakedHemi Lock", "stHEMI-LOCK");
         __Ownable_init_unchained(owner_);
@@ -84,6 +86,7 @@ contract StakedHemi is ERC721EnumerableUpgradeable, OwnableUpgradeable, Reentran
         pointHistory[0].timestamp = block.timestamp;
         pointHistory[0].amount = 0;
         nextTokenId = 1;
+        rewardDistributor = IRewardDistributor(rewardDistributor_); // this may be 0x0
     }
 
     function checkpoint() external nonReentrant {
@@ -103,6 +106,8 @@ contract StakedHemi is ERC721EnumerableUpgradeable, OwnableUpgradeable, Reentran
         _tokenId = _createLock(amount_, lockDuration_, account_);
     }
 
+    // TODO: write function to extend lock duration
+
     function depositFor(uint256 tokenId_, uint256 amount_) external nonReentrant {
         _increaseAmountFor(tokenId_, amount_);
     }
@@ -117,6 +122,7 @@ contract StakedHemi is ERC721EnumerableUpgradeable, OwnableUpgradeable, Reentran
         address _sender = _msgSender();
         // TODO: should check approvedOrOwner?
         if (_ownerOf(tokenId_) != _sender) revert NotOwner();
+        _updateReward(tokenId_);
         LockedBalance memory _oldLocked = locked[tokenId_];
         if (block.timestamp < _oldLocked.end) revert LockNotExpired();
         uint256 _amount = _oldLocked.amount.toUint256();
@@ -150,21 +156,24 @@ contract StakedHemi is ERC721EnumerableUpgradeable, OwnableUpgradeable, Reentran
         revert("NFT is non-transferable");
     }
 
-    function _createLock(uint256 amount_, uint256 lockDuration_, address account_) private returns (uint256 tokenId) {
+    function _createLock(uint256 amount_, uint256 lockDuration_, address account_) private returns (uint256 _tokenId) {
         uint256 unlockTime = ((block.timestamp + lockDuration_) / WEEK) * WEEK; // Lock time is rounded down to weeks
 
         if (amount_ == 0) revert AmountIsZero();
         if (unlockTime <= block.timestamp) revert LockDurationTooShort();
         if (unlockTime > block.timestamp + MAX_TIME) revert LockDurationTooLong();
 
-        tokenId = nextTokenId++;
-        _mint(account_, tokenId);
+        _tokenId = nextTokenId++;
+        _mint(account_, _tokenId);
+        _updateReward(_tokenId);
 
-        _depositFor(tokenId, amount_, unlockTime, locked[tokenId]);
-        return tokenId;
+        _depositFor(_tokenId, amount_, unlockTime, locked[_tokenId]);
+
+        return _tokenId;
     }
 
     function _increaseAmountFor(uint256 tokenId_, uint256 amount_) internal {
+        _updateReward(tokenId_);
         LockedBalance memory _oldLocked = locked[tokenId_];
 
         if (amount_ == 0) revert AmountIsZero();
@@ -390,6 +399,12 @@ contract StakedHemi is ERC721EnumerableUpgradeable, OwnableUpgradeable, Reentran
 
         emit Deposit(from, tokenId_, amount_, _newLocked.end, block.timestamp);
         // emit Supply(supplyBefore, supplyBefore + amount_);
+    }
+
+    function _updateReward(uint256 tokenId_) private {
+        if (address(rewardDistributor) != address(0)) {
+            rewardDistributor.updateRewards(tokenId_);
+        }
     }
 
     // Add this view function to StakedHemi.sol for testing

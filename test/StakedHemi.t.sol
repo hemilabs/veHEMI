@@ -26,8 +26,9 @@ contract StakedHemiTest is Test {
         // Deploy logic contract
         StakedHemi logic = new StakedHemi(address(hemi));
         // Deploy proxy
-        ERC1967Proxy proxy =
-            new ERC1967Proxy(address(logic), abi.encodeWithSelector(StakedHemi.initialize.selector, address(this)));
+        ERC1967Proxy proxy = new ERC1967Proxy(
+            address(logic), abi.encodeWithSelector(StakedHemi.initialize.selector, address(this), address(0))
+        );
         stakedHemi = StakedHemi(address(proxy));
 
         vm.prank(user);
