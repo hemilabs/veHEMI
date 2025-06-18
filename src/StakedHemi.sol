@@ -312,6 +312,7 @@ contract StakedHemi is ERC721EnumerableUpgradeable, OwnableUpgradeable, Reentran
         // Missing global checkpoints in prior weeks. In this case, _epoch = epoch + x, where x > 1
         // No missing global checkpoints, but timestamp != block.timestamp. Create new checkpoint.
         // No missing global checkpoints, but timestamp == block.timestamp. Overwrite last checkpoint.
+        // FIXME: probably its bug.   epoch = _epoch may be outside if-else
         if (_epoch != 1 && pointHistory[_epoch - 1].timestamp == block.timestamp) {
             // _epoch = epoch + 1, so we do not increment epoch
             pointHistory[_epoch - 1] = _lastPoint;

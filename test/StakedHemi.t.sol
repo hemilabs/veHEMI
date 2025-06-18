@@ -206,12 +206,20 @@ contract StakedHemiTest is Test {
 
         // Only owner can call internal, so use a helper or make _checkpoint public for testing
         vm.prank(address(stakedHemi));
-        stakedHemi.checkpoint();
+        console.log("epoch", stakedHemi.epoch());
 
         // User epoch should increase
         uint256 userEpochAfter_ = stakedHemi.userPointEpoch(tokenId_);
-        console2.log(" testCheckpointUpdatesUserPointHistory ~ userEpochAfter_:", userEpochAfter_);
         assertEq(userEpochAfter_, 1, "User epoch not incremented");
+        vm.warp(block.timestamp + 2 weeks); // Simulate time passing
+        stakedHemi.checkpoint();
+        assertEq(stakedHemi.epoch(), 2, "Global epoch should be 52 after checkpoint");
+        uint256 extraAmount_ = 5 ether;
+        vm.prank(user);
+        stakedHemi.increaseAmount(tokenId_, extraAmount_);
+        userEpochAfter_ = stakedHemi.userPointEpoch(tokenId_);
+        console.log(" testCheckpointUpdatesUserPointHistory ~ userEpochAfter_:", userEpochAfter_);
+        assertEq(userEpochAfter_, 2, "User epoch not incremented");
 
         // User point history should be updated
         StakedHemi.Point memory pt_ = stakedHemi.getUserPoint(tokenId_, userEpochAfter_);
@@ -234,7 +242,6 @@ contract StakedHemiTest is Test {
 
         // Increase amount through normal methods
         uint256 extraAmount_ = 5 ether;
-        // vm.warp(block.timestamp + 10 weeks); // Simulate time passing
         vm.prank(user);
         stakedHemi.increaseAmount(tokenId_, extraAmount_);
 
