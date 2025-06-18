@@ -8,6 +8,7 @@ import "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 
 contract ERC20Mock is ERC20 {
     constructor() ERC20("HEMI", "HEMI") {}
+
     function mint(address to, uint256 amount) external {
         _mint(to, amount);
     }
@@ -25,10 +26,8 @@ contract StakedHemiTest is Test {
         // Deploy logic contract
         StakedHemi logic = new StakedHemi(address(hemi));
         // Deploy proxy
-        ERC1967Proxy proxy = new ERC1967Proxy(
-            address(logic),
-            abi.encodeWithSelector(StakedHemi.initialize.selector, address(this))
-        );
+        ERC1967Proxy proxy =
+            new ERC1967Proxy(address(logic), abi.encodeWithSelector(StakedHemi.initialize.selector, address(this)));
         stakedHemi = StakedHemi(address(proxy));
 
         vm.prank(user);
@@ -83,5 +82,33 @@ contract StakedHemiTest is Test {
         (int128 lockedAmount, uint256 lockedEnd) = stakedHemi.locked(tokenId);
         assertEq(uint256(uint128(lockedAmount)), 0, "Lock not cleared");
         assertEq(lockedEnd, 0, "Lock end not cleared");
+    }
+
+    function testNonTransferableNFT() public {
+        uint256 amount = 1 ether;
+        uint256 unlockTime = block.timestamp + 1 weeks;
+
+        vm.prank(user);
+        uint256 tokenId = stakedHemi.createLock(amount, unlockTime);
+
+        // Attempt transferFrom
+        vm.prank(user);
+        vm.expectRevert("NFT is non-transferable");
+        stakedHemi.transferFrom(user, address(0xABCD), tokenId);
+
+        // Attempt approve
+        vm.prank(user);
+        vm.expectRevert("NFT is non-transferable");
+        stakedHemi.approve(address(0xABCD), tokenId);
+
+        // Attempt setApprovalForAll
+        vm.prank(user);
+        vm.expectRevert("NFT is non-transferable");
+        stakedHemi.setApprovalForAll(address(0xABCD), true);
+
+        // Attempt safeTransferFrom
+        vm.prank(user);
+        vm.expectRevert("NFT is non-transferable");
+        stakedHemi.safeTransferFrom(user, address(0xABCD), tokenId);
     }
 }
