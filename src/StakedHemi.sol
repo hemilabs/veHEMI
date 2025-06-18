@@ -6,13 +6,13 @@ import {SafeCast} from "./libraries/SafeCast.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {ERC721EnumerableUpgradeable} from
     "@openzeppelin/contracts-upgradeable/token/ERC721/extensions/ERC721EnumerableUpgradeable.sol";
-
+import {ReentrancyGuardTransient} from "@openzeppelin/contracts/utils/ReentrancyGuardTransient.sol";
 /**
  * StakedHemi (aka stHEMI) is a vesting and yield system based off of Curve’s veCRV mechanism.
  * Users may lock up their HEMI for up to 4 years for four times the amount of stHEMI (e.g. 100 HEMI locked for 4 years returns 400 stHEMI).
  * Each lock position is represented by a non-transferable NFT.
  */
-contract StakedHemi is ERC721EnumerableUpgradeable, OwnableUpgradeable {
+contract StakedHemi is ERC721EnumerableUpgradeable, OwnableUpgradeable, ReentrancyGuardTransient {
     using SafeCast for uint256;
     using SafeCast for int128;
     // --- Types ---
@@ -94,6 +94,31 @@ contract StakedHemi is ERC721EnumerableUpgradeable, OwnableUpgradeable {
     {
         if (account_ == address(0)) revert AddressIsNull();
         tokenId = _createLock(amount_, lockDuration_, account_);
+    }
+
+    function withdraw(uint256 tokenId_) external nonReentrant {
+        address _sender = _msgSender();
+        // TODO: should check approvedOrOwner?
+        if(_ownerOf(tokenId_) != _sender) revert NotOwner();
+        LockedBalance memory _oldLocked = locked[tokenId_];
+        if (block.timestamp < _oldLocked.end) revert LockNotExpired();
+        uint256 _amount = _oldLocked.amount.toUint256();
+
+        // Burn the NFT
+        _burn(tokenId_);
+        locked[tokenId_] = LockedBalance(0, 0);
+        uint256 _supplyBefore = supply;
+        supply = _supplyBefore - _amount;
+
+        // oldLocked can have either expired <= timestamp or zero end
+        // oldLocked has only 0 end
+        // Both can have >= 0 amount
+        _checkpoint(tokenId_, _oldLocked, LockedBalance(0, 0));
+
+        HEMI.transfer(_sender, _amount);
+
+        emit Withdraw(_sender, tokenId_, _amount, block.timestamp);
+        emit Supply(_supplyBefore, _supplyBefore - _amount);
     }
 
     function _createLock(uint256 amount_, uint256 lockDuration_, address account_) private returns (uint256 tokenId) {
