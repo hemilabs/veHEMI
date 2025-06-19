@@ -11,28 +11,17 @@ import {
 } from "@openzeppelin/contracts-upgradeable/token/ERC721/extensions/ERC721EnumerableUpgradeable.sol";
 import {ReentrancyGuardTransient} from "@openzeppelin/contracts/utils/ReentrancyGuardTransient.sol";
 import {IRewardDistributor} from "./interfaces/IRewardDistributor.sol";
+
+import {IStakedHemi} from "./interfaces/IStakedHemi.sol";
+
 /**
  * @title StakedHemi (stHEMI)
  * @notice Vesting and yield system based on Curve's veCRV mechanism. Users lock HEMI for up to 4 years for boosted stHEMI. Each lock is a non-transferable NFT.
  */
-
-contract StakedHemi is ERC721EnumerableUpgradeable, OwnableUpgradeable, ReentrancyGuardTransient {
+contract StakedHemi is IStakedHemi, ERC721EnumerableUpgradeable, OwnableUpgradeable, ReentrancyGuardTransient {
     using SafeCast for uint256;
     using SafeCast for int128;
     // --- Types ---
-
-    struct Point {
-        int128 bias;
-        int128 slope;
-        uint256 timestamp;
-        uint256 blockNumber;
-        uint256 amount;
-    }
-
-    struct LockedBalance {
-        int128 amount;
-        uint256 end;
-    }
 
     IERC20 public immutable HEMI;
 
@@ -48,17 +37,10 @@ contract StakedHemi is ERC721EnumerableUpgradeable, OwnableUpgradeable, Reentran
     uint256 public nextTokenId;
     IRewardDistributor public rewardDistributor; // may be 0x0
     mapping(uint256 => Point) public pointHistory; // epoch -> Point
-    mapping(uint256 => mapping(uint256 => Point)) public userPointHistory; // tokenId -> Point[userEpoch]
+    mapping(uint256 => Point[1000000000]) public userPointHistory; // tokenId -> Point[userEpoch]
     mapping(uint256 => uint256) public userPointEpoch; // tokenId -> epoch
     mapping(uint256 => int128) public slopeChanges; // time -> signed slope change
     mapping(uint256 => LockedBalance) public locked; // tokenId -> LockedBalance
-
-    // --- Events ---
-    event Deposit(
-        address indexed provider, uint256 indexed tokenId, uint256 amount, uint256 lockTime, uint256 timestamp
-    );
-    event Withdraw(address indexed provider, uint256 indexed tokenId, uint256 amount, uint256 timestamp);
-    event Supply(uint256 prevSupply, uint256 supply);
 
     // --- Errors ---
     error AmountIsZero();
@@ -78,6 +60,11 @@ contract StakedHemi is ERC721EnumerableUpgradeable, OwnableUpgradeable, Reentran
         _disableInitializers();
     }
 
+    /**
+     * @notice Initializes the contract with the owner and reward distributor addresses
+     * @param owner_ The address of the contract owner
+     * @param rewardDistributor_ The address of the reward distributor contract
+     */
     function initialize(address owner_, address rewardDistributor_) external initializer {
         require(owner_ != address(0), "Owner is zero");
         __ERC721_init("StakedHemi Lock", "stHEMI-LOCK");
@@ -89,16 +76,39 @@ contract StakedHemi is ERC721EnumerableUpgradeable, OwnableUpgradeable, Reentran
         rewardDistributor = IRewardDistributor(rewardDistributor_); // this may be 0x0
     }
 
-    /// @notice Checkpoints the contract state
+    /**
+     * @notice Returns the current staked balance for a given NFT
+     * @param _tokenId The token ID
+     * @return The staked balance for the NFT
+     */
+    function balanceOfNFT(uint256 _tokenId) external view returns (uint256) {
+        return _balanceOfNFTAt(_tokenId, block.timestamp);
+    }
+
+    /**
+     * @notice Checkpoints the contract state to update global and user point histories
+     */
     function checkpoint() external nonReentrant {
         _checkpoint(0, LockedBalance(0, 0), LockedBalance(0, 0));
     }
 
+    /**
+     * @notice Creates a new lock for the sender
+     * @param amount_ The amount of HEMI to lock
+     * @param lockDuration_ The duration to lock HEMI for
+     * @return _tokenId The ID of the created lock NFT
+     */
     function createLock(uint256 amount_, uint256 lockDuration_) external returns (uint256 _tokenId) {
         _tokenId = _createLock(amount_, lockDuration_, msg.sender);
     }
 
-    // TODO: allow this to specific role?
+    /**
+     * @notice Creates a new lock for a specified account
+     * @param amount_ The amount of HEMI to lock
+     * @param lockDuration_ The duration to lock HEMI for
+     * @param account_ The address to assign the lock NFT to
+     * @return _tokenId The ID of the created lock NFT
+     */
     function createLockFor(uint256 amount_, uint256 lockDuration_, address account_)
         external
         returns (uint256 _tokenId)
@@ -107,17 +117,34 @@ contract StakedHemi is ERC721EnumerableUpgradeable, OwnableUpgradeable, Reentran
         _tokenId = _createLock(amount_, lockDuration_, account_);
     }
 
-    // TODO: write function to extend lock duration
-
-
-    function increaseAmount(uint256 tokenId_, uint256 amount_) external nonReentrant {
-         _increaseAmountFor(tokenId_, amount_);
+    /**
+     * @notice Returns the user point for a given token and epoch
+     * @param tokenId_ The token ID
+     * @param epoch_ The epoch number
+     * @return The Point struct for the user at the given epoch
+     */
+    function getUserPoint(uint256 tokenId_, uint256 epoch_) external view returns (Point memory) {
+        return userPointHistory[tokenId_][epoch_];
     }
 
+    /**
+     * @notice Increases the amount of HEMI locked for a given token
+     * @param tokenId_ The token ID
+     * @param amount_ The additional amount to lock
+     */
+    function increaseAmount(uint256 tokenId_, uint256 amount_) external nonReentrant {
+        _increaseAmountFor(tokenId_, amount_);
+    }
+
+    /**
+     * @notice Increases the unlock time for a given lock NFT
+     * @param tokenId_ The token ID
+     * @param lockDuration_ The new lock duration (from now)
+     */
     function increaseUnlockTime(uint256 tokenId_, uint256 lockDuration_) external nonReentrant {
         address _sender = _msgSender();
         if (_ownerOf(tokenId_) != _sender) revert NotOwner();
-         LockedBalance memory _oldLocked = locked[tokenId_];
+        LockedBalance memory _oldLocked = locked[tokenId_];
         if (_oldLocked.end <= block.timestamp) revert LockExpired();
         if (_oldLocked.amount <= 0) revert NoExistingLock();
         uint256 _unlockTime = ((block.timestamp + lockDuration_) / WEEK) * WEEK; // Locktime is rounded down to weeks
@@ -127,9 +154,12 @@ contract StakedHemi is ERC721EnumerableUpgradeable, OwnableUpgradeable, Reentran
         _depositFor(tokenId_, 0, _unlockTime, _oldLocked);
 
         // TODO: emit event
-
     }
 
+    /**
+     * @notice Withdraws HEMI after the lock has expired and burns the NFT
+     * @param tokenId_ The token ID to withdraw from
+     */
     function withdraw(uint256 tokenId_) external nonReentrant {
         address _sender = _msgSender();
         // TODO: should check approvedOrOwner?
@@ -156,63 +186,22 @@ contract StakedHemi is ERC721EnumerableUpgradeable, OwnableUpgradeable, Reentran
         emit Supply(_supplyBefore, _supplyBefore - _amount);
     }
 
-    function approve(address, uint256) public pure override(ERC721Upgradeable, IERC721) {
-        revert("NFT is non-transferable");
+    /**
+     * @notice Returns the staked balance for a given NFT at a specific timestamp
+     * @param _tokenId The token ID
+     * @param _t The timestamp to check the balance at
+     * @return The staked balance at the given timestamp
+     */
+    function _balanceOfNFTAt(uint256 _tokenId, uint256 _t) internal view returns (uint256) {
+        // TODO: implement
     }
 
-    function setApprovalForAll(address, bool) public pure override(ERC721Upgradeable, IERC721) {
-        revert("NFT is non-transferable");
-    }
-
-    function transferFrom(address, address, uint256) public pure override(ERC721Upgradeable, IERC721) {
-        revert("NFT is non-transferable");
-    }
-
-    function _createLock(uint256 amount_, uint256 lockDuration_, address account_) private returns (uint256 _tokenId) {
-        uint256 unlockTime = ((block.timestamp + lockDuration_) / WEEK) * WEEK; // Lock time is rounded down to weeks
-
-        if (amount_ == 0) revert AmountIsZero();
-        if (unlockTime <= block.timestamp) revert LockDurationTooShort();
-        if (unlockTime > block.timestamp + MAX_TIME) revert LockDurationTooLong();
-
-        _tokenId = nextTokenId++;
-        _mint(account_, _tokenId);
-        _updateReward(_tokenId);
-
-        _depositFor(_tokenId, amount_, unlockTime, locked[_tokenId]);
-
-        return _tokenId;
-    }
-
-    function _increaseAmountFor(uint256 tokenId_, uint256 amount_) internal {
-        _updateReward(tokenId_);
-        LockedBalance memory _oldLocked = locked[tokenId_];
-
-        if (amount_ == 0) revert AmountIsZero();
-        if (_oldLocked.amount <= 0) revert NoExistingLock();
-        if (_oldLocked.end <= block.timestamp) revert LockExpired();
-
-        // TODO: Implement this
-        // _checkpointDelegatee(_delegates[tokenId_], amount_, true);
-        _depositFor(tokenId_, amount_, 0, _oldLocked);
-
-        // TODO: emit event
-    }
-
-    function _update(address to_, uint256 tokenId_, address auth_)
-        internal
-        virtual
-        override(ERC721EnumerableUpgradeable)
-        returns (address from)
-    {
-        // Only allow mint (from == address(0)) and burn (to == address(0))
-        from = super._ownerOf(tokenId_);
-        if (from != address(0) && to_ != address(0)) {
-            revert("NFT is non-transferable");
-        }
-        return super._update(to_, tokenId_, auth_);
-    }
-
+    /**
+     * @notice Internal function to checkpoint user and global point histories
+     * @param tokenId_ The token ID
+     * @param oldLocked_ The previous locked balance
+     * @param newLocked_ The new locked balance
+     */
     function _checkpoint(uint256 tokenId_, LockedBalance memory oldLocked_, LockedBalance memory newLocked_) internal {
         Point memory _oldUserPoint;
         Point memory _newUserPoint;
@@ -380,6 +369,39 @@ contract StakedHemi is ERC721EnumerableUpgradeable, OwnableUpgradeable, Reentran
         }
     }
 
+    /**
+     * @notice Internal function to create a new lock
+     * @param amount_ The amount of HEMI to lock
+     * @param lockDuration_ The duration to lock HEMI for
+     * @param account_ The address to assign the lock NFT to
+     * @return _tokenId The ID of the created lock NFT
+     */
+    function _createLock(uint256 amount_, uint256 lockDuration_, address account_)
+        internal
+        returns (uint256 _tokenId)
+    {
+        uint256 unlockTime = ((block.timestamp + lockDuration_) / WEEK) * WEEK; // Lock time is rounded down to weeks
+
+        if (amount_ == 0) revert AmountIsZero();
+        if (unlockTime <= block.timestamp) revert LockDurationTooShort();
+        if (unlockTime > block.timestamp + MAX_TIME) revert LockDurationTooLong();
+
+        _tokenId = nextTokenId++;
+        _mint(account_, _tokenId);
+        _updateReward(_tokenId);
+
+        _depositFor(_tokenId, amount_, unlockTime, locked[_tokenId]);
+
+        return _tokenId;
+    }
+
+    /**
+     * @notice Internal function to deposit for a lock (increase amount or extend duration)
+     * @param tokenId_ The token ID
+     * @param amount_ The amount to deposit
+     * @param unlockTime_ The new unlock time
+     * @param oldLocked_ The previous locked balance
+     */
     function _depositFor(uint256 tokenId_, uint256 amount_, uint256 unlockTime_, LockedBalance memory oldLocked_)
         internal
     {
@@ -412,14 +434,78 @@ contract StakedHemi is ERC721EnumerableUpgradeable, OwnableUpgradeable, Reentran
         // emit Supply(supplyBefore, supplyBefore + amount_);
     }
 
-    function _updateReward(uint256 tokenId_) private {
+    /**
+     * @notice Internal function to increase the amount locked for a token
+     * @param tokenId_ The token ID
+     * @param amount_ The additional amount to lock
+     */
+    function _increaseAmountFor(uint256 tokenId_, uint256 amount_) internal {
+        _updateReward(tokenId_);
+        LockedBalance memory _oldLocked = locked[tokenId_];
+
+        if (amount_ == 0) revert AmountIsZero();
+        if (_oldLocked.amount <= 0) revert NoExistingLock();
+        if (_oldLocked.end <= block.timestamp) revert LockExpired();
+
+        // TODO: Implement this
+        // _checkpointDelegatee(_delegates[tokenId_], amount_, true);
+        _depositFor(tokenId_, amount_, 0, _oldLocked);
+
+        // TODO: emit event
+    }
+
+    /**
+     * @notice Internal function to update the owner of a token (only allows mint and burn)
+     * @param to_ The new owner address
+     * @param tokenId_ The token ID
+     * @param auth_ The authorized address
+     * @return from The previous owner address
+     */
+    function _update(address to_, uint256 tokenId_, address auth_)
+        internal
+        virtual
+        override(ERC721EnumerableUpgradeable)
+        returns (address from)
+    {
+        // Only allow mint (from == address(0)) and burn (to == address(0))
+        from = super._ownerOf(tokenId_);
+        if (from != address(0) && to_ != address(0)) {
+            revert("NFT is non-transferable");
+        }
+        return super._update(to_, tokenId_, auth_);
+    }
+
+    /**
+     * @notice Internal function to update rewards for a token
+     * @param tokenId_ The token ID
+     */
+    function _updateReward(uint256 tokenId_) internal {
         if (address(rewardDistributor) != address(0)) {
             rewardDistributor.updateRewards(tokenId_);
         }
     }
 
-    // Add this view function to StakedHemi.sol for testing
-    function getUserPoint(uint256 tokenId_, uint256 epoch_) external view returns (Point memory) {
-        return userPointHistory[tokenId_][epoch_];
+    /**
+     * Disabled functions
+     */
+    /**
+     * @notice Disabled: Approve is not allowed (NFT is non-transferable)
+     */
+    function approve(address, uint256) public pure override(ERC721Upgradeable, IERC721) {
+        revert("NFT is non-transferable");
+    }
+
+    /**
+     * @notice Disabled: setApprovalForAll is not allowed (NFT is non-transferable)
+     */
+    function setApprovalForAll(address, bool) public pure override(ERC721Upgradeable, IERC721) {
+        revert("NFT is non-transferable");
+    }
+
+    /**
+     * @notice Disabled: transferFrom is not allowed (NFT is non-transferable)
+     */
+    function transferFrom(address, address, uint256) public pure override(ERC721Upgradeable, IERC721) {
+        revert("NFT is non-transferable");
     }
 }

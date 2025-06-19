@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.20;
+pragma solidity ^0.8.29;
 
 import "forge-std/Test.sol";
 import "../src/StakedHemi.sol";
+import "../src/interfaces/IStakedHemi.sol";
 import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 
@@ -201,9 +202,9 @@ contract StakedHemiTest is Test {
 
         // Call checkpoint with old and new locked (simulate increase)
         (int128 oldAmount_, uint256 oldEnd_) = stakedHemi.locked(tokenId_);
-        StakedHemi.LockedBalance memory oldLocked_ = StakedHemi.LockedBalance(oldAmount_, oldEnd_);
-        StakedHemi.LockedBalance memory newLocked_ =
-            StakedHemi.LockedBalance(oldAmount_ + int128(int256(1 ether)), oldEnd_);
+        IStakedHemi.LockedBalance memory oldLocked_ = IStakedHemi.LockedBalance(oldAmount_, oldEnd_);
+        IStakedHemi.LockedBalance memory newLocked_ =
+            IStakedHemi.LockedBalance(oldAmount_ + int128(int256(1 ether)), oldEnd_);
 
         // Only owner can call internal, so use a helper or make _checkpoint public for testing
         vm.prank(address(stakedHemi));
