@@ -78,11 +78,21 @@ contract StakedHemi is IStakedHemi, ERC721EnumerableUpgradeable, OwnableUpgradea
 
     /**
      * @notice Returns the current staked balance for a given NFT
-     * @param _tokenId The token ID
+     * @param tokenId_ The token ID
      * @return The staked balance for the NFT
      */
-    function balanceOfNFT(uint256 _tokenId) external view returns (uint256) {
-        return _balanceOfNFTAt(_tokenId, block.timestamp);
+    function balanceOfNFT(uint256 tokenId_) external view returns (uint256) {
+        return _balanceOfNFTAt(tokenId_, block.timestamp);
+    }
+
+    /**
+     * @notice Returns the current staked balance for a given NFT
+     * @param tokenId_ The token ID
+     * @param timestamp_ timestamp
+     * @return The staked balance for the NFT
+     */
+    function balanceOfNFTAt(uint256 tokenId_, uint256 timestamp_) external view returns (uint256) {
+        return _balanceOfNFTAt(tokenId_, timestamp_);
     }
 
     /**
@@ -188,12 +198,50 @@ contract StakedHemi is IStakedHemi, ERC721EnumerableUpgradeable, OwnableUpgradea
 
     /**
      * @notice Returns the staked balance for a given NFT at a specific timestamp
-     * @param _tokenId The token ID
-     * @param _t The timestamp to check the balance at
+     * @param tokenId_ The token ID
+     * @param timestamp_ The timestamp to check the balance at
      * @return The staked balance at the given timestamp
      */
-    function _balanceOfNFTAt(uint256 _tokenId, uint256 _t) internal view returns (uint256) {
-        // TODO: implement
+    function _balanceOfNFTAt(uint256 tokenId_, uint256 timestamp_) internal view returns (uint256) {
+        uint256 _epoch = _getPastUserPointIndex(tokenId_, timestamp_);
+        // epoch 0 is an empty point
+        if (_epoch == 0) return 0;
+        IStakedHemi.Point memory _lastPoint = userPointHistory[tokenId_][_epoch];
+        _lastPoint.bias -= _lastPoint.slope * (timestamp_ - _lastPoint.timestamp).toInt128();
+        if (_lastPoint.bias < 0) {
+            _lastPoint.bias = 0;
+        }
+        return _lastPoint.bias.toUint256();
+    }
+
+    /// @notice Binary search to get the user point index for a token id at or prior to a given timestamp
+    /// @dev If a user point does not exist prior to the timestamp, this will return 0.
+    /// @param tokenId_ .
+    /// @param timestamp_ .
+    /// @return User point index
+    function _getPastUserPointIndex(uint256 tokenId_, uint256 timestamp_) internal view returns (uint256) {
+        uint256 _userEpoch = userPointEpoch[tokenId_];
+        if (_userEpoch == 0) return 0;
+        IStakedHemi.Point memory _lastPoint = userPointHistory[tokenId_][_userEpoch];
+        // First check most recent balance
+        if (_lastPoint.timestamp <= timestamp_) return (_userEpoch);
+        // Next check implicit zero balance
+        if (userPointHistory[tokenId_][1].timestamp > timestamp_) return 0;
+
+        uint256 lower = 0;
+        uint256 upper = _userEpoch;
+        while (upper > lower) {
+            uint256 center = upper - (upper - lower) / 2; // ceil, avoiding overflow
+            IStakedHemi.Point memory _userPoint = userPointHistory[tokenId_][center];
+            if (_userPoint.timestamp == timestamp_) {
+                return center;
+            } else if (_userPoint.timestamp < timestamp_) {
+                lower = center;
+            } else {
+                upper = center - 1;
+            }
+        }
+        return lower;
     }
 
     /**

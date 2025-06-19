@@ -305,4 +305,45 @@ contract StakedHemiTest is Test {
         stakedHemi.increaseUnlockTime(tokenId, 100 days);
         vm.stopPrank();
     }
+
+    function testBalanceOfNFT() public {
+        uint256 amount = 100 ether;
+        uint256 lockDuration = 4 weeks;
+        vm.prank(user);
+        uint256 tokenId = stakedHemi.createLock(amount, lockDuration);
+
+        // Should return the full amount right after creation
+        uint256 bal = stakedHemi.balanceOfNFT(tokenId);
+        assertGt(bal, 0, "balanceOfNFT should be > 0 after lock");
+        assertLe(bal, amount, "balanceOfNFT should not exceed locked amount");
+
+        // Fast forward to after expiry
+        vm.warp(block.timestamp + lockDuration + 1);
+        bal = stakedHemi.balanceOfNFT(tokenId);
+        assertEq(bal, 0, "balanceOfNFT should be 0 after lock expires");
+    }
+
+    function testBalanceOfNFTAt() public {
+        uint256 amount = 100 ether;
+        uint256 lockDuration = 4 weeks;
+        uint256 start = block.timestamp;
+        vm.prank(user);
+        uint256 tokenId = stakedHemi.createLock(amount, lockDuration);
+
+        // At creation time
+        uint256 balAtStart = stakedHemi.balanceOfNFTAt(tokenId, start);
+        assertGt(balAtStart, 0, "balanceOfNFTAt should be > 0 at start");
+        assertLe(balAtStart, amount, "balanceOfNFTAt should not exceed locked amount");
+
+        // Halfway through lock
+        uint256 half = start + lockDuration / 2;
+        uint256 balAtHalf = stakedHemi.balanceOfNFTAt(tokenId, half);
+        assertGt(balAtHalf, 0, "balanceOfNFTAt should be > 0 halfway");
+        assertLt(balAtHalf, balAtStart, "balanceOfNFTAt should decrease over time");
+
+        // After expiry
+        uint256 afterExpiry = start + lockDuration + 1;
+        uint256 balAfter = stakedHemi.balanceOfNFTAt(tokenId, afterExpiry);
+        assertEq(balAfter, 0, "balanceOfNFTAt should be 0 after expiry");
+    }
 }
