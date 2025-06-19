@@ -12,9 +12,8 @@ import {
 import {ReentrancyGuardTransient} from "@openzeppelin/contracts/utils/ReentrancyGuardTransient.sol";
 import {IRewardDistributor} from "./interfaces/IRewardDistributor.sol";
 /**
- * StakedHemi (aka stHEMI) is a vesting and yield system based off of Curve’s veCRV mechanism.
- * Users may lock up their HEMI for up to 4 years for four times the amount of stHEMI (e.g. 100 HEMI locked for 4 years returns 400 stHEMI).
- * Each lock position is represented by a non-transferable NFT.
+ * @title StakedHemi (stHEMI)
+ * @notice Vesting and yield system based on Curve's veCRV mechanism. Users lock HEMI for up to 4 years for boosted stHEMI. Each lock is a non-transferable NFT.
  */
 
 contract StakedHemi is ERC721EnumerableUpgradeable, OwnableUpgradeable, ReentrancyGuardTransient {
@@ -71,6 +70,7 @@ contract StakedHemi is ERC721EnumerableUpgradeable, OwnableUpgradeable, Reentran
     error NoExistingLock();
     error NothingLocked();
     error NotOwner();
+    error NewLockDurationNotGreater();
 
     constructor(address hemi_) {
         if (hemi_ == address(0)) revert AddressIsNull();
@@ -89,6 +89,7 @@ contract StakedHemi is ERC721EnumerableUpgradeable, OwnableUpgradeable, Reentran
         rewardDistributor = IRewardDistributor(rewardDistributor_); // this may be 0x0
     }
 
+    /// @notice Checkpoints the contract state
     function checkpoint() external nonReentrant {
         _checkpoint(0, LockedBalance(0, 0), LockedBalance(0, 0));
     }
@@ -108,14 +109,25 @@ contract StakedHemi is ERC721EnumerableUpgradeable, OwnableUpgradeable, Reentran
 
     // TODO: write function to extend lock duration
 
-    function depositFor(uint256 tokenId_, uint256 amount_) external nonReentrant {
-        _increaseAmountFor(tokenId_, amount_);
-    }
 
     function increaseAmount(uint256 tokenId_, uint256 amount_) external nonReentrant {
+         _increaseAmountFor(tokenId_, amount_);
+    }
+
+    function increaseUnlockTime(uint256 tokenId_, uint256 lockDuration_) external nonReentrant {
         address _sender = _msgSender();
         if (_ownerOf(tokenId_) != _sender) revert NotOwner();
-        _increaseAmountFor(tokenId_, amount_);
+         LockedBalance memory _oldLocked = locked[tokenId_];
+        if (_oldLocked.end <= block.timestamp) revert LockExpired();
+        if (_oldLocked.amount <= 0) revert NoExistingLock();
+        uint256 _unlockTime = ((block.timestamp + lockDuration_) / WEEK) * WEEK; // Locktime is rounded down to weeks
+        if (_unlockTime > block.timestamp + MAX_TIME) revert LockDurationTooLong();
+        if (_unlockTime <= _oldLocked.end) revert NewLockDurationNotGreater();
+        _updateReward(tokenId_);
+        _depositFor(tokenId_, 0, _unlockTime, _oldLocked);
+
+        // TODO: emit event
+
     }
 
     function withdraw(uint256 tokenId_) external nonReentrant {
@@ -187,21 +199,20 @@ contract StakedHemi is ERC721EnumerableUpgradeable, OwnableUpgradeable, Reentran
         // TODO: emit event
     }
 
-    function _update(address to, uint256 tokenId, address auth)
+    function _update(address to_, uint256 tokenId_, address auth_)
         internal
         virtual
         override(ERC721EnumerableUpgradeable)
         returns (address from)
     {
         // Only allow mint (from == address(0)) and burn (to == address(0))
-        from = super._ownerOf(tokenId);
-        if (from != address(0) && to != address(0)) {
+        from = super._ownerOf(tokenId_);
+        if (from != address(0) && to_ != address(0)) {
             revert("NFT is non-transferable");
         }
-        return super._update(to, tokenId, auth);
+        return super._update(to_, tokenId_, auth_);
     }
 
-    // --- Internal helpers ---
     function _checkpoint(uint256 tokenId_, LockedBalance memory oldLocked_, LockedBalance memory newLocked_) internal {
         Point memory _oldUserPoint;
         Point memory _newUserPoint;

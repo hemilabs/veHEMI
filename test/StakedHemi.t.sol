@@ -163,7 +163,7 @@ contract StakedHemiTest is Test {
         hemi.approve(address(stakedHemi), type(uint256).max);
 
         vm.prank(depositor);
-        stakedHemi.depositFor(tokenId, extra);
+        stakedHemi.increaseAmount(tokenId, extra);
 
         // Check locked amount increased
         (int128 lockedAmount,) = stakedHemi.locked(tokenId);
@@ -258,5 +258,50 @@ contract StakedHemiTest is Test {
         // Check global state
         uint256 globalEpoch_ = stakedHemi.epoch();
         assertTrue(globalEpoch_ > 0, "Global epoch should be updated");
+    }
+
+    function testIncreaseUnlockTime() public {
+        vm.startPrank(user);
+
+        // Create a lock for 1 year
+        uint256 amount = 100 ether;
+        uint256 oneYear = 365 days;
+        uint256 tokenId = stakedHemi.createLock(amount, oneYear);
+
+        // Fast forward half a year
+        vm.warp(block.timestamp + 182 days);
+
+        // Try to increase unlock time by another year
+        uint256 newDuration = 2 * 365 days; // 2 years from now
+        stakedHemi.increaseUnlockTime(tokenId, newDuration);
+
+        // Check that the lock's end is updated
+        (, uint256 end) = stakedHemi.locked(tokenId);
+        uint256 expectedUnlockTime = ((block.timestamp + newDuration) / stakedHemi.WEEK()) * stakedHemi.WEEK();
+        assertEq(end, expectedUnlockTime);
+
+        vm.stopPrank();
+    }
+
+    function testIncreaseUnlockTimeRevertsIfNotOwner() public {
+        vm.startPrank(user);
+        uint256 tokenId = stakedHemi.createLock(100 ether, 365 days);
+        vm.stopPrank();
+
+        // Try from another address
+        vm.startPrank(address(0xA));
+        vm.expectRevert(StakedHemi.NotOwner.selector);
+        stakedHemi.increaseUnlockTime(tokenId, 2 * 365 days);
+        vm.stopPrank();
+    }
+
+    function testIncreaseUnlockTimeRevertsIfNotGreater() public {
+        vm.startPrank(user);
+        uint256 tokenId = stakedHemi.createLock(100 ether, 365 days);
+        (, uint256 oldEnd) = stakedHemi.locked(tokenId);
+        // Try to set to the same or lower end
+        vm.expectRevert(StakedHemi.NewLockDurationNotGreater.selector);
+        stakedHemi.increaseUnlockTime(tokenId, 100 days);
+        vm.stopPrank();
     }
 }
