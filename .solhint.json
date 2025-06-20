@@ -1,8 +1,13 @@
 {
-  "extends": ["solhint:recommended"],
+  "extends": [
+    "solhint:recommended"
+  ],
   "rules": {
     "prettier/prettier": "error",
-    "quotes": ["error", "double"],
+    "quotes": [
+      "error",
+      "double"
+    ],
     "compiler-version": "off",
     "mark-callable-contracts": "off",
     "not-rely-on-time": "off",
@@ -13,5 +18,7 @@
       }
     ]
   },
-  "plugins": ["prettier"]
+  "plugins": [
+    "prettier"
+  ]
 }

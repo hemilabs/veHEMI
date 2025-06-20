@@ -1,46 +1,35 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.29;
 
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {OwnableUpgradeable} from "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
 import {SafeCast} from "./libraries/SafeCast.sol";
-import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {IERC721} from "@openzeppelin/contracts/token/ERC721/IERC721.sol";
-import {
-    ERC721EnumerableUpgradeable,
-    ERC721Upgradeable
-} from "@openzeppelin/contracts-upgradeable/token/ERC721/extensions/ERC721EnumerableUpgradeable.sol";
-import {ReentrancyGuardTransient} from "@openzeppelin/contracts/utils/ReentrancyGuardTransient.sol";
 import {IRewardDistributor} from "./interfaces/IRewardDistributor.sol";
+import {ERC721EnumerableUpgradeable, ERC721Upgradeable} from "@openzeppelin/contracts-upgradeable/token/ERC721/extensions/ERC721EnumerableUpgradeable.sol";
+import {ReentrancyGuardTransient} from "@openzeppelin/contracts/utils/ReentrancyGuardTransient.sol";
 
-import {IStakedHemi} from "./interfaces/IStakedHemi.sol";
+import {StakedHemiStorageV1} from "./storage/StakedHemiStorageV1.sol";
 
 /**
  * @title StakedHemi (stHEMI)
  * @notice Vesting and yield system based on Curve's veCRV mechanism. Users lock HEMI for up to 4 years for boosted stHEMI. Each lock is a non-transferable NFT.
  */
-contract StakedHemi is IStakedHemi, ERC721EnumerableUpgradeable, OwnableUpgradeable, ReentrancyGuardTransient {
+contract StakedHemi is
+    StakedHemiStorageV1,
+    ERC721EnumerableUpgradeable,
+    OwnableUpgradeable,
+    ReentrancyGuardTransient
+{
     using SafeCast for uint256;
     using SafeCast for int128;
     // --- Types ---
-
-    IERC20 public immutable HEMI;
 
     // --- Constants ---
     uint256 public constant WEEK = 7 days;
     uint256 public constant MAX_TIME = 4 * 365 days; // 4 years
     uint256 public constant VOTE_WEIGHT_MULTIPLIER = 3; // 4x gives 300% boost at 4 years
     uint256 internal constant MULTIPLIER = 1 ether;
-
-    // --- State ---
-    uint256 public supply;
-    uint256 public epoch;
-    uint256 public nextTokenId;
-    IRewardDistributor public rewardDistributor; // may be 0x0
-    mapping(uint256 => Point) public pointHistory; // epoch -> Point
-    mapping(uint256 => Point[1000000000]) public userPointHistory; // tokenId -> Point[userEpoch]
-    mapping(uint256 => uint256) public userPointEpoch; // tokenId -> epoch
-    mapping(uint256 => int128) public slopeChanges; // time -> signed slope change
-    mapping(uint256 => LockedBalance) public locked; // tokenId -> LockedBalance
 
     // --- Errors ---
     error AmountIsZero();
@@ -50,7 +39,6 @@ contract StakedHemi is IStakedHemi, ERC721EnumerableUpgradeable, OwnableUpgradea
     error LockDurationTooShort();
     error LockDurationTooLong();
     error NoExistingLock();
-    error NothingLocked();
     error NotOwner();
     error NewLockDurationNotGreater();
 
@@ -108,7 +96,10 @@ contract StakedHemi is IStakedHemi, ERC721EnumerableUpgradeable, OwnableUpgradea
      * @param lockDuration_ The duration to lock HEMI for
      * @return _tokenId The ID of the created lock NFT
      */
-    function createLock(uint256 amount_, uint256 lockDuration_) external returns (uint256 _tokenId) {
+    function createLock(
+        uint256 amount_,
+        uint256 lockDuration_
+    ) external returns (uint256 _tokenId) {
         _tokenId = _createLock(amount_, lockDuration_, msg.sender);
     }
 
@@ -119,10 +110,11 @@ contract StakedHemi is IStakedHemi, ERC721EnumerableUpgradeable, OwnableUpgradea
      * @param account_ The address to assign the lock NFT to
      * @return _tokenId The ID of the created lock NFT
      */
-    function createLockFor(uint256 amount_, uint256 lockDuration_, address account_)
-        external
-        returns (uint256 _tokenId)
-    {
+    function createLockFor(
+        uint256 amount_,
+        uint256 lockDuration_,
+        address account_
+    ) external returns (uint256 _tokenId) {
         if (account_ == address(0)) revert AddressIsNull();
         _tokenId = _createLock(amount_, lockDuration_, account_);
     }
@@ -166,6 +158,42 @@ contract StakedHemi is IStakedHemi, ERC721EnumerableUpgradeable, OwnableUpgradea
         // TODO: emit event
     }
 
+    function supplyAt(uint256 epoch_, uint256 timestamp_) external view returns (uint256) {
+        uint256 _epoch = _getPastGlobalPointIndex(epoch_, timestamp_);
+        // epoch 0 is an empty point
+        if (_epoch == 0) return 0;
+        Point memory _point = pointHistory[_epoch];
+        int128 bias = _point.bias;
+        int128 slope = _point.slope;
+        uint256 ts = _point.timestamp;
+
+        uint256 t_i = (ts / WEEK) * WEEK;
+        for (uint256 i = 0; i < 255; ++i) {
+            t_i += WEEK;
+            int128 dSlope = 0;
+            if (t_i > timestamp_) {
+                t_i = timestamp_;
+                dSlope = slopeChanges[t_i];
+            }
+            bias -= slope * (t_i - ts).toInt128();
+            if (t_i == timestamp_) {
+                break;
+            }
+            slope += dSlope;
+            ts = t_i;
+        }
+
+        if (bias < 0) {
+            bias = 0;
+        }
+        return bias.toUint256() + _point.amount;
+    }
+
+    function updateRewardDistributor(address rewardDistributor_) external onlyOwner {
+        // Allowed to set to 0x0
+        rewardDistributor = IRewardDistributor(rewardDistributor_);
+    }
+
     /**
      * @notice Withdraws HEMI after the lock has expired and burns the NFT
      * @param tokenId_ The token ID to withdraw from
@@ -206,7 +234,7 @@ contract StakedHemi is IStakedHemi, ERC721EnumerableUpgradeable, OwnableUpgradea
         uint256 _epoch = _getPastUserPointIndex(tokenId_, timestamp_);
         // epoch 0 is an empty point
         if (_epoch == 0) return 0;
-        IStakedHemi.Point memory _lastPoint = userPointHistory[tokenId_][_epoch];
+        Point memory _lastPoint = userPointHistory[tokenId_][_epoch];
         _lastPoint.bias -= _lastPoint.slope * (timestamp_ - _lastPoint.timestamp).toInt128();
         if (_lastPoint.bias < 0) {
             _lastPoint.bias = 0;
@@ -214,15 +242,44 @@ contract StakedHemi is IStakedHemi, ERC721EnumerableUpgradeable, OwnableUpgradea
         return _lastPoint.bias.toUint256();
     }
 
+    function _getPastGlobalPointIndex(
+        uint256 epoch_,
+        uint256 timestamp_
+    ) internal view returns (uint256) {
+        if (epoch_ == 0) return 0;
+        // First check most recent balance
+        if (pointHistory[epoch_].timestamp <= timestamp_) return (epoch_);
+        // Next check implicit zero balance
+        if (pointHistory[1].timestamp > timestamp_) return 0;
+
+        uint256 lower = 0;
+        uint256 upper = epoch_;
+        while (upper > lower) {
+            uint256 center = upper - (upper - lower) / 2; // ceil, avoiding overflow
+            Point memory _globalPoint = pointHistory[center];
+            if (_globalPoint.timestamp == timestamp_) {
+                return center;
+            } else if (_globalPoint.timestamp < timestamp_) {
+                lower = center;
+            } else {
+                upper = center - 1;
+            }
+        }
+        return lower;
+    }
+
     /// @notice Binary search to get the user point index for a token id at or prior to a given timestamp
     /// @dev If a user point does not exist prior to the timestamp, this will return 0.
     /// @param tokenId_ .
     /// @param timestamp_ .
     /// @return User point index
-    function _getPastUserPointIndex(uint256 tokenId_, uint256 timestamp_) internal view returns (uint256) {
+    function _getPastUserPointIndex(
+        uint256 tokenId_,
+        uint256 timestamp_
+    ) internal view returns (uint256) {
         uint256 _userEpoch = userPointEpoch[tokenId_];
         if (_userEpoch == 0) return 0;
-        IStakedHemi.Point memory _lastPoint = userPointHistory[tokenId_][_userEpoch];
+        Point memory _lastPoint = userPointHistory[tokenId_][_userEpoch];
         // First check most recent balance
         if (_lastPoint.timestamp <= timestamp_) return (_userEpoch);
         // Next check implicit zero balance
@@ -232,7 +289,7 @@ contract StakedHemi is IStakedHemi, ERC721EnumerableUpgradeable, OwnableUpgradea
         uint256 upper = _userEpoch;
         while (upper > lower) {
             uint256 center = upper - (upper - lower) / 2; // ceil, avoiding overflow
-            IStakedHemi.Point memory _userPoint = userPointHistory[tokenId_][center];
+            Point memory _userPoint = userPointHistory[tokenId_][center];
             if (_userPoint.timestamp == timestamp_) {
                 return center;
             } else if (_userPoint.timestamp < timestamp_) {
@@ -250,7 +307,11 @@ contract StakedHemi is IStakedHemi, ERC721EnumerableUpgradeable, OwnableUpgradea
      * @param oldLocked_ The previous locked balance
      * @param newLocked_ The new locked balance
      */
-    function _checkpoint(uint256 tokenId_, LockedBalance memory oldLocked_, LockedBalance memory newLocked_) internal {
+    function _checkpoint(
+        uint256 tokenId_,
+        LockedBalance memory oldLocked_,
+        LockedBalance memory newLocked_
+    ) internal {
         Point memory _oldUserPoint;
         Point memory _newUserPoint;
         uint256 _epoch = epoch;
@@ -262,13 +323,17 @@ contract StakedHemi is IStakedHemi, ERC721EnumerableUpgradeable, OwnableUpgradea
             // Old lock
             if (oldLocked_.end > block.timestamp && oldLocked_.amount > 0) {
                 _oldUserPoint.slope = oldLocked_.amount / MAX_TIME.toInt128();
-                _oldUserPoint.bias = _oldUserPoint.slope * (oldLocked_.end - block.timestamp).toInt128();
+                _oldUserPoint.bias =
+                    _oldUserPoint.slope *
+                    (oldLocked_.end - block.timestamp).toInt128();
             }
 
             // New lock
             if (newLocked_.end > block.timestamp && newLocked_.amount > 0) {
                 _newUserPoint.slope = newLocked_.amount / MAX_TIME.toInt128();
-                _newUserPoint.bias = _newUserPoint.slope * (newLocked_.end - block.timestamp).toInt128();
+                _newUserPoint.bias =
+                    _newUserPoint.slope *
+                    (newLocked_.end - block.timestamp).toInt128();
             }
 
             // Read values of scheduled changes in the slope
@@ -295,7 +360,7 @@ contract StakedHemi is IStakedHemi, ERC721EnumerableUpgradeable, OwnableUpgradea
         if (_epoch > 0) {
             _lastPoint = pointHistory[_epoch];
         } else {
-            // TODO: check if this is needed
+            // FIXME: check if this is needed. By this time transferFrom user has not done.
             _lastPoint.amount = HEMI.balanceOf(address(this));
         }
         uint256 _lastCheckpoint = _lastPoint.timestamp;
@@ -309,7 +374,8 @@ contract StakedHemi is IStakedHemi, ERC721EnumerableUpgradeable, OwnableUpgradea
         uint256 _blockSlope = 0; // dblock/dt
         if (block.timestamp > _lastPoint.timestamp) {
             _blockSlope =
-                (MULTIPLIER * (block.number - _lastPoint.blockNumber)) / (block.timestamp - _lastPoint.timestamp);
+                (MULTIPLIER * (block.number - _lastPoint.blockNumber)) /
+                (block.timestamp - _lastPoint.timestamp);
         }
 
         // Go over weeks to fill history and calculate what the current point is
@@ -338,7 +404,9 @@ contract StakedHemi is IStakedHemi, ERC721EnumerableUpgradeable, OwnableUpgradea
                 _lastCheckpoint = t_i;
                 _lastPoint.timestamp = t_i;
                 _lastPoint.blockNumber =
-                    _initialLastPoint.blockNumber + (_blockSlope * (t_i - _initialLastPoint.timestamp)) / MULTIPLIER;
+                    _initialLastPoint.blockNumber +
+                    (_blockSlope * (t_i - _initialLastPoint.timestamp)) /
+                    MULTIPLIER;
                 _epoch += 1;
                 if (t_i == block.timestamp) {
                     _lastPoint.blockNumber = block.number;
@@ -408,7 +476,9 @@ contract StakedHemi is IStakedHemi, ERC721EnumerableUpgradeable, OwnableUpgradea
             // TODO: check if this is needed
             _newUserPoint.amount = locked[tokenId_].amount.toUint256();
             uint256 userEpoch = userPointEpoch[tokenId_];
-            if (userEpoch != 0 && userPointHistory[tokenId_][userEpoch].timestamp == block.timestamp) {
+            if (
+                userEpoch != 0 && userPointHistory[tokenId_][userEpoch].timestamp == block.timestamp
+            ) {
                 userPointHistory[tokenId_][userEpoch] = _newUserPoint;
             } else {
                 userPointEpoch[tokenId_] = ++userEpoch;
@@ -424,10 +494,11 @@ contract StakedHemi is IStakedHemi, ERC721EnumerableUpgradeable, OwnableUpgradea
      * @param account_ The address to assign the lock NFT to
      * @return _tokenId The ID of the created lock NFT
      */
-    function _createLock(uint256 amount_, uint256 lockDuration_, address account_)
-        internal
-        returns (uint256 _tokenId)
-    {
+    function _createLock(
+        uint256 amount_,
+        uint256 lockDuration_,
+        address account_
+    ) internal returns (uint256 _tokenId) {
         uint256 unlockTime = ((block.timestamp + lockDuration_) / WEEK) * WEEK; // Lock time is rounded down to weeks
 
         if (amount_ == 0) revert AmountIsZero();
@@ -450,9 +521,12 @@ contract StakedHemi is IStakedHemi, ERC721EnumerableUpgradeable, OwnableUpgradea
      * @param unlockTime_ The new unlock time
      * @param oldLocked_ The previous locked balance
      */
-    function _depositFor(uint256 tokenId_, uint256 amount_, uint256 unlockTime_, LockedBalance memory oldLocked_)
-        internal
-    {
+    function _depositFor(
+        uint256 tokenId_,
+        uint256 amount_,
+        uint256 unlockTime_,
+        LockedBalance memory oldLocked_
+    ) internal {
         uint256 _supplyBefore = supply;
         supply = _supplyBefore + amount_;
 
@@ -509,12 +583,11 @@ contract StakedHemi is IStakedHemi, ERC721EnumerableUpgradeable, OwnableUpgradea
      * @param auth_ The authorized address
      * @return from The previous owner address
      */
-    function _update(address to_, uint256 tokenId_, address auth_)
-        internal
-        virtual
-        override(ERC721EnumerableUpgradeable)
-        returns (address from)
-    {
+    function _update(
+        address to_,
+        uint256 tokenId_,
+        address auth_
+    ) internal virtual override(ERC721EnumerableUpgradeable) returns (address from) {
         // Only allow mint (from == address(0)) and burn (to == address(0))
         from = super._ownerOf(tokenId_);
         if (from != address(0) && to_ != address(0)) {
@@ -553,7 +626,11 @@ contract StakedHemi is IStakedHemi, ERC721EnumerableUpgradeable, OwnableUpgradea
     /**
      * @notice Disabled: transferFrom is not allowed (NFT is non-transferable)
      */
-    function transferFrom(address, address, uint256) public pure override(ERC721Upgradeable, IERC721) {
+    function transferFrom(
+        address,
+        address,
+        uint256
+    ) public pure override(ERC721Upgradeable, IERC721) {
         revert("NFT is non-transferable");
     }
 }

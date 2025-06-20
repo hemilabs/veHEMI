@@ -1,15 +1,13 @@
 {
-  "solidity.enableLocalNodeCompiler": false,
-  "solidity.compileUsingRemoteVersion": "v0.8.30+commit.5fe3b420",
-  "solidity.defaultCompiler": "remote",
-  "solidity.packageDefaultDependenciesContractsDirectory": "",
-  "solidity.packageDefaultDependenciesDirectory": "lib",
-  "files.associations": {
-    "*.sol": "solidity"
-  },
-  "solidity.remappings": [
-    "@openzeppelin/contracts-upgradeable/=lib/openzeppelin-contracts-upgradeable/contracts/",
-    "@openzeppelin/contracts/=lib/openzeppelin-contracts/contracts/",
-    "forge-std/=lib/forge-std/src/"
-  ]
+    "solidity.defaultCompiler": "local",
+    "solidity.compileUsingRemoteVersion": "0.8.29",
+    "editor.formatOnSave": true,
+    "editor.defaultFormatter": "esbenp.prettier-vscode",
+    "[solidity]": {
+        "editor.defaultFormatter": "esbenp.prettier-vscode",
+        "editor.formatOnSave": true
+    },
+    "files.associations": {
+        "*.sol": "solidity"
+    }
 }

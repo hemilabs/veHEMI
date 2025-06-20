@@ -346,4 +346,29 @@ contract StakedHemiTest is Test {
         uint256 balAfter = stakedHemi.balanceOfNFTAt(tokenId, afterExpiry);
         assertEq(balAfter, 0, "balanceOfNFTAt should be 0 after expiry");
     }
+
+    function testUpdateRewardDistributor() public {
+        address newRewardDistributor = address(0x1234);
+
+        // Only owner should be able to call this
+        vm.prank(user);
+        vm.expectRevert("Ownable: caller is not the owner");
+        stakedHemi.updateRewardDistributor(newRewardDistributor);
+
+        // Owner should be able to update
+        vm.prank(address(this)); // address(this) is the owner from setUp
+        stakedHemi.updateRewardDistributor(newRewardDistributor);
+
+        // Check that the reward distributor was updated
+        assertEq(address(stakedHemi.rewardDistributor()), newRewardDistributor);
+    }
+
+    function testUpdateRewardDistributorToZero() public {
+        // Owner should be able to set to zero address
+        vm.prank(address(this));
+        stakedHemi.updateRewardDistributor(address(0));
+
+        // Check that the reward distributor was set to zero
+        assertEq(address(stakedHemi.rewardDistributor()), address(0));
+    }
 }

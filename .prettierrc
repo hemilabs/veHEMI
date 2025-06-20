@@ -1,13 +1,24 @@
 {
+  "plugins": [
+    "prettier-plugin-solidity"
+  ],
+  "tabWidth": 4,
   "printWidth": 120,
-  "bracketSpacing": false,
-  "semi": false,
-  "singleQuote": true,
+  "singleQuote": false,
+  "bracketSpacing": true,
+  "semi": true,
+  "trailingComma": "none",
   "overrides": [
     {
-      "files": ["*.sol"],
+      "files": "*.sol",
       "options": {
-        "singleQuote": false
+        "tabWidth": 4,
+        "printWidth": 100,
+        "bracketSpacing": false,
+        "explicitTypes": "always",
+        "singleQuote": false,
+        "semi": true,
+        "trailingComma": "none"
       }
     }
   ]
