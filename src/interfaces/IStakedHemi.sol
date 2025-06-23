@@ -16,13 +16,6 @@ interface IStakedHemi {
         uint256 end;
     }
 
-    struct DelegationCheckpoint {
-        uint256 fromTimestamp;
-        address owner;
-        uint256 delegatedBalance;
-        uint256 delegatee;
-    }
-
     // --- Events ---
     event Deposit(
         address indexed provider,
@@ -32,11 +25,6 @@ interface IStakedHemi {
         uint256 timestamp
     );
 
-    event DelegateChanged(
-        address indexed delegator,
-        uint256 indexed fromDelegate,
-        uint256 indexed toDelegate
-    );
     event Withdraw(
         address indexed provider,
         uint256 indexed tokenId,

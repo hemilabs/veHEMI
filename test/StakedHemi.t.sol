@@ -55,7 +55,7 @@ contract StakedHemiTest is Test {
         uint256 unlockTime = nowTs + 2 * 365 days;
 
         vm.prank(user);
-        uint256 tokenId = stakedHemi.createLock(amount, unlockTime);
+        uint256 tokenId = stakedHemi.createLock(amount, 2 * 365 days);
 
         // Check NFT ownership
         assertEq(stakedHemi.ownerOf(tokenId), user);
@@ -79,7 +79,7 @@ contract StakedHemiTest is Test {
         uint256 unlockTime = nowTs + 2 weeks;
 
         vm.prank(user);
-        uint256 tokenId = stakedHemi.createLock(amount, unlockTime);
+        uint256 tokenId = stakedHemi.createLock(amount, 2 weeks);
 
         // Fast forward past unlock
         vm.warp(unlockTime + 1);
@@ -108,7 +108,7 @@ contract StakedHemiTest is Test {
         uint256 unlockTime = block.timestamp + 1 weeks;
 
         vm.prank(user);
-        uint256 tokenId = stakedHemi.createLock(amount, unlockTime);
+        uint256 tokenId = stakedHemi.createLock(amount, 1 weeks);
 
         // Attempt transferFrom
         vm.prank(user);
@@ -138,10 +138,10 @@ contract StakedHemiTest is Test {
 
         // User creates two locks (two NFTs)
         vm.prank(user);
-        uint256 tokenId1 = stakedHemi.createLock(amount1, unlockTime);
+        uint256 tokenId1 = stakedHemi.createLock(amount1, 1 weeks);
 
         vm.prank(user);
-        uint256 tokenId2 = stakedHemi.createLock(amount2, unlockTime + 1 weeks);
+        uint256 tokenId2 = stakedHemi.createLock(amount2, 1 weeks);
 
         // Check balanceOf (number of NFTs owned)
         uint256 balance = stakedHemi.balanceOf(user);
@@ -172,7 +172,7 @@ contract StakedHemiTest is Test {
 
         // User creates a lock
         vm.prank(user);
-        uint256 tokenId = stakedHemi.createLock(amount, unlockTime);
+        uint256 tokenId = stakedHemi.createLock(amount, 4 weeks);
 
         // Another user deposits for this lock
         address depositor = address(0xCAFE);
@@ -199,7 +199,7 @@ contract StakedHemiTest is Test {
 
         // User creates a lock
         vm.prank(user);
-        uint256 tokenId = stakedHemi.createLock(amount, unlockTime);
+        uint256 tokenId = stakedHemi.createLock(amount, 8 weeks);
 
         // User increases their lock amount
         vm.prank(user);
@@ -220,7 +220,7 @@ contract StakedHemiTest is Test {
 
         // User creates a lock
         vm.prank(user);
-        uint256 tokenId_ = stakedHemi.createLock(amount_, unlockTime_);
+        uint256 tokenId_ = stakedHemi.createLock(amount_, 4 weeks);
 
         // Get user epoch before checkpoint
         uint256 userEpochBefore_ = stakedHemi.userPointEpoch(tokenId_);
@@ -264,7 +264,7 @@ contract StakedHemiTest is Test {
 
         // User creates a lock
         vm.prank(user);
-        uint256 tokenId_ = stakedHemi.createLock(amount_, unlockTime_);
+        uint256 tokenId_ = stakedHemi.createLock(amount_, 52 weeks);
 
         // Get user epoch after lock creation
         uint256 userEpoch_ = stakedHemi.userPointEpoch(tokenId_);
@@ -501,332 +501,5 @@ contract StakedHemiTest is Test {
 
         // At creation time
         assertEq(stakedHemi.totalSupplyAt(timestamp_), supplyAt_, "Total at past is not correct");
-    }
-
-    function testGetVotes() public {
-        vm.prank(user);
-        uint256 tokenId = stakedHemi.createLock(1 ether, MAX_TIME / 2);
-
-        // Initially, user should have votes equal to their locked balance
-        uint256 votes = stakedHemi.getVotes(user, tokenId);
-        uint256 balanceOfTokenId1 = stakedHemi.balanceOfNFT(tokenId);
-        assertEq(
-            votes,
-            balanceOfTokenId1,
-            "Votes should be equal to balance of token id of not delegated"
-        );
-        assertEq(votes, BALANCE_WHEN_HALF_TIME, "Initial votes should equal locked amount");
-
-        // Non-owner should have 0 votes
-        uint256 nonOwnerVotes = stakedHemi.getVotes(address(0xCAFE), tokenId);
-        assertEq(nonOwnerVotes, 0, "Non-owner should have 0 votes");
-    }
-
-    function testGetPastVotes() public {
-        uint256 startTime = block.timestamp;
-        vm.prank(user);
-        uint256 tokenId = stakedHemi.createLock(1 ether, MAX_TIME / 2);
-
-        // At creation time
-        uint256 votesAtStart = stakedHemi.getPastVotes(user, tokenId, startTime);
-        assertEq(
-            votesAtStart,
-            BALANCE_WHEN_HALF_TIME,
-            "Past votes at creation should equal locked amount"
-        );
-
-        // At future time (before expiry)
-        uint256 timestamp_ = startTime + MAX_TIME / 4;
-        uint256 votesAtSpecificTimestamp = stakedHemi.getPastVotes(user, tokenId, timestamp_);
-        assertEq(
-            votesAtSpecificTimestamp,
-            BALANCE_WHEN_1_YEAR,
-            "Past votes should remain same before expiry"
-        );
-
-        // After expiry
-        uint256 afterExpiry = startTime + MAX_TIME + 1;
-        uint256 votesAfterExpiry = stakedHemi.getPastVotes(user, tokenId, afterExpiry);
-        assertEq(votesAfterExpiry, 0, "Past votes should be 0 after expiry");
-
-        // pass time
-        vm.warp(block.timestamp + MAX_TIME + 2);
-        uint256 pastVotes = stakedHemi.getPastVotes(user, tokenId, timestamp_);
-        assertEq(
-            pastVotes,
-            votesAtSpecificTimestamp,
-            "Past votes should remain same before expiry"
-        );
-    }
-
-    function testDelegate() public {
-        vm.prank(user);
-        uint256 delegatorToken = stakedHemi.createLock(0.5 ether, MAX_TIME);
-
-        address delegatee = address(0xCAFE);
-        hemi.mint(delegatee, 100 ether);
-        vm.prank(delegatee);
-        hemi.approve(address(stakedHemi), type(uint256).max);
-        vm.prank(delegatee);
-        uint256 delegateeToken = stakedHemi.createLock(0.5 ether, MAX_TIME);
-
-        uint256 delegatorVotesAtStart = stakedHemi.getVotes(user, delegatorToken);
-        uint256 delegateeVotesAtStart = stakedHemi.getVotes(delegatee, delegateeToken);
-        // Delegate votes from delegator to delegatee
-        vm.prank(user);
-        stakedHemi.delegate(delegatorToken, delegateeToken);
-
-        // Check that delegatee now has votes from both tokens
-        uint256 delegateeVotes = stakedHemi.getVotes(delegatee, delegateeToken);
-        // assertEq(
-        //     delegateeVotes,
-        //     delegatorVotesAtStart + delegateeVotesAtStart,
-        //     "Delegatee should have votes from both tokens"
-        // );
-
-        // Delegator should have 0 votes (delegated away)
-        uint256 delegatorVotes = stakedHemi.getVotes(user, delegatorToken);
-        assertEq(delegatorVotes, 0, "Delegator should have 0 votes after delegation");
-
-        vm.warp(block.timestamp + MAX_TIME / 2);
-
-        delegateeVotes = stakedHemi.getVotes(delegatee, delegateeToken);
-        // FIXME: This seems real bug.  Why votes not decreasing over time after delegation?
-        // assertEq(
-        //     delegateeVotes,
-        //     499585731264021545,
-        //     "Delegatee should have votes from both tokens"
-        // );
-
-        vm.warp(block.timestamp + MAX_TIME / 2 + 2);
-
-        delegateeVotes = stakedHemi.getVotes(delegatee, delegateeToken);
-        // FIXME: This seems real bug.  Why votes not decreasing over time after delegation?
-        assertEq(
-            delegateeVotes,
-            499585731264021545,
-            "Delegatee should have votes from both tokens"
-        );
-    }
-
-    function testDelegateToZero() public {
-        vm.prank(user);
-        uint256 tokenId = stakedHemi.createLock(100 ether, 365 days);
-
-        // Delegate to zero (self-delegation)
-        vm.prank(user);
-        stakedHemi.delegate(tokenId, 0);
-
-        // User should have their own votes back
-        uint256 votes = stakedHemi.getVotes(user, tokenId);
-        assertEq(votes, 100 ether, "User should have votes back after delegating to zero");
-    }
-
-    function testDelegateToSelf() public {
-        vm.prank(user);
-        uint256 tokenId = stakedHemi.createLock(100 ether, 365 days);
-
-        // Delegate to self (same as delegating to zero)
-        vm.prank(user);
-        stakedHemi.delegate(tokenId, tokenId);
-
-        // Should be treated as delegating to zero
-        uint256 votes = stakedHemi.getVotes(user, tokenId);
-        assertEq(votes, 100 ether, "Self-delegation should be treated as no delegation");
-    }
-
-    function testDelegateToNonExistentToken() public {
-        vm.prank(user);
-        uint256 tokenId = stakedHemi.createLock(100 ether, 365 days);
-
-        // Try to delegate to non-existent token
-        vm.prank(user);
-        vm.expectRevert(StakedHemi.NonExistentToken.selector);
-        stakedHemi.delegate(tokenId, 999);
-    }
-
-    function testDepositAccountingForVotes() public {
-        vm.prank(user);
-        uint256 tokenId = stakedHemi.createLock(100 ether, 365 days);
-
-        // Check initial votes
-        uint256 initialVotes = stakedHemi.getVotes(user, tokenId);
-        assertEq(initialVotes, 100 ether, "Initial votes should equal locked amount");
-
-        // Increase amount
-        vm.prank(user);
-        stakedHemi.increaseAmount(tokenId, 50 ether);
-
-        // Check votes after increase
-        uint256 votesAfterIncrease = stakedHemi.getVotes(user, tokenId);
-        assertEq(votesAfterIncrease, 150 ether, "Votes should increase with locked amount");
-
-        // Check total supply
-        assertEq(
-            stakedHemi.totalSupply(),
-            150 ether,
-            "Total supply should reflect increased amount"
-        );
-    }
-
-    function testWithdrawAccountingForVotes() public {
-        vm.prank(user);
-        uint256 tokenId = stakedHemi.createLock(100 ether, 2 weeks);
-
-        // Check initial votes
-        uint256 initialVotes = stakedHemi.getVotes(user, tokenId);
-        assertEq(initialVotes, 100 ether, "Initial votes should equal locked amount");
-
-        // Fast forward past unlock
-        vm.warp(block.timestamp + 2 weeks + 1);
-
-        // Withdraw
-        vm.prank(user);
-        stakedHemi.withdraw(tokenId);
-
-        // Votes should be 0 after withdrawal
-        uint256 votesAfterWithdraw = stakedHemi.getVotes(user, tokenId);
-        assertEq(votesAfterWithdraw, 0, "Votes should be 0 after withdrawal");
-
-        // Total supply should be 0
-        assertEq(stakedHemi.totalSupply(), 0, "Total supply should be 0 after withdrawal");
-    }
-
-    function testDelegationAccounting() public {
-        // Create delegator
-        vm.prank(user);
-        uint256 delegatorToken = stakedHemi.createLock(100 ether, 365 days);
-
-        // Create delegatee
-        address delegatee = address(0xCAFE);
-        hemi.mint(delegatee, 50 ether);
-        vm.prank(delegatee);
-        hemi.approve(address(stakedHemi), type(uint256).max);
-        vm.prank(delegatee);
-        uint256 delegateeToken = stakedHemi.createLock(50 ether, 365 days);
-
-        // Delegate
-        vm.prank(user);
-        stakedHemi.delegate(delegatorToken, delegateeToken);
-
-        // Check delegatee votes (should have both)
-        uint256 delegateeVotes = stakedHemi.getVotes(delegatee, delegateeToken);
-        assertEq(delegateeVotes, 150 ether, "Delegatee should have votes from both tokens");
-
-        // Check delegator votes (should have 0)
-        uint256 delegatorVotes = stakedHemi.getVotes(user, delegatorToken);
-        assertEq(delegatorVotes, 0, "Delegator should have 0 votes");
-
-        // Increase delegator's locked amount
-        vm.prank(user);
-        stakedHemi.increaseAmount(delegatorToken, 25 ether);
-
-        // Delegatee should now have additional votes
-        uint256 delegateeVotesAfterIncrease = stakedHemi.getVotes(delegatee, delegateeToken);
-        assertEq(
-            delegateeVotesAfterIncrease,
-            175 ether,
-            "Delegatee should have votes from increased amount"
-        );
-
-        // Total supply should reflect the increase
-        assertEq(
-            stakedHemi.totalSupply(),
-            175 ether,
-            "Total supply should reflect increased amount"
-        );
-    }
-
-    function testDelegationCheckpoints() public {
-        vm.prank(user);
-        uint256 delegatorToken = stakedHemi.createLock(100 ether, 365 days);
-
-        address delegatee = address(0xCAFE);
-        hemi.mint(delegatee, 50 ether);
-        vm.prank(delegatee);
-        hemi.approve(address(stakedHemi), type(uint256).max);
-        vm.prank(delegatee);
-        uint256 delegateeToken = stakedHemi.createLock(50 ether, 365 days);
-
-        uint256 startTime = block.timestamp;
-
-        // Delegate at start
-        vm.prank(user);
-        stakedHemi.delegate(delegatorToken, delegateeToken);
-
-        // Check past votes at start time
-        uint256 votesAtStart = stakedHemi.getPastVotes(delegatee, delegateeToken, startTime);
-        assertEq(votesAtStart, 150 ether, "Past votes should reflect delegation at start");
-
-        // Fast forward and change delegation
-        vm.warp(block.timestamp + 100 days);
-        vm.prank(user);
-        stakedHemi.delegate(delegatorToken, 0); // Remove delegation
-
-        // Check past votes at start time (should still be 150)
-        uint256 votesAtStartAfterChange = stakedHemi.getPastVotes(
-            delegatee,
-            delegateeToken,
-            startTime
-        );
-        assertEq(votesAtStartAfterChange, 150 ether, "Past votes should remain unchanged");
-
-        // Check current votes (should be 50)
-        uint256 currentVotes = stakedHemi.getVotes(delegatee, delegateeToken);
-        assertEq(currentVotes, 50 ether, "Current votes should reflect removed delegation");
-    }
-
-    function testMultipleDelegations() public {
-        // Create multiple tokens
-        vm.prank(user);
-        uint256 token1 = stakedHemi.createLock(100 ether, 365 days);
-
-        address user2 = address(0xCAFE);
-        hemi.mint(user2, 200 ether);
-        vm.prank(user2);
-        hemi.approve(address(stakedHemi), type(uint256).max);
-        vm.prank(user2);
-        uint256 token2 = stakedHemi.createLock(150 ether, 365 days);
-
-        address user3 = address(0xDEAD);
-        hemi.mint(user3, 100 ether);
-        vm.prank(user3);
-        hemi.approve(address(stakedHemi), type(uint256).max);
-        vm.prank(user3);
-        uint256 token3 = stakedHemi.createLock(75 ether, 365 days);
-
-        // Delegate token1 and token2 to token3
-        vm.prank(user);
-        stakedHemi.delegate(token1, token3);
-        vm.prank(user2);
-        stakedHemi.delegate(token2, token3);
-
-        // User3 should have votes from all three tokens
-        uint256 user3Votes = stakedHemi.getVotes(user3, token3);
-        assertEq(user3Votes, 325 ether, "User3 should have votes from all three tokens");
-
-        // User1 and User2 should have 0 votes
-        uint256 user1Votes = stakedHemi.getVotes(user, token1);
-        uint256 user2Votes = stakedHemi.getVotes(user2, token2);
-        assertEq(user1Votes, 0, "User1 should have 0 votes");
-        assertEq(user2Votes, 0, "User2 should have 0 votes");
-
-        // Total supply should be correct
-        assertEq(stakedHemi.totalSupply(), 325 ether, "Total supply should be sum of all tokens");
-    }
-
-    function testMemoryStructIsCopied() public {
-        // Define a struct in memory
-        LockedBalance memory user = LockedBalance(1, 100);
-        // Call a function that tries to modify it
-        mutateUser(user);
-        // Assert that the original struct is unchanged
-        assertEq(user.amount, 1, "user.amount should not be changed");
-        assertEq(user.end, 100, "user.end should not be changed");
-    }
-
-    function mutateUser(LockedBalance memory user) private {
-        user.amount = 42;
-        user.end = 999;
     }
 }
