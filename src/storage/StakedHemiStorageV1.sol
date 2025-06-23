@@ -17,4 +17,14 @@ abstract contract StakedHemiStorageV1 is IStakedHemi {
     mapping(uint256 => uint256) public userPointEpoch; // tokenId -> epoch
     mapping(uint256 => int128) public slopeChanges; // time -> signed slope change
     mapping(uint256 => LockedBalance) public locked; // tokenId -> LockedBalance
+
+    /// @notice A record of each accounts delegate
+    mapping(uint256 => uint256) public delegates;
+
+    /// @notice A record of delegated token checkpoints for each tokenId, by index
+    mapping(uint256 => mapping(uint48 => DelegationCheckpoint)) public delegationCheckpoints;
+
+    mapping(uint256 => uint48) public numDelegationCheckpoints;
+
+    mapping(address => uint256) public nonces;
 }
