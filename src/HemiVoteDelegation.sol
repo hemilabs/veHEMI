@@ -1,0 +1,407 @@
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.29;
+
+import {OwnableUpgradeable} from "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
+import {ReentrancyGuardTransient} from "@openzeppelin/contracts/utils/ReentrancyGuardTransient.sol";
+import {IStakedHemi} from "./interfaces/IStakedHemi.sol";
+import {DelegationStorageV1} from "./storage/DelegationStorageV1.sol";
+import {SafeCast} from "./libraries/SafeCast.sol";
+import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
+
+// TODO: Implement IVotes of OZ
+contract HemiVoteDelegation is DelegationStorageV1, ReentrancyGuardTransient {
+    using SafeCast for uint256;
+    using SafeCast for int128;
+
+    IStakedHemi public immutable stakedHemi;
+
+    uint256 public constant MAX_LOCK_DURATION = 365 days * 4;
+    uint256 public constant WEEK = 7 days;
+
+    error InvalidStakedHemi();
+    error NonExistentToken();
+    error CanNotDelegateExpiredLocks();
+    error NotOwner();
+    error TimestampInFuture();
+
+    constructor(address stakedHemi_) {
+        if (stakedHemi_ == address(0)) revert InvalidStakedHemi();
+        stakedHemi = IStakedHemi(stakedHemi_);
+    }
+
+    function delegate(uint256 delegator_, uint256 delegatee_) external {
+        if (delegatee_ != 0 && stakedHemi.ownerOf(delegatee_) == address(0))
+            revert NonExistentToken();
+        if (stakedHemi.ownerOf(delegator_) != msg.sender) revert NotOwner();
+        if (delegatee_ == delegator_) delegatee_ = 0;
+        if (delegations[delegator_].delegatee == delegatee_) return;
+
+        Delegation memory _previousDelegation = delegations[delegator_];
+
+        uint256 _checkpointTimestamp = ((block.timestamp / 1 days) * 1 days) + 1 days;
+
+        NormalizedVeHemiLockInfo memory _normalizedVeLockInfo = _getNormalizedLockedInfo(
+            delegator_,
+            _checkpointTimestamp
+        );
+
+        _moveVotingPowerFromPreviousDelegate({
+            previousDelegation_: _previousDelegation,
+            checkpointTimestamp_: _checkpointTimestamp
+        });
+
+        _moveVotingPowerToNewDelegate({
+            newDelegatee_: delegatee_,
+            delegatorVeLockInfo_: _normalizedVeLockInfo,
+            checkpointTimestamp_: _checkpointTimestamp
+        });
+
+        delegations[delegator_] = Delegation({
+            delegatee: delegatee_,
+            firstDelegationTimestamp: _previousDelegation.firstDelegationTimestamp == 0
+                ? uint48(_checkpointTimestamp)
+                : _previousDelegation.firstDelegationTimestamp,
+            end: uint48(_normalizedVeLockInfo.end),
+            bias: uint96(_normalizedVeLockInfo.bias),
+            amount: uint96(_normalizedVeLockInfo.amount),
+            slope: uint64(_normalizedVeLockInfo.slope)
+        });
+    }
+
+    function getVotes(uint256 tokenId_) external view returns (uint256) {
+        return _getPastVotes(tokenId_, block.timestamp);
+    }
+
+    function getPastVotes(uint256 tokenId_, uint256 timestamp_) external view returns (uint256) {
+        if (timestamp_ > block.timestamp) revert TimestampInFuture();
+        return _getPastVotes(tokenId_, timestamp_);
+    }
+
+    function _calculateCheckpoint(
+        DelegateCheckpoint memory previousCheckpoint_,
+        uint256 tokenId_,
+        bool isDeltaPositive_,
+        uint256 deltaBias_,
+        uint256 deltaSlope_,
+        uint256 deltaAmount_,
+        uint256 checkpointTimestamp_,
+        uint256 previousDelegationEnd_
+    ) private view returns (DelegateCheckpoint memory _newCheckpoint) {
+        // If this is the first checkpoint, create a new one and early return
+        if (previousCheckpoint_.timestamp == 0) {
+            return
+                DelegateCheckpoint({
+                    // can be unsafely cast because values will never exceed uint128 max
+                    timestamp: uint128(checkpointTimestamp_),
+                    normalizedBias: uint128(deltaBias_),
+                    normalizedSlope: uint128(deltaSlope_),
+                    totalAmount: uint128(deltaAmount_)
+                });
+        }
+
+        _newCheckpoint.timestamp = previousCheckpoint_.timestamp;
+        _newCheckpoint.normalizedBias = previousCheckpoint_.normalizedBias;
+        _newCheckpoint.normalizedSlope = previousCheckpoint_.normalizedSlope;
+        _newCheckpoint.totalAmount = previousCheckpoint_.totalAmount;
+
+        // All checkpoint fields will never exceed their size so addition and subtraction doesnt need to be checked
+        unchecked {
+            // Add or subtract the delta to the previous checkpoint
+            if (isDeltaPositive_) {
+                _newCheckpoint.normalizedBias += uint128(deltaBias_);
+                _newCheckpoint.normalizedSlope += uint128(deltaSlope_);
+                _newCheckpoint.totalAmount += uint128(deltaAmount_);
+            } else {
+                // only subtract the weight from this account if it has not already expired in a previous checkpoint
+                if (previousDelegationEnd_ > previousCheckpoint_.timestamp) {
+                    _newCheckpoint.normalizedBias -= uint128(deltaBias_);
+                    _newCheckpoint.normalizedSlope -= uint128(deltaSlope_);
+                    _newCheckpoint.totalAmount -= uint128(deltaAmount_);
+                }
+            }
+
+            // If there have been expirations, incorporate the adjustments by subtracting them from the checkpoint
+            if (_newCheckpoint.timestamp != checkpointTimestamp_) {
+                (
+                    uint256 totalExpiredBias,
+                    uint256 totalExpiredSlope,
+                    uint256 totalExpiredAmount
+                ) = _calculateExpirations(
+                        tokenId_,
+                        _newCheckpoint.timestamp,
+                        checkpointTimestamp_,
+                        previousCheckpoint_
+                    );
+
+                _newCheckpoint.timestamp = uint128(checkpointTimestamp_);
+                _newCheckpoint.normalizedBias -= uint128(totalExpiredBias);
+                _newCheckpoint.normalizedSlope -= uint128(totalExpiredSlope);
+                _newCheckpoint.totalAmount -= uint128(totalExpiredAmount);
+            }
+        }
+    }
+
+    function _calculateExpirations(
+        uint256 tokenId_,
+        uint256 start_,
+        uint256 end_,
+        DelegateCheckpoint memory checkpoint_
+    )
+        private
+        view
+        returns (uint256 totalExpiredBias, uint256 totalExpiredSlope, uint256 totalExpiredAmount)
+    {
+        unchecked {
+            if (end_ > start_ + MAX_LOCK_DURATION) {
+                totalExpiredBias = checkpoint_.normalizedBias;
+                totalExpiredSlope = checkpoint_.normalizedSlope;
+                totalExpiredAmount = checkpoint_.totalAmount;
+            } else {
+                // Total values will always be less than or equal to a checkpoint's values
+                uint256 currentWeek = WEEK + (start_ / WEEK) * WEEK;
+                mapping(uint256 => Expiration) storage delegateExpirations = expiredDelegations[
+                    tokenId_
+                ];
+                // Sum values from currentWeek until end
+                while (currentWeek <= end_) {
+                    Expiration memory expiration = delegateExpirations[currentWeek];
+                    totalExpiredBias += expiration.bias;
+                    totalExpiredSlope += expiration.slope;
+                    totalExpiredAmount += expiration.amount;
+                    currentWeek += WEEK;
+                }
+            }
+        }
+    }
+
+    function _checkpointBinarySearch(
+        DelegateCheckpoint[] storage checkpoints_,
+        uint256 timestamp_
+    ) private view returns (DelegateCheckpoint memory closestCheckpoint_) {
+        uint256 checkpointsLength_ = checkpoints_.length;
+
+        // What the newest checkpoint could be for timestamp (rounded to whole days). It will be earlier when checkpoints are sparse.
+        uint256 roundedDownTimestamp_ = (timestamp_ / 1 days) * 1 days;
+        // Newest checkpoint's timestamp (already rounded to whole days)
+        uint256 lastCheckpointTimestamp_ = checkpointsLength_ > 0
+            ? checkpoints_[checkpointsLength_ - 1].timestamp
+            : 0;
+        // The furthest back a checkpoint will ever be is the number of days delta between timestamp and the last
+        // checkpoints timestamp. This happens when there was a checkpoint written every single day over that period.
+        // If roundedDownTimestamp > lastCheckpointTimestamp that means that we can just use the last index as
+        // the checkpoint.
+        uint256 delta = lastCheckpointTimestamp_ > roundedDownTimestamp_
+            ? (lastCheckpointTimestamp_ - roundedDownTimestamp_) / 1 days
+            : 0;
+        // low index is equal to the last checkpoints index minus the index delta
+        uint256 low = (checkpointsLength_ > 0 && checkpointsLength_ - 1 > delta)
+            ? checkpointsLength_ - 1 - delta
+            : 0;
+
+        uint256 high = checkpointsLength_;
+        while (low < high) {
+            uint256 mid = Math.average(low, high);
+            if (checkpoints_[mid].timestamp > timestamp_) {
+                high = mid;
+            } else {
+                low = mid + 1;
+            }
+        }
+
+        closestCheckpoint_ = high == 0 ? closestCheckpoint_ : checkpoints_[high - 1];
+    }
+
+    function _getPastVotes(uint256 tokenId_, uint256 timestamp_) internal view returns (uint256) {
+        uint256 _selfVotes = _getSelfVotesAt(tokenId_, timestamp_);
+        uint256 _delegateVotes = _getDelegateVotesAt(tokenId_, timestamp_);
+        return _selfVotes + _delegateVotes;
+    }
+
+    function _getSelfVotesAt(uint256 tokenId_, uint256 timestamp_) internal view returns (uint256) {
+        if (stakedHemi.getLockedBalance(tokenId_).end <= timestamp_) return 0;
+
+        uint256 _firstDelegation = delegations[tokenId_].firstDelegationTimestamp;
+        if (_firstDelegation == 0 || timestamp_ < _firstDelegation) {
+            return stakedHemi.balanceOfNFTAt(tokenId_, timestamp_);
+        }
+        return 0;
+    }
+
+    function _getNormalizedLockedInfo(
+        uint256 delegator_,
+        uint256 checkPointTimestamp_
+    ) internal view returns (NormalizedVeHemiLockInfo memory _normalizedVeHemiLockInfo) {
+        IStakedHemi.LockedBalance memory _lockedBalance = stakedHemi.getLockedBalance(delegator_);
+        uint256 _end = _lockedBalance.end;
+        if (_end <= checkPointTimestamp_) revert CanNotDelegateExpiredLocks();
+
+        uint256 _epoch = stakedHemi.userPointEpoch(delegator_);
+
+        IStakedHemi.Point memory _userPoint = stakedHemi.getUserPoint(delegator_, _epoch);
+
+        _normalizedVeHemiLockInfo.slope = _userPoint.slope.toUint256();
+        _normalizedVeHemiLockInfo.bias =
+            SafeCast.toUint256(_userPoint.bias) +
+            (_normalizedVeHemiLockInfo.slope * _userPoint.timestamp);
+        _normalizedVeHemiLockInfo.amount = _userPoint.amount;
+        _normalizedVeHemiLockInfo.end = _end;
+    }
+
+    function _getDelegateVotesAt(
+        uint256 tokenId_,
+        uint256 timestamp_
+    ) internal view returns (uint256 _delegatedWeight) {
+        // Check if delegate account has any delegations
+        DelegateCheckpoint memory _checkpoint = _checkpointBinarySearch({
+            checkpoints_: delegateCheckpoints[tokenId_],
+            timestamp_: timestamp_
+        });
+
+        // If checkpoint is empty, short circuit and return 0 delegated weight
+        if (_checkpoint.timestamp == 0) {
+            return 0;
+        }
+
+        // It's possible that some delegated  veHemi has expired.
+        // Add up all expirations during this time period, week by week.
+        (
+            uint256 totalExpiredBias,
+            uint256 totalExpiredSlope,
+            uint256 totalExpiredAmount
+        ) = _calculateExpirations({
+                tokenId_: tokenId_,
+                start_: _checkpoint.timestamp,
+                end_: timestamp_,
+                checkpoint_: _checkpoint
+            });
+
+        uint256 expirationAdjustedBias = _checkpoint.normalizedBias - totalExpiredBias;
+        uint256 expirationAdjustedSlope = _checkpoint.normalizedSlope - totalExpiredSlope;
+
+        uint256 voteDecay = expirationAdjustedSlope * timestamp_;
+        _delegatedWeight = (expirationAdjustedBias > voteDecay)
+            ? expirationAdjustedBias - voteDecay
+            : 0;
+    }
+
+    function _moveVotingPowerFromPreviousDelegate(
+        Delegation memory previousDelegation_,
+        uint256 checkpointTimestamp_
+    ) private {
+        if (previousDelegation_.delegatee == 0) return;
+        // Remove voting power from previous delegate, if they exist
+
+        // Get the last Checkpoint for previous delegate
+        DelegateCheckpoint[] storage previousDelegationCheckpoints = delegateCheckpoints[
+            previousDelegation_.delegatee
+        ];
+        uint256 accountCheckpointsLength = previousDelegationCheckpoints.length;
+        // NOTE: we know that _accountsCheckpointLength > 0 because we have already checked that the previous delegation exists
+        DelegateCheckpoint memory _lastCheckpoint = previousDelegationCheckpoints[
+            accountCheckpointsLength - 1
+        ];
+
+        if (previousDelegation_.end > checkpointTimestamp_) {
+            // Calculations
+            Expiration memory expiration = expiredDelegations[previousDelegation_.delegatee][
+                previousDelegation_.end
+            ];
+            // All expiration fields will never exceed their size so subtraction doesnt need to be checked
+            // and they can be unsafely cast
+            unchecked {
+                expiration.bias -= uint96(previousDelegation_.bias);
+                expiration.slope -= uint64(previousDelegation_.slope);
+                expiration.amount -= uint96(previousDelegation_.amount);
+            }
+
+            // Effects
+            expiredDelegations[previousDelegation_.delegatee][previousDelegation_.end] = expiration;
+        }
+
+        {
+            // Calculate new checkpoint
+            DelegateCheckpoint memory newCheckpoint = _calculateCheckpoint({
+                previousCheckpoint_: _lastCheckpoint,
+                tokenId_: previousDelegation_.delegatee,
+                isDeltaPositive_: false,
+                deltaBias_: previousDelegation_.bias,
+                deltaSlope_: previousDelegation_.slope,
+                deltaAmount_: previousDelegation_.amount,
+                checkpointTimestamp_: checkpointTimestamp_,
+                previousDelegationEnd_: previousDelegation_.end
+            });
+
+            // Write new checkpoint
+            _writeCheckpoint({
+                userDelegationCheckpoints_: previousDelegationCheckpoints,
+                accountCheckpointsLength_: accountCheckpointsLength,
+                newCheckpoint_: newCheckpoint,
+                lastCheckpoint_: _lastCheckpoint
+            });
+        }
+    }
+
+    function _moveVotingPowerToNewDelegate(
+        uint256 newDelegatee_,
+        NormalizedVeHemiLockInfo memory delegatorVeLockInfo_,
+        uint256 checkpointTimestamp_
+    ) private {
+        // Get the last checkpoint for the new delegate
+        DelegateCheckpoint[] storage newDelegateCheckpoints = delegateCheckpoints[newDelegatee_];
+        uint256 _accountCheckpointsLength = newDelegateCheckpoints.length;
+        DelegateCheckpoint memory _lastCheckpoint = _accountCheckpointsLength == 0
+            ? DelegateCheckpoint(0, 0, 0, 0)
+            : newDelegateCheckpoints[_accountCheckpointsLength - 1];
+
+        // Handle expiration
+        // Calculations
+        Expiration memory _expiration = expiredDelegations[newDelegatee_][delegatorVeLockInfo_.end];
+
+        // NOTE: All expiration fields will never exceed their size so addition doesnt need to be checked
+        // and can be unsafely cast
+        unchecked {
+            _expiration.bias += uint96(delegatorVeLockInfo_.bias);
+            _expiration.slope += uint64(delegatorVeLockInfo_.slope);
+            _expiration.amount += uint96(delegatorVeLockInfo_.amount);
+        }
+        // Effects
+        expiredDelegations[newDelegatee_][delegatorVeLockInfo_.end] = _expiration;
+
+        // Calculate new checkpoint
+        DelegateCheckpoint memory _newCheckpoint = _calculateCheckpoint({
+            previousCheckpoint_: _lastCheckpoint,
+            tokenId_: newDelegatee_,
+            isDeltaPositive_: true,
+            deltaBias_: delegatorVeLockInfo_.bias,
+            deltaSlope_: delegatorVeLockInfo_.slope,
+            deltaAmount_: delegatorVeLockInfo_.amount,
+            checkpointTimestamp_: checkpointTimestamp_,
+            previousDelegationEnd_: 0
+        });
+
+        // Write new checkpoint
+        _writeCheckpoint({
+            userDelegationCheckpoints_: newDelegateCheckpoints,
+            accountCheckpointsLength_: _accountCheckpointsLength,
+            newCheckpoint_: _newCheckpoint,
+            lastCheckpoint_: _lastCheckpoint
+        });
+    }
+
+    function _writeCheckpoint(
+        DelegateCheckpoint[] storage userDelegationCheckpoints_,
+        uint256 accountCheckpointsLength_,
+        DelegateCheckpoint memory newCheckpoint_,
+        DelegateCheckpoint memory lastCheckpoint_
+    ) internal {
+        // If the newCheckpoint has the same timestamp as the last checkpoint, overwrite it
+        if (
+            accountCheckpointsLength_ > 0 && lastCheckpoint_.timestamp == newCheckpoint_.timestamp
+        ) {
+            userDelegationCheckpoints_[accountCheckpointsLength_ - 1] = newCheckpoint_;
+        } else {
+            // Otherwise, push a new checkpoint
+            userDelegationCheckpoints_.push(newCheckpoint_);
+        }
+    }
+}
