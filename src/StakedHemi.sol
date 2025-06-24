@@ -10,7 +10,6 @@ import {ERC721EnumerableUpgradeable, ERC721Upgradeable} from "@openzeppelin/cont
 import {ReentrancyGuardTransient} from "@openzeppelin/contracts/utils/ReentrancyGuardTransient.sol";
 
 import {StakedHemiStorageV1} from "./storage/StakedHemiStorageV1.sol";
-import {console} from "forge-std/console.sol";
 
 /**
  * @title StakedHemi (stHEMI)
@@ -29,7 +28,6 @@ contract StakedHemi is
     // --- Constants ---
     uint256 public constant WEEK = 7 days;
     uint256 public constant MAX_TIME = 4 * 365 days; // 4 years
-    uint256 public constant VOTE_WEIGHT_MULTIPLIER = 3; // 4x gives 300% boost at 4 years
     uint256 internal constant MULTIPLIER = 1 ether;
 
     // --- Errors ---
@@ -123,6 +121,10 @@ contract StakedHemi is
         _tokenId = _createLock(amount_, lockDuration_, account_);
     }
 
+    function getLockedBalance(uint256 tokenId_) external view returns (LockedBalance memory) {
+        return locked[tokenId_];
+    }
+
     /**
      * @notice Returns the user point for a given token and epoch
      * @param tokenId_ The token ID
@@ -168,6 +170,10 @@ contract StakedHemi is
 
     function totalSupplyAt(uint256 _timestamp) external view returns (uint256) {
         return _supplyAt(_timestamp);
+    }
+
+    function totalSupplyAtBlock(uint256 blockNumber_) external view returns (uint256) {
+        // TODO:
     }
 
     function updateRewardDistributor(address rewardDistributor_) external onlyOwner {
