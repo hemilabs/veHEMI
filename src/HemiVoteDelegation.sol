@@ -8,27 +8,50 @@ import {DelegationStorageV1} from "./storage/DelegationStorageV1.sol";
 import {SafeCast} from "./libraries/SafeCast.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 
+/**
+ * @title HemiVoteDelegation
+ * @notice Vote delegation system for stHEMI tokens. Allows token holders to delegate their voting power
+ * to other token holders without transferring ownership. Delegations take effect at the next epoch
+ * (next day boundary) and expire when the delegator's lock expires.
+ * @dev Based on Curve's veCRV delegation mechanism with adaptations for stHEMI
+ */
 // TODO: Implement IVotes of OZ
 contract HemiVoteDelegation is DelegationStorageV1, ReentrancyGuardTransient {
     using SafeCast for uint256;
     using SafeCast for int128;
 
+    /// @notice The stHEMI contract that manages locked balances
     IStakedHemi public immutable stakedHemi;
 
+    /// @notice Maximum lock duration (4 years)
     uint256 public constant MAX_LOCK_DURATION = 365 days * 4;
+    /// @notice Week duration in seconds
     uint256 public constant WEEK = 7 days;
 
+    // --- Errors ---
     error InvalidStakedHemi();
     error NonExistentToken();
     error CanNotDelegateExpiredLocks();
     error NotOwner();
     error TimestampInFuture();
 
+    /**
+     * @notice Constructor to initialize the vote delegation contract
+     * @param stakedHemi_ Address of the stHEMI contract
+     */
     constructor(address stakedHemi_) {
         if (stakedHemi_ == address(0)) revert InvalidStakedHemi();
         stakedHemi = IStakedHemi(stakedHemi_);
     }
 
+    /**
+     * @notice Delegate voting power from one token to another
+     * @dev Delegations take effect at the next epoch (next day boundary). The delegator loses
+     * their voting power and the delegatee gains it. Delegations expire when the delegator's
+     * lock expires. Delegating to self (same tokenId) is equivalent to no delegation.
+     * @param delegator_ The token ID to delegate from (must be owned by msg.sender)
+     * @param delegatee_ The token ID to delegate to (0 for no delegation, same as delegator_ for self-delegation)
+     */
     function delegate(uint256 delegator_, uint256 delegatee_) external {
         if (delegatee_ != 0 && stakedHemi.ownerOf(delegatee_) == address(0))
             revert NonExistentToken();
@@ -68,15 +91,40 @@ contract HemiVoteDelegation is DelegationStorageV1, ReentrancyGuardTransient {
         });
     }
 
+    /**
+     * @notice Get the current voting power for a token
+     * @param tokenId_ The token ID to check
+     * @return The current voting power (includes both self votes and delegated votes)
+     */
     function getVotes(uint256 tokenId_) external view returns (uint256) {
         return _getPastVotes(tokenId_, block.timestamp);
     }
 
+    /**
+     * @notice Get the voting power for a token at a specific timestamp
+     * @param tokenId_ The token ID to check
+     * @param timestamp_ The timestamp to check voting power at (must not be in the future)
+     * @return The voting power at the given timestamp
+     */
     function getPastVotes(uint256 tokenId_, uint256 timestamp_) external view returns (uint256) {
         if (timestamp_ > block.timestamp) revert TimestampInFuture();
         return _getPastVotes(tokenId_, timestamp_);
     }
 
+    /**
+     * @notice Calculate a new checkpoint based on previous checkpoint and changes
+     * @dev This function handles the complex logic of updating checkpoints with new delegations
+     * and expirations. It ensures that voting power is correctly tracked over time.
+     * @param previousCheckpoint_ The previous checkpoint to build upon
+     * @param tokenId_ The token ID this checkpoint is for
+     * @param isDeltaPositive_ Whether this is adding (true) or removing (false) voting power
+     * @param deltaBias_ The change in bias (voting power at current time)
+     * @param deltaSlope_ The change in slope (rate of voting power decay)
+     * @param deltaAmount_ The change in locked amount
+     * @param checkpointTimestamp_ The timestamp for this checkpoint
+     * @param previousDelegationEnd_ The end time of the previous delegation (for expiration handling)
+     * @return _newCheckpoint The calculated new checkpoint
+     */
     function _calculateCheckpoint(
         DelegateCheckpoint memory previousCheckpoint_,
         uint256 tokenId_,
@@ -141,6 +189,18 @@ contract HemiVoteDelegation is DelegationStorageV1, ReentrancyGuardTransient {
         }
     }
 
+    /**
+     * @notice Calculate expired voting power between two timestamps
+     * @dev This function handles the complex calculation of how much voting power has expired
+     * due to lock expirations between the start and end timestamps.
+     * @param tokenId_ The token ID to calculate expirations for
+     * @param start_ The start timestamp
+     * @param end_ The end timestamp
+     * @param checkpoint_ The checkpoint to calculate expirations from
+     * @return totalExpiredBias The total expired bias
+     * @return totalExpiredSlope The total expired slope
+     * @return totalExpiredAmount The total expired amount
+     */
     function _calculateExpirations(
         uint256 tokenId_,
         uint256 start_,
@@ -174,6 +234,14 @@ contract HemiVoteDelegation is DelegationStorageV1, ReentrancyGuardTransient {
         }
     }
 
+    /**
+     * @notice Perform binary search to find the closest checkpoint for a given timestamp
+     * @dev This function efficiently finds the most recent checkpoint that is at or before
+     * the given timestamp using binary search for optimal performance.
+     * @param checkpoints_ The array of checkpoints to search through
+     * @param timestamp_ The timestamp to search for
+     * @return closestCheckpoint_ The closest checkpoint at or before the timestamp
+     */
     function _checkpointBinarySearch(
         DelegateCheckpoint[] storage checkpoints_,
         uint256 timestamp_
@@ -211,12 +279,28 @@ contract HemiVoteDelegation is DelegationStorageV1, ReentrancyGuardTransient {
         closestCheckpoint_ = high == 0 ? closestCheckpoint_ : checkpoints_[high - 1];
     }
 
+    /**
+     * @notice Get the total voting power for a token at a specific timestamp
+     * @dev This function combines the token's own voting power with any delegated voting power
+     * it has received from other tokens.
+     * @param tokenId_ The token ID to check
+     * @param timestamp_ The timestamp to check voting power at
+     * @return The total voting power (self votes + delegated votes)
+     */
     function _getPastVotes(uint256 tokenId_, uint256 timestamp_) internal view returns (uint256) {
         uint256 _selfVotes = _getSelfVotesAt(tokenId_, timestamp_);
         uint256 _delegateVotes = _getDelegateVotesAt(tokenId_, timestamp_);
         return _selfVotes + _delegateVotes;
     }
 
+    /**
+     * @notice Get the token's own voting power at a specific timestamp
+     * @dev A token has its own voting power only if it has never been delegated or if the
+     * timestamp is before the first delegation. Once delegated, the token loses its own voting power.
+     * @param tokenId_ The token ID to check
+     * @param timestamp_ The timestamp to check voting power at
+     * @return The token's own voting power (0 if delegated or expired)
+     */
     function _getSelfVotesAt(uint256 tokenId_, uint256 timestamp_) internal view returns (uint256) {
         if (stakedHemi.getLockedBalance(tokenId_).end <= timestamp_) return 0;
 
@@ -227,6 +311,15 @@ contract HemiVoteDelegation is DelegationStorageV1, ReentrancyGuardTransient {
         return 0;
     }
 
+    /**
+     * @notice Get normalized lock information for a delegator at a specific timestamp
+     * @dev This function calculates the normalized voting power parameters (bias, slope, amount, end)
+     * for a delegator at the given checkpoint timestamp. These values are used to track
+     * delegated voting power over time.
+     * @param delegator_ The token ID of the delegator
+     * @param checkPointTimestamp_ The timestamp to calculate the lock info at
+     * @return _normalizedVeHemiLockInfo The normalized lock information
+     */
     function _getNormalizedLockedInfo(
         uint256 delegator_,
         uint256 checkPointTimestamp_
@@ -247,6 +340,14 @@ contract HemiVoteDelegation is DelegationStorageV1, ReentrancyGuardTransient {
         _normalizedVeHemiLockInfo.end = _end;
     }
 
+    /**
+     * @notice Get delegated voting power for a token at a specific timestamp
+     * @dev This function calculates the total voting power that has been delegated to this token
+     * by other tokens, taking into account any expirations that have occurred.
+     * @param tokenId_ The token ID to check delegated votes for
+     * @param timestamp_ The timestamp to check delegated votes at
+     * @return _delegatedWeight The total delegated voting power
+     */
     function _getDelegateVotesAt(
         uint256 tokenId_,
         uint256 timestamp_
@@ -264,16 +365,12 @@ contract HemiVoteDelegation is DelegationStorageV1, ReentrancyGuardTransient {
 
         // It's possible that some delegated  veHemi has expired.
         // Add up all expirations during this time period, week by week.
-        (
-            uint256 totalExpiredBias,
-            uint256 totalExpiredSlope,
-            uint256 totalExpiredAmount
-        ) = _calculateExpirations({
-                tokenId_: tokenId_,
-                start_: _checkpoint.timestamp,
-                end_: timestamp_,
-                checkpoint_: _checkpoint
-            });
+        (uint256 totalExpiredBias, uint256 totalExpiredSlope, ) = _calculateExpirations({
+            tokenId_: tokenId_,
+            start_: _checkpoint.timestamp,
+            end_: timestamp_,
+            checkpoint_: _checkpoint
+        });
 
         uint256 expirationAdjustedBias = _checkpoint.normalizedBias - totalExpiredBias;
         uint256 expirationAdjustedSlope = _checkpoint.normalizedSlope - totalExpiredSlope;
@@ -284,6 +381,13 @@ contract HemiVoteDelegation is DelegationStorageV1, ReentrancyGuardTransient {
             : 0;
     }
 
+    /**
+     * @notice Move voting power away from the previous delegate
+     * @dev This function handles removing voting power from the previous delegate when
+     * a delegation is changed or removed. It updates checkpoints and expiration records.
+     * @param previousDelegation_ The previous delegation information
+     * @param checkpointTimestamp_ The timestamp for the checkpoint
+     */
     function _moveVotingPowerFromPreviousDelegate(
         Delegation memory previousDelegation_,
         uint256 checkpointTimestamp_
@@ -341,6 +445,14 @@ contract HemiVoteDelegation is DelegationStorageV1, ReentrancyGuardTransient {
         }
     }
 
+    /**
+     * @notice Move voting power to the new delegate
+     * @dev This function handles adding voting power to the new delegate when
+     * a delegation is created or changed. It updates checkpoints and expiration records.
+     * @param newDelegatee_ The token ID of the new delegatee (0 for no delegation)
+     * @param delegatorVeLockInfo_ The normalized lock information of the delegator
+     * @param checkpointTimestamp_ The timestamp for the checkpoint
+     */
     function _moveVotingPowerToNewDelegate(
         uint256 newDelegatee_,
         NormalizedVeHemiLockInfo memory delegatorVeLockInfo_,
@@ -388,6 +500,15 @@ contract HemiVoteDelegation is DelegationStorageV1, ReentrancyGuardTransient {
         });
     }
 
+    /**
+     * @notice Write a new checkpoint to the user's checkpoint array
+     * @dev This function either overwrites the last checkpoint if it has the same timestamp,
+     * or pushes a new checkpoint to the array. This ensures efficient storage usage.
+     * @param userDelegationCheckpoints_ The array of checkpoints for the user
+     * @param accountCheckpointsLength_ The current length of the checkpoints array
+     * @param newCheckpoint_ The new checkpoint to write
+     * @param lastCheckpoint_ The last checkpoint in the array
+     */
     function _writeCheckpoint(
         DelegateCheckpoint[] storage userDelegationCheckpoints_,
         uint256 accountCheckpointsLength_,
