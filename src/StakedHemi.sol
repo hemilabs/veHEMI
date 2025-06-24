@@ -121,6 +121,11 @@ contract StakedHemi is
         _tokenId = _createLock(amount_, lockDuration_, account_);
     }
 
+    /**
+     * @notice Get the locked balance information for a specific token
+     * @param tokenId_ The token ID to get locked balance for
+     * @return The LockedBalance struct containing amount and end time
+     */
     function getLockedBalance(uint256 tokenId_) external view returns (LockedBalance memory) {
         return locked[tokenId_];
     }
@@ -164,18 +169,39 @@ contract StakedHemi is
         // TODO: emit event
     }
 
+    /**
+     * @notice Get the total supply of locked HEMI at the current timestamp
+     * @return The total amount of HEMI currently locked
+     */
     function totalSupply() public view override returns (uint256) {
         return _supplyAt(block.timestamp);
     }
 
+    /**
+     * @notice Get the total supply of locked HEMI at a specific timestamp
+     * @param _timestamp The timestamp to check total supply at
+     * @return The total amount of HEMI locked at the given timestamp
+     */
     function totalSupplyAt(uint256 _timestamp) external view returns (uint256) {
         return _supplyAt(_timestamp);
     }
 
+    /**
+     * @notice Get the total supply of locked HEMI at a specific block number
+     * @dev This function is not yet implemented
+     * @param blockNumber_ The block number to check total supply at
+     * @return The total amount of HEMI locked at the given block
+     */
     function totalSupplyAtBlock(uint256 blockNumber_) external view returns (uint256) {
-        // TODO:
+        // TODO: Implement block-based total supply calculation
+        revert("Not implemented");
     }
 
+    /**
+     * @notice Update the reward distributor contract address
+     * @dev Only callable by the contract owner. Can be set to address(0) to disable rewards.
+     * @param rewardDistributor_ The new reward distributor contract address
+     */
     function updateRewardDistributor(address rewardDistributor_) external onlyOwner {
         // Allowed to set to 0x0
         rewardDistributor = IRewardDistributor(rewardDistributor_);
@@ -229,6 +255,14 @@ contract StakedHemi is
         return _lastPoint.bias.toUint256();
     }
 
+    /**
+     * @notice Binary search to get the global point index at or prior to a given timestamp
+     * @dev This function efficiently finds the most recent global checkpoint that is at or before
+     * the given timestamp using binary search for optimal performance.
+     * @param epoch_ The current global epoch
+     * @param timestamp_ The timestamp to search for
+     * @return The global point index at or before the timestamp
+     */
     function _getPastGlobalPointIndex(
         uint256 epoch_,
         uint256 timestamp_
@@ -255,11 +289,14 @@ contract StakedHemi is
         return _lower;
     }
 
-    /// @notice Binary search to get the user point index for a token id at or prior to a given timestamp
-    /// @dev If a user point does not exist prior to the timestamp, this will return 0.
-    /// @param tokenId_ .
-    /// @param timestamp_ .
-    /// @return User point index
+    /**
+     * @notice Binary search to get the user point index for a token id at or prior to a given timestamp
+     * @dev If a user point does not exist prior to the timestamp, this will return 0.
+     * This function efficiently finds the most recent user checkpoint using binary search.
+     * @param tokenId_ The token ID to search for
+     * @param timestamp_ The timestamp to search for
+     * @return User point index at or before the timestamp
+     */
     function _getPastUserPointIndex(
         uint256 tokenId_,
         uint256 timestamp_
@@ -561,6 +598,14 @@ contract StakedHemi is
         // TODO: emit event
     }
 
+    /**
+     * @notice Calculate the total supply of locked HEMI at a specific timestamp
+     * @dev This function calculates the total voting power (supply) at a given timestamp
+     * by finding the appropriate global checkpoint and calculating the decay from that point.
+     * It handles slope changes and ensures the bias never goes negative.
+     * @param timestamp_ The timestamp to calculate supply at
+     * @return The total supply of locked HEMI at the given timestamp
+     */
     function _supplyAt(uint256 timestamp_) internal view returns (uint256) {
         uint256 _epoch = _getPastGlobalPointIndex(epoch, timestamp_);
         // epoch 0 is an empty point
