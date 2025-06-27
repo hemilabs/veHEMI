@@ -34,6 +34,7 @@ interface IStakedHemi is IERC721 {
         uint256 timestamp
     );
     event Supply(uint256 prevSupply, uint256 supply);
+    event Checkpoint(uint256 epoch, uint256 tokenId, LockedBalance oldLock, LockedBalance newLock);
 
     // --- External/Public Functions ---
     function initialize(address owner, address rewardDistributor) external;

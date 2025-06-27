@@ -160,7 +160,7 @@ contract HemiVoteDelegation is DelegationStorageV1, ReentrancyGuardTransient {
                 _newCheckpoint.normalizedSlope += uint128(deltaSlope_);
                 _newCheckpoint.totalAmount += uint128(deltaAmount_);
             } else {
-                // only subtract the weight from this account if it has not already expired in a previous checkpoint
+                // only subtract the weight from this tokenID if it has not already expired in a previous checkpoint
                 if (previousDelegationEnd_ > previousCheckpoint_.timestamp) {
                     _newCheckpoint.normalizedBias -= uint128(deltaBias_);
                     _newCheckpoint.normalizedSlope -= uint128(deltaSlope_);
@@ -352,7 +352,7 @@ contract HemiVoteDelegation is DelegationStorageV1, ReentrancyGuardTransient {
         uint256 tokenId_,
         uint256 timestamp_
     ) internal view returns (uint256 _delegatedWeight) {
-        // Check if delegate account has any delegations
+        // Check if delegate token  has any delegations
         DelegateCheckpoint memory _checkpoint = _checkpointBinarySearch({
             checkpoints_: delegateCheckpoints[tokenId_],
             timestamp_: timestamp_
