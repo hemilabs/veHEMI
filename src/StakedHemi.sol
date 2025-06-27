@@ -4,6 +4,7 @@ pragma solidity ^0.8.29;
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {OwnableUpgradeable} from "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
 import {SafeCast} from "./libraries/SafeCast.sol";
+import {console} from "forge-std/console.sol";
 import {IERC721} from "@openzeppelin/contracts/token/ERC721/IERC721.sol";
 import {IRewardDistributor} from "./interfaces/IRewardDistributor.sol";
 import {ERC721EnumerableUpgradeable, ERC721Upgradeable} from "@openzeppelin/contracts-upgradeable/token/ERC721/extensions/ERC721EnumerableUpgradeable.sol";
@@ -41,6 +42,7 @@ contract StakedHemi is
     error NotOwner();
     error NewLockDurationNotGreater();
     error NonExistentToken();
+    error BlockNotReached();
 
     // --- Events ---
 
@@ -160,13 +162,11 @@ contract StakedHemi is
         LockedBalance memory _oldLocked = locked[tokenId_];
         if (_oldLocked.end <= block.timestamp) revert LockExpired();
         if (_oldLocked.amount <= 0) revert NoExistingLock();
-        uint256 _unlockTime = ((block.timestamp + lockDuration_) / WEEK) * WEEK; // Locktime is rounded down to weeks
+        uint256 _unlockTime = ((block.timestamp + lockDuration_) / WEEK) * WEEK; // unlock time is rounded down to weeks
         if (_unlockTime > block.timestamp + MAX_TIME) revert LockDurationTooLong();
         if (_unlockTime <= _oldLocked.end) revert NewLockDurationNotGreater();
         _updateReward(tokenId_);
         _depositFor(tokenId_, 0, _unlockTime, _oldLocked);
-
-        // TODO: emit event
     }
 
     /**
@@ -175,6 +175,10 @@ contract StakedHemi is
      */
     function totalSupply() public view override returns (uint256) {
         return _supplyAt(block.timestamp);
+    }
+
+    function totalNftSupply() external view returns (uint256) {
+        return super.totalSupply();
     }
 
     /**
@@ -193,8 +197,27 @@ contract StakedHemi is
      * @return The total amount of HEMI locked at the given block
      */
     function totalSupplyAtBlock(uint256 blockNumber_) external view returns (uint256) {
-        // TODO: Implement block-based total supply calculation
-        revert("Not implemented");
+        if (blockNumber_ >= block.number) revert BlockNotReached();
+        uint256 _epoch = epoch;
+        uint256 _targetEpoch = _findBlockEpoch(blockNumber_, _epoch);
+        Point memory _point = pointHistory[_targetEpoch];
+        uint256 dt;
+        if (_targetEpoch < _epoch) {
+            Point memory _nextPoint = pointHistory[_targetEpoch + 1];
+            if (_point.blockNumber != _nextPoint.blockNumber) {
+                dt =
+                    ((blockNumber_ - _point.blockNumber) *
+                        (_nextPoint.timestamp - _point.timestamp)) /
+                    (_nextPoint.blockNumber - _point.blockNumber);
+            }
+        } else {
+            if (_point.blockNumber != block.number) {
+                dt =
+                    ((blockNumber_ - _point.blockNumber) * (block.timestamp - _point.timestamp)) /
+                    (block.number - _point.blockNumber);
+            }
+        } // # Now dt contains info on how far are we beyond point
+        return _supplyAt(_point, _point.timestamp + dt);
     }
 
     /**
@@ -253,6 +276,28 @@ contract StakedHemi is
             _lastPoint.bias = 0;
         }
         return _lastPoint.bias.toUint256();
+    }
+
+    function _findBlockEpoch(
+        uint256 blockNumber_,
+        uint256 max_epoch_
+    ) internal view returns (uint256) {
+        // # Binary search
+        uint256 _min = 0;
+        uint256 _max = max_epoch_;
+        for (uint256 i = 0; i < 128; i++) {
+            // # Will be always enough for 128-bit numbers
+            if (_min >= _max) {
+                break;
+            }
+            uint256 _mid = (_min + _max + 1) / 2;
+            if (pointHistory[_mid].blockNumber <= blockNumber_) {
+                _min = _mid;
+            } else {
+                _max = _mid - 1;
+            }
+        }
+        return _min;
     }
 
     /**
@@ -364,7 +409,6 @@ contract StakedHemi is
             // _oldLocked.end can be in the past and in the future
             // _newLocked.end can ONLY by in the FUTURE unless everything expired: than zeros
             _oldDslope = slopeChanges[oldLocked_.end];
-            // FIXME: can newLocked_.end be 0?
             if (newLocked_.end != 0) {
                 if (newLocked_.end == oldLocked_.end) {
                     _newDslope = _oldDslope;
@@ -379,12 +423,12 @@ contract StakedHemi is
             slope: 0,
             timestamp: block.timestamp,
             blockNumber: block.number,
-            amount: 0 // FIXME: double check use of this.
+            amount: 0
         });
         if (_epoch > 0) {
             _lastPoint = pointHistory[_epoch];
         } else {
-            // FIXME: check if this is needed. By this time transferFrom user has not done.
+            // contract may have some initial balance before first checkpoint
             _lastPoint.amount = HEMI.balanceOf(address(this));
         }
         uint256 _lastCheckpoint = _lastPoint.timestamp;
@@ -395,7 +439,7 @@ contract StakedHemi is
             blockNumber: _lastPoint.blockNumber,
             amount: _lastPoint.amount
         });
-        uint256 _blockSlope = 0; // dblock/dt
+        uint256 _blockSlope;
         if (block.timestamp > _lastPoint.timestamp) {
             _blockSlope =
                 (MULTIPLIER * (block.number - _lastPoint.blockNumber)) /
@@ -409,7 +453,7 @@ contract StakedHemi is
                 // Hopefully it won't happen that this won't get used in 5 years!
                 // If it does, users will be able to withdraw but vote weight will be broken
                 t_i += WEEK; // Initial value of t_i is always larger than the ts of the last point
-                int128 d_slope = 0;
+                int128 d_slope;
                 if (t_i > block.timestamp) {
                     t_i = block.timestamp;
                 } else {
@@ -461,7 +505,6 @@ contract StakedHemi is
         // Missing global checkpoints in prior weeks. In this case, _epoch = epoch + x, where x > 1
         // No missing global checkpoints, but timestamp != block.timestamp. Create new checkpoint.
         // No missing global checkpoints, but timestamp == block.timestamp. Overwrite last checkpoint.
-        // FIXME: probably its bug.   epoch = _epoch may be outside if-else
         if (_epoch != 1 && pointHistory[_epoch - 1].timestamp == block.timestamp) {
             // _epoch = epoch + 1, so we do not increment epoch
             pointHistory[_epoch - 1] = _lastPoint;
@@ -497,18 +540,19 @@ contract StakedHemi is
             // Exclude epoch 0
             _newUserPoint.timestamp = block.timestamp;
             _newUserPoint.blockNumber = block.number;
-            // TODO: check if this is needed
             _newUserPoint.amount = locked[tokenId_].amount.toUint256();
-            uint256 userEpoch = userPointEpoch[tokenId_];
+            uint256 _userEpoch = userPointEpoch[tokenId_];
             if (
-                userEpoch != 0 && userPointHistory[tokenId_][userEpoch].timestamp == block.timestamp
+                _userEpoch != 0 &&
+                userPointHistory[tokenId_][_userEpoch].timestamp == block.timestamp
             ) {
-                userPointHistory[tokenId_][userEpoch] = _newUserPoint;
+                userPointHistory[tokenId_][_userEpoch] = _newUserPoint;
             } else {
-                userPointEpoch[tokenId_] = ++userEpoch;
-                userPointHistory[tokenId_][userEpoch] = _newUserPoint;
+                userPointEpoch[tokenId_] = ++_userEpoch;
+                userPointHistory[tokenId_][_userEpoch] = _newUserPoint;
             }
         }
+        emit Checkpoint(_epoch, tokenId_, oldLocked_, newLocked_);
     }
 
     /**
@@ -577,7 +621,6 @@ contract StakedHemi is
         }
 
         emit Deposit(from, tokenId_, amount_, _newLocked.end, block.timestamp);
-        // emit Supply(supplyBefore, supplyBefore + amount_);
     }
 
     /**
@@ -594,8 +637,6 @@ contract StakedHemi is
         if (_oldLocked.end <= block.timestamp) revert LockExpired();
 
         _depositFor(tokenId_, amount_, 0, _oldLocked);
-
-        // TODO: emit event
     }
 
     /**
@@ -611,9 +652,13 @@ contract StakedHemi is
         // epoch 0 is an empty point
         if (_epoch == 0) return 0;
         Point memory _point = pointHistory[_epoch];
-        int128 bias = _point.bias;
-        int128 slope = _point.slope;
-        uint256 ts = _point.timestamp;
+        return _supplyAt(_point, timestamp_);
+    }
+
+    function _supplyAt(Point memory point_, uint256 timestamp_) internal view returns (uint256) {
+        int128 bias = point_.bias;
+        int128 slope = point_.slope;
+        uint256 ts = point_.timestamp;
 
         uint256 t_i = (ts / WEEK) * WEEK;
         for (uint256 i; i < 255; ++i) {
