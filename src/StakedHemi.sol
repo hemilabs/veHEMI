@@ -13,8 +13,8 @@ import {ReentrancyGuardTransient} from "@openzeppelin/contracts/utils/Reentrancy
 import {StakedHemiStorageV1} from "./storage/StakedHemiStorageV1.sol";
 
 /**
- * @title StakedHemi (stHEMI)
- * @notice Vesting and yield system based on Curve's veCRV mechanism. Users lock HEMI for up to 4 years for boosted stHEMI. Each lock is a non-transferable NFT.
+ * @title StakedHemi (veHemi)
+ * @notice Vesting and yield system based on Curve's veCRV and AERO voting escrow mechanism. Users lock HEMI for up to 4 years for boosted stHEMI. Each lock is a non-transferable NFT.
  */
 contract StakedHemi is
     StakedHemiStorageV1,
@@ -30,6 +30,8 @@ contract StakedHemi is
     uint256 public constant WEEK = 7 days;
     uint256 public constant MAX_TIME = 4 * 365 days; // 4 years
     uint256 internal constant MULTIPLIER = 1 ether;
+    string public constant version = "1.0.0";
+    uint8 public constant decimals = 18;
 
     // --- Errors ---
     error AmountIsZero();
@@ -49,6 +51,7 @@ contract StakedHemi is
     constructor(address hemi_) {
         if (hemi_ == address(0)) revert AddressIsNull();
         HEMI = IERC20(hemi_);
+
         _disableInitializers();
     }
 
@@ -59,7 +62,7 @@ contract StakedHemi is
      */
     function initialize(address owner_, address rewardDistributor_) external initializer {
         require(owner_ != address(0), "Owner is zero");
-        __ERC721_init("StakedHemi Lock", "stHEMI-LOCK");
+        __ERC721_init("veHemi", "veHemi");
         __Ownable_init_unchained(owner_);
         pointHistory[0].blockNumber = block.number;
         pointHistory[0].timestamp = block.timestamp;

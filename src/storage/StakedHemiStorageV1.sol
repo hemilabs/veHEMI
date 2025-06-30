@@ -11,6 +11,7 @@ abstract contract StakedHemiStorageV1 is IStakedHemi {
     uint256 public supply;
     uint256 public epoch;
     uint256 public nextTokenId;
+
     IRewardDistributor public rewardDistributor; // 0x0 is valid
     mapping(uint256 => Point) public pointHistory; // epoch -> Point
     mapping(uint256 => Point[1000000000]) public userPointHistory; // tokenId -> Point[userEpoch]

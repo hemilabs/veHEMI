@@ -8,7 +8,9 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {IERC721} from "@openzeppelin/contracts/token/ERC721/IERC721.sol";
 import {IERC721Errors} from "@openzeppelin/contracts/interfaces/draft-IERC6093.sol";
 import {MockERC20} from "./mocks/MockERC20.sol";
+import {IHemiVoteDelegation} from "../src/interfaces/IHemiVoteDelegation.sol";
 import "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
+import {console2} from "forge-std/console2.sol";
 
 contract TestHemiVoteDelegation is Test {
     address constant BILL = address(342_958_293_847_234_897);
@@ -164,8 +166,8 @@ contract TestHemiVoteDelegation is Test {
 
     // Test delegation to same delegatee (should be no-op)
     function testDelegationToSameDelegatee() public {
-        (uint256 billTokenId, uint256 billSlope) = _createLock(BILL, LOCK_AMOUNT, LOCK_DURATION);
-        (uint256 aliceTokenId, uint256 aliceSlope) = _createLock(ALICE, LOCK_AMOUNT, LOCK_DURATION);
+        (uint256 billTokenId, ) = _createLock(BILL, LOCK_AMOUNT, LOCK_DURATION);
+        (uint256 aliceTokenId, ) = _createLock(ALICE, LOCK_AMOUNT, LOCK_DURATION);
 
         uint256 aliceVotesBefore = hemiVoteDelegation.getVotes(aliceTokenId);
         uint256 billVotesBefore = hemiVoteDelegation.getVotes(billTokenId);
@@ -615,5 +617,307 @@ contract TestHemiVoteDelegation is Test {
             0.005e18,
             "Total voting power should be preserved"
         );
+    }
+
+    // ===== TESTS FOR calculateExpiredDelegations AND writeNewCheckpointForExpiredDelegations =====
+
+    function testNoDelegationExpired() public view {
+        uint256 tokenId = 1;
+
+        // No delegations exist, should return empty checkpoint
+        IHemiVoteDelegation.DelegateCheckpoint memory emptyCheckpoint = hemiVoteDelegation
+            .calculateExpiredDelegations(tokenId);
+
+        assertEq(
+            emptyCheckpoint.timestamp,
+            0,
+            "Should return empty checkpoint for token with no delegations"
+        );
+        assertEq(emptyCheckpoint.normalizedBias, 0, "Should have zero bias");
+        assertEq(emptyCheckpoint.normalizedSlope, 0, "Should have zero slope");
+        assertEq(emptyCheckpoint.totalAmount, 0, "Should have zero amount");
+    }
+
+    function testRevertWhenNoExpirations() public {
+        uint256 billTokenId = 1;
+        uint256 aliceTokenId = 2;
+
+        // Create delegation
+        vm.startPrank(BILL);
+        hemiVoteDelegation.delegate(billTokenId, aliceTokenId);
+        vm.stopPrank();
+
+        // Warp to delegation start
+        uint256 delegationStarts = ((block.timestamp / 1 days) * 1 days) + 1 days;
+        vm.warp(delegationStarts);
+
+        // Calculate expired delegations immediately after delegation starts
+        // Should return empty checkpoint since no time has passed for expirations
+        IHemiVoteDelegation.DelegateCheckpoint memory noExpirationCheckpoint = hemiVoteDelegation
+            .calculateExpiredDelegations(aliceTokenId);
+
+        assertEq(
+            noExpirationCheckpoint.timestamp,
+            0,
+            "Should return empty checkpoint when no expirations occurred"
+        );
+    }
+
+    // Test calculateExpiredDelegations with expirations
+    function testExpirations() public {
+        uint256 aliceTokenId = 2;
+
+        // Create delegation with short lock duration
+        uint256 shortLockDuration = 7 days; // 1 week
+        (uint256 billTokenIdNew, ) = _createLock(BILL, LOCK_AMOUNT, shortLockDuration);
+
+        vm.startPrank(BILL);
+        hemiVoteDelegation.delegate(billTokenIdNew, aliceTokenId);
+        vm.stopPrank();
+
+        // Get the lock end time
+        uint256 lockEnd = stakedHemi.getLockedBalance(billTokenIdNew).end;
+
+        // Warp past the lock expiration
+        vm.warp(lockEnd + 1 days);
+
+        // Calculate expired delegations
+        IHemiVoteDelegation.DelegateCheckpoint memory expirationCheckpoint = hemiVoteDelegation
+            .calculateExpiredDelegations(aliceTokenId);
+
+        // Should have a new checkpoint with expired values
+        assertGt(expirationCheckpoint.timestamp, 0, "Should have timestamp for new checkpoint");
+        assertEq(expirationCheckpoint.normalizedBias, 0, "Should have some bias in checkpoint");
+        assertEq(expirationCheckpoint.normalizedSlope, 0, "Should have some slope in checkpoint");
+        assertEq(expirationCheckpoint.totalAmount, 0, "Should have some amount in checkpoint");
+    }
+
+    function testWriteNewCheckpointNoExpirations() public {
+        uint256 billTokenId = 1;
+        uint256 aliceTokenId = 2;
+
+        // Create delegation
+        vm.startPrank(BILL);
+        hemiVoteDelegation.delegate(billTokenId, aliceTokenId);
+        vm.stopPrank();
+
+        // Warp to delegation start
+        uint256 delegationStarts = ((block.timestamp / 1 days) * 1 days) + 1 days;
+        vm.warp(delegationStarts);
+
+        // Should revert with NoExpirations error
+        vm.expectRevert(HemiVoteDelegation.NoExpirations.selector);
+        hemiVoteDelegation.writeNewCheckpointForExpiredDelegations(aliceTokenId);
+    }
+
+    // Test writeNewCheckpointForExpiredDelegations with expirations
+    function testWriteNewCheckpointWithExpirations() public {
+        uint256 aliceTokenId = 2;
+
+        // Create delegation with short lock duration
+        uint256 shortLockDuration = 7 days; // 1 week
+        (uint256 billTokenIdNew, ) = _createLock(BILL, LOCK_AMOUNT, shortLockDuration);
+
+        vm.startPrank(BILL);
+        hemiVoteDelegation.delegate(billTokenIdNew, aliceTokenId);
+        vm.stopPrank();
+
+        // Warp to delegation start
+        uint256 delegationStarts = ((block.timestamp / 1 days) * 1 days) + 1 days;
+        vm.warp(delegationStarts);
+
+        IHemiVoteDelegation.DelegateCheckpoint[]
+            memory delegationCheckpointsBefore = hemiVoteDelegation.getDelegationCheckpoints(
+                aliceTokenId
+            );
+
+        assertEq(delegationCheckpointsBefore.length, 1, "Should have 1 checkpoint");
+
+        vm.warp(delegationStarts + 8 days);
+        // Write new checkpoint for expirations
+        hemiVoteDelegation.writeNewCheckpointForExpiredDelegations(aliceTokenId);
+
+        IHemiVoteDelegation.DelegateCheckpoint[] memory delegationCheckpoints = hemiVoteDelegation
+            .getDelegationCheckpoints(aliceTokenId);
+
+        assertEq(
+            delegationCheckpoints.length,
+            delegationCheckpointsBefore.length + 1,
+            "Should have 2 checkpoints"
+        );
+    }
+
+    function testDifferentExpirations() public {
+        uint256 delegateTokenId = 4;
+
+        // Create delegations with different lock durations
+        (uint256 billTokenIdNew, ) = _createLock(BILL, LOCK_AMOUNT, 7 days); // 1 week
+        (uint256 walterTokenIdNew, ) = _createLock(WALTER, LOCK_AMOUNT, 14 days); // 2 weeks
+
+        // Bill delegates to delegate
+        vm.startPrank(BILL);
+        hemiVoteDelegation.delegate(billTokenIdNew, delegateTokenId);
+        vm.stopPrank();
+
+        // Walter delegates to delegate
+        vm.startPrank(WALTER);
+        hemiVoteDelegation.delegate(walterTokenIdNew, delegateTokenId);
+        vm.stopPrank();
+
+        // Warp to delegation start
+        vm.warp(block.timestamp + 9 days);
+
+        IHemiVoteDelegation.DelegateCheckpoint[] memory delegationCheckpoints = hemiVoteDelegation
+            .getDelegationCheckpoints(delegateTokenId);
+
+        assertEq(delegationCheckpoints.length, 1, "Should have 2 checkpoints");
+
+        // Write checkpoint for Bill's expiration
+        hemiVoteDelegation.writeNewCheckpointForExpiredDelegations(delegateTokenId);
+
+        delegationCheckpoints = hemiVoteDelegation.getDelegationCheckpoints(delegateTokenId);
+
+        assertEq(delegationCheckpoints.length, 2, "Should have 2 checkpoints");
+
+        vm.warp(block.timestamp + 9 days);
+        hemiVoteDelegation.writeNewCheckpointForExpiredDelegations(delegateTokenId);
+
+        delegationCheckpoints = hemiVoteDelegation.getDelegationCheckpoints(delegateTokenId);
+
+        assertEq(delegationCheckpoints.length, 3, "Should have 2 checkpoints");
+    }
+
+    // Test delegateBySig functionality
+    function testDelegateBySig() public {
+        // Create private key for Alice
+        uint256 alicePrivateKey = 0xA11CE;
+        address alice = vm.addr(alicePrivateKey);
+
+        (uint256 aliceTokenId, ) = _createLock(alice, LOCK_AMOUNT, 30 days);
+
+        (uint256 bobTokenId, ) = _createLock(BOB, LOCK_AMOUNT, 30 days);
+
+        // Set timestamp and create signature
+        uint256 currentTimestamp = block.timestamp;
+        uint256 expiry = currentTimestamp + 3600; // 1 hour from now
+
+        bytes32 digest = _getTypesDataHash(aliceTokenId, bobTokenId, 0, expiry);
+
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(alicePrivateKey, digest);
+
+        // Call delegateBySig
+        hemiVoteDelegation.delegateBySig(aliceTokenId, bobTokenId, 0, expiry, v, r, s);
+
+        // Warp to delegation start to see the effect
+        uint256 delegationStarts = ((block.timestamp / 1 days) * 1 days) + 1 days;
+        vm.warp(delegationStarts);
+
+        // Verify delegation took effect
+        uint256 aliceVotes = hemiVoteDelegation.getVotes(aliceTokenId);
+        uint256 bobVotes = hemiVoteDelegation.getVotes(bobTokenId);
+
+        assertEq(aliceVotes, 0, "Alice should have no votes after delegation");
+        assertGt(bobVotes, 0, "Bob should have received Alice's votes");
+    }
+
+    // Test delegateBySig with invalid signature
+    function testDelegateBySigInvalidSignature() public {
+        uint256 alicePrivateKey = 0xA11CE;
+        address alice = vm.addr(alicePrivateKey);
+
+        (uint256 aliceTokenId, ) = _createLock(alice, LOCK_AMOUNT, 30 days);
+
+        (uint256 bobTokenId, ) = _createLock(BOB, LOCK_AMOUNT, 30 days);
+
+        // Set timestamp and create signature
+        uint256 currentTimestamp = block.timestamp;
+        uint256 expiry = currentTimestamp + 3600; // 1 hour from now
+
+        bytes32 digest = _getTypesDataHash(aliceTokenId, bobTokenId, 0, expiry);
+
+        // Create signature with wrong private key
+        uint256 wrongPrivateKey = 0xB0B;
+
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(wrongPrivateKey, digest);
+
+        // Should revert with NotOwner
+        vm.expectRevert(HemiVoteDelegation.NotOwner.selector);
+        hemiVoteDelegation.delegateBySig(aliceTokenId, bobTokenId, 0, expiry, v, r, s);
+    }
+
+    // // Test delegateBySig with expired signature
+    function testDelegateBySigExpiredSignature() public {
+        uint256 alicePrivateKey = 0xA11CE;
+        address alice = vm.addr(alicePrivateKey);
+
+        (uint256 aliceTokenId, ) = _createLock(alice, LOCK_AMOUNT, 30 days);
+
+        (uint256 bobTokenId, ) = _createLock(BOB, LOCK_AMOUNT, 30 days);
+
+        // Set timestamp and create signature
+        uint256 currentTimestamp = block.timestamp;
+        uint256 expiry = currentTimestamp + 3600; // 1 hour from now
+
+        bytes32 digest = _getTypesDataHash(aliceTokenId, bobTokenId, 0, expiry);
+
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(alicePrivateKey, digest);
+
+        // Warp past expiry
+        vm.warp(expiry + 1);
+
+        // Should revert with SignatureExpired
+        vm.expectRevert(HemiVoteDelegation.SignatureExpired.selector);
+        hemiVoteDelegation.delegateBySig(aliceTokenId, bobTokenId, 0, expiry, v, r, s);
+    }
+
+    // // Test delegateBySig with invalid nonce
+    function testDelegateBySigInvalidNonce() public {
+        uint256 alicePrivateKey = 0xA11CE;
+        address alice = vm.addr(alicePrivateKey);
+
+        (uint256 aliceTokenId, ) = _createLock(alice, LOCK_AMOUNT, 30 days);
+
+        (uint256 bobTokenId, ) = _createLock(BOB, LOCK_AMOUNT, 30 days);
+
+        // Set timestamp and create signature
+        uint256 currentTimestamp = block.timestamp;
+        uint256 expiry = currentTimestamp + 3600; // 1 hour from now
+
+        bytes32 digest = _getTypesDataHash(aliceTokenId, bobTokenId, 1, expiry);
+
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(alicePrivateKey, digest);
+
+        // Should revert with InvalidNonce
+        vm.expectRevert(HemiVoteDelegation.InvalidNonce.selector);
+        hemiVoteDelegation.delegateBySig(aliceTokenId, bobTokenId, 1, expiry, v, r, s);
+    }
+
+    function _getTypesDataHash(
+        uint256 delegator_,
+        uint256 delegatee_,
+        uint256 nonce_,
+        uint256 expiry_
+    ) internal view returns (bytes32) {
+        bytes32 DOMAIN_TYPEHASH = keccak256(
+            "EIP712Domain(string name,uint256 chainId,address verifyingContract)"
+        );
+        bytes32 DELEGATION_TYPEHASH = keccak256(
+            "Delegation(uint256 delegator,uint256 delegatee,uint256 nonce,uint256 expiry)"
+        );
+
+        bytes32 DOMAIN_SEPARATOR = keccak256(
+            abi.encode(
+                DOMAIN_TYPEHASH,
+                keccak256(bytes("veHEMIDelegation")),
+                keccak256(bytes("1.0.0")),
+                block.chainid,
+                address(hemiVoteDelegation)
+            )
+        );
+
+        bytes32 structHash = keccak256(
+            abi.encode(DELEGATION_TYPEHASH, delegator_, delegatee_, nonce_, expiry_)
+        );
+        return keccak256(abi.encodePacked("\x19\x01", DOMAIN_SEPARATOR, structHash));
     }
 }

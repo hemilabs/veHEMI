@@ -7,20 +7,30 @@ import {IStakedHemi} from "./interfaces/IStakedHemi.sol";
 import {DelegationStorageV1} from "./storage/DelegationStorageV1.sol";
 import {SafeCast} from "./libraries/SafeCast.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
+import {console2} from "forge-std/console2.sol";
 
 /**
  * @title HemiVoteDelegation
- * @notice Vote delegation system for stHEMI tokens. Allows token holders to delegate their voting power
+ * @notice Vote delegation system for veHemi tokens. Allows token holders to delegate their voting power
  * to other token holders without transferring ownership. Delegations take effect at the next epoch
  * (next day boundary) and expire when the delegator's lock expires.
- * @dev Based on Curve's veCRV delegation mechanism with adaptations for stHEMI
+ * @dev Based on Curve's veCRV delegation mechanism with adaptations for veHemi
  */
-// TODO: Implement IVotes of OZ
 contract HemiVoteDelegation is DelegationStorageV1, ReentrancyGuardTransient {
     using SafeCast for uint256;
     using SafeCast for int128;
 
-    /// @notice The stHEMI contract that manages locked balances
+    /// @notice The EIP-712 typehash for the contract's domain
+    bytes32 public constant DOMAIN_TYPEHASH =
+        keccak256("EIP712Domain(string name,uint256 chainId,address verifyingContract)");
+    /// @notice The EIP-712 typehash for the delegation struct used by the contract
+    bytes32 public constant DELEGATION_TYPEHASH =
+        keccak256("Delegation(uint256 delegator,uint256 delegatee,uint256 nonce,uint256 expiry)");
+
+    string public constant name = "veHEMIDelegation";
+    string public constant version = "1.0.0";
+
+    /// @notice The veHemi contract that manages locked balances
     IStakedHemi public immutable stakedHemi;
 
     /// @notice Maximum lock duration (4 years)
@@ -34,10 +44,14 @@ contract HemiVoteDelegation is DelegationStorageV1, ReentrancyGuardTransient {
     error CanNotDelegateExpiredLocks();
     error NotOwner();
     error TimestampInFuture();
+    error NoExpirations();
+    error InvalidSignature();
+    error InvalidNonce();
+    error SignatureExpired();
 
     /**
      * @notice Constructor to initialize the vote delegation contract
-     * @param stakedHemi_ Address of the stHEMI contract
+     * @param stakedHemi_ Address of the veHemi contract
      */
     constructor(address stakedHemi_) {
         if (stakedHemi_ == address(0)) revert InvalidStakedHemi();
@@ -53,42 +67,58 @@ contract HemiVoteDelegation is DelegationStorageV1, ReentrancyGuardTransient {
      * @param delegatee_ The token ID to delegate to (0 for no delegation, same as delegator_ for self-delegation)
      */
     function delegate(uint256 delegator_, uint256 delegatee_) external {
-        if (delegatee_ != 0 && stakedHemi.ownerOf(delegatee_) == address(0))
-            revert NonExistentToken();
         if (stakedHemi.ownerOf(delegator_) != msg.sender) revert NotOwner();
-        if (delegatee_ == delegator_) delegatee_ = 0;
-        if (delegations[delegator_].delegatee == delegatee_) return;
+        _delegate(delegator_, delegatee_);
+    }
 
-        Delegation memory _previousDelegation = delegations[delegator_];
-
-        uint256 _checkpointTimestamp = ((block.timestamp / 1 days) * 1 days) + 1 days;
-
-        NormalizedVeHemiLockInfo memory _normalizedVeLockInfo = _getNormalizedLockedInfo(
-            delegator_,
-            _checkpointTimestamp
+    /**
+     * @dev Delegates votes from signatory to `delegatee`
+     * @param delegator_ The token ID to delegate from (must be owned by msg.sender)
+     * @param delegatee_ The token ID to delegate to (0 for no delegation, same as delegator_ for self-delegation)
+     * @param nonce The contract state required to match the signature
+     * @param expiry The time at which to expire the signature
+     * @param v The recovery byte of the signature
+     * @param r Half of the ECDSA signature pair
+     * @param s Half of the ECDSA signature pair
+     */
+    function delegateBySig(
+        uint256 delegator_,
+        uint256 delegatee_,
+        uint256 nonce,
+        uint256 expiry,
+        uint8 v,
+        bytes32 r,
+        bytes32 s
+    ) external {
+        bytes32 domainSeparator = keccak256(
+            abi.encode(
+                DOMAIN_TYPEHASH,
+                keccak256(bytes(name)),
+                keccak256(bytes(version)),
+                block.chainid,
+                address(this)
+            )
         );
 
-        _moveVotingPowerFromPreviousDelegate({
-            previousDelegation_: _previousDelegation,
-            checkpointTimestamp_: _checkpointTimestamp
-        });
+        bytes32 structHash = keccak256(
+            abi.encode(DELEGATION_TYPEHASH, delegator_, delegatee_, nonce, expiry)
+        );
 
-        _moveVotingPowerToNewDelegate({
-            newDelegatee_: delegatee_,
-            delegatorVeLockInfo_: _normalizedVeLockInfo,
-            checkpointTimestamp_: _checkpointTimestamp
-        });
+        bytes32 digest = keccak256(abi.encodePacked("\x19\x01", domainSeparator, structHash));
 
-        delegations[delegator_] = Delegation({
-            delegatee: delegatee_,
-            firstDelegationTimestamp: _previousDelegation.firstDelegationTimestamp == 0
-                ? uint48(_checkpointTimestamp)
-                : _previousDelegation.firstDelegationTimestamp,
-            end: uint48(_normalizedVeLockInfo.end),
-            bias: uint96(_normalizedVeLockInfo.bias),
-            amount: uint96(_normalizedVeLockInfo.amount),
-            slope: uint64(_normalizedVeLockInfo.slope)
-        });
+        address _signer = ecrecover(digest, v, r, s);
+        console2.log(" _signer:", _signer);
+        if (_signer == address(0)) revert InvalidSignature();
+        if (stakedHemi.ownerOf(delegator_) != _signer) revert NotOwner();
+        if (nonce != nonces[_signer]++) revert InvalidNonce();
+        if (block.timestamp > expiry) revert SignatureExpired();
+        return _delegate(delegator_, delegatee_);
+    }
+
+    function getDelegationCheckpoints(
+        uint256 tokenId_
+    ) external view returns (DelegateCheckpoint[] memory) {
+        return delegateCheckpoints[tokenId_];
     }
 
     /**
@@ -109,6 +139,69 @@ contract HemiVoteDelegation is DelegationStorageV1, ReentrancyGuardTransient {
     function getPastVotes(uint256 tokenId_, uint256 timestamp_) external view returns (uint256) {
         if (timestamp_ > block.timestamp) revert TimestampInFuture();
         return _getPastVotes(tokenId_, timestamp_);
+    }
+
+    /// @notice The ```calculateExpirations``` function calculates all expired delegations for an account since the last checkpoint.
+    /// @dev Can be used in tandem with writeNewCheckpointForExpirations() to write a new checkpoint
+    /// @dev Long time periods between checkpoints can increase gas costs for delegate() and castVote()
+    /// @dev See _calculateExpirations
+    /// @param tokenId_ tokenId of delegate
+    /// @return _calculatedCheckpoint A new DelegateCheckpoint to write based on expirations since previous checkpoint
+    function calculateExpiredDelegations(
+        uint256 tokenId_
+    ) public view returns (DelegateCheckpoint memory _calculatedCheckpoint) {
+        DelegateCheckpoint[] storage delegationCheckpoints = delegateCheckpoints[tokenId_];
+
+        uint256 _checkpointsLength = delegationCheckpoints.length;
+
+        // Nothing to expire if no one delegated to you
+        if (_checkpointsLength == 0) return _calculatedCheckpoint;
+
+        DelegateCheckpoint memory _lastCheckpoint = delegationCheckpoints[_checkpointsLength - 1];
+
+        // This ensures that checkpoints take effect at the next epoch
+        uint256 _checkpointTimestamp = ((block.timestamp / 1 days) * 1 days) + 1 days;
+
+        // Nothing expired because the most recent checkpoint is already written
+        if (_lastCheckpoint.timestamp == _checkpointTimestamp) {
+            return _calculatedCheckpoint;
+        }
+
+        (
+            uint256 totalExpiredBias_,
+            uint256 totalExpiredSlope_,
+            uint256 totalExpiredAmount_
+        ) = _calculateExpirations({
+                tokenId_: tokenId_,
+                start_: _lastCheckpoint.timestamp,
+                end_: _checkpointTimestamp,
+                checkpoint_: _lastCheckpoint
+            });
+
+        // All will be 0 if no expirations, only need to check one of them
+        if (totalExpiredAmount_ == 0) return _calculatedCheckpoint;
+
+        /// NOTE: Checkpoint values will always be larger than or equal to expired values
+        unchecked {
+            _calculatedCheckpoint = DelegateCheckpoint({
+                timestamp: uint128(_checkpointTimestamp),
+                normalizedBias: uint128(_lastCheckpoint.normalizedBias - totalExpiredBias_),
+                normalizedSlope: uint128(_lastCheckpoint.normalizedSlope - totalExpiredSlope_),
+                totalAmount: uint128(_lastCheckpoint.totalAmount - totalExpiredAmount_)
+            });
+        }
+    }
+
+    /// @notice The ```writeNewCheckpointForExpirations``` function writes a new checkpoint if any weight has expired since the previous checkpoint
+    /// @dev Long time periods between checkpoints can increase gas costs for delegate() and castVote()
+    /// @dev See _calculateExpirations
+    /// @param tokenId_ tokenId of delegatee
+    function writeNewCheckpointForExpiredDelegations(uint256 tokenId_) external {
+        DelegateCheckpoint memory _newCheckpoint = calculateExpiredDelegations(tokenId_);
+
+        if (_newCheckpoint.timestamp == 0) revert NoExpirations();
+
+        delegateCheckpoints[tokenId_].push(_newCheckpoint);
     }
 
     /**
@@ -277,6 +370,44 @@ contract HemiVoteDelegation is DelegationStorageV1, ReentrancyGuardTransient {
         }
 
         closestCheckpoint_ = high == 0 ? closestCheckpoint_ : checkpoints_[high - 1];
+    }
+
+    function _delegate(uint256 delegator_, uint256 delegatee_) internal {
+        if (delegatee_ != 0 && stakedHemi.ownerOf(delegatee_) == address(0))
+            revert NonExistentToken();
+        if (delegatee_ == delegator_) delegatee_ = 0;
+        if (delegations[delegator_].delegatee == delegatee_) return;
+
+        Delegation memory _previousDelegation = delegations[delegator_];
+
+        uint256 _checkpointTimestamp = ((block.timestamp / 1 days) * 1 days) + 1 days;
+
+        NormalizedVeHemiLockInfo memory _normalizedVeLockInfo = _getNormalizedLockedInfo(
+            delegator_,
+            _checkpointTimestamp
+        );
+
+        _moveVotingPowerFromPreviousDelegate({
+            previousDelegation_: _previousDelegation,
+            checkpointTimestamp_: _checkpointTimestamp
+        });
+
+        _moveVotingPowerToNewDelegate({
+            newDelegatee_: delegatee_,
+            delegatorVeLockInfo_: _normalizedVeLockInfo,
+            checkpointTimestamp_: _checkpointTimestamp
+        });
+
+        delegations[delegator_] = Delegation({
+            delegatee: delegatee_,
+            firstDelegationTimestamp: _previousDelegation.firstDelegationTimestamp == 0
+                ? uint48(_checkpointTimestamp)
+                : _previousDelegation.firstDelegationTimestamp,
+            end: uint48(_normalizedVeLockInfo.end),
+            bias: uint96(_normalizedVeLockInfo.bias),
+            amount: uint96(_normalizedVeLockInfo.amount),
+            slope: uint64(_normalizedVeLockInfo.slope)
+        });
     }
 
     /**
