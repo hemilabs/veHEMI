@@ -10,4 +10,6 @@ abstract contract DelegationStorageV1 is IHemiVoteDelegation {
 
     /// @notice Mapping from delegate to weekly rounded time of expiry to the aggregated values at time of expiration.
     mapping(uint256 delegate => mapping(uint256 week => Expiration)) public expiredDelegations;
+    /// @notice Nonces needed for delegations by signature
+    mapping(address signer => uint256 nonce) public nonces;
 }
