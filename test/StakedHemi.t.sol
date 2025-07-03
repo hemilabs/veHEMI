@@ -82,6 +82,59 @@ contract StakedHemiTest is Test {
         assertEq(veHemiBalance, bias, "veHemi balance mismatch");
     }
 
+    function testIncreaseCooldownPeriod() public {
+        uint256 amount = 100 ether;
+
+        vm.prank(user);
+        uint256 tokenId = stakedHemi.createLock(amount, 2 * 365 days);
+
+        vm.warp(block.timestamp + 100 days);
+        (
+            int128 lockedAmountBefore,
+            ,
+            uint256 cooldownPeriodBefore,
+            uint256 biasBefore,
+
+        ) = stakedHemi.locked(tokenId);
+
+        console.log(" testIncreaseCooldownPeriod ~ _totalSupplyBefore:", stakedHemi.totalSupply());
+
+        console.log(
+            " testIncreaseCooldownPeriod ~ veHemiBalanceBefore:",
+            stakedHemi.balanceOfNFT(tokenId)
+        );
+        vm.prank(user);
+        stakedHemi.increaseCoolDownPeriod(tokenId, 4 * 365 days);
+        uint256 _totalSupplyAfter = stakedHemi.totalSupply();
+        console.log(" testIncreaseCooldownPeriod ~ _totalSupplyAfter:", _totalSupplyAfter);
+
+        // Check locked balance
+        (
+            int128 lockedAmount,
+            uint256 lockExpiry,
+            uint256 coolDownPeriod,
+            uint256 bias,
+            bool coolDownStarted
+        ) = stakedHemi.locked(tokenId);
+        assertEq(lockedAmountBefore, lockedAmount, "Locked amount mismatch");
+        assertEq(uint256(uint128(lockedAmount)), amount, "Locked amount mismatch");
+        assertEq(lockExpiry, 0, "Unlock time mismatch");
+        assertEq(coolDownPeriod, 4 * 365 days, "Cool down period mismatch");
+        assertEq(coolDownStarted, false, "Cool down started mismatch");
+        assertEq(stakedHemi.supply(), amount, "Supply mismatch");
+
+        uint256 slope = amount / MAX_TIME;
+
+        uint256 expectedBias = slope * coolDownPeriod;
+
+        uint256 veHemiBalance = stakedHemi.balanceOfNFT(tokenId);
+        console.log(" testCreateLock ~ veHemiBalanceAfter:", veHemiBalance);
+        assertEq(veHemiBalance, expectedBias, "veHemi balance mismatch");
+
+        assertGt(bias, biasBefore, "Bias not increased");
+        assertGt(coolDownPeriod, cooldownPeriodBefore, "Cool down period not increased");
+    }
+
     function testBalanceOfNFTWithoutCoolDown() public {
         uint256 amount = 100 ether;
 

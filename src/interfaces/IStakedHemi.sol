@@ -11,6 +11,7 @@ interface IStakedHemi is IERC721 {
         uint256 timestamp;
         uint256 blockNumber;
         uint256 amount;
+        uint256 permanentBias;
     }
 
     struct LockedBalance {

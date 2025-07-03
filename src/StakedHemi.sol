@@ -165,16 +165,29 @@ contract StakedHemi is
         address _sender = _msgSender();
         if (_ownerOf(tokenId_) != _sender) revert NotOwner();
         LockedBalance memory _oldLocked = locked[tokenId_];
+        if (_oldLocked.amount <= 0) revert NoExistingLock();
+        if (newCoolDownPeriod_ <= _oldLocked.coolDownPeriod) revert CoolDownPeriodTooShort();
+        LockedBalance memory _newLocked = LockedBalance({
+            amount: _oldLocked.amount,
+            end: _oldLocked.end,
+            coolDownPeriod: newCoolDownPeriod_,
+            bias: 0,
+            coolDownStarted: _oldLocked.coolDownStarted
+        });
+
+        // TODO: call updateReward()
         if (_oldLocked.coolDownStarted) {
-            _increaseUnlockTime(tokenId_, newCoolDownPeriod_);
+            if (_oldLocked.end <= block.timestamp) revert LockExpired();
+            uint256 _unlockTime = ((block.timestamp + newCoolDownPeriod_) / WEEK) * WEEK;
+            if (_unlockTime > block.timestamp + MAX_TIME) revert LockDurationTooLong();
+            _newLocked.end = _unlockTime;
         } else {
-            if (newCoolDownPeriod_ <= _oldLocked.coolDownPeriod) revert CoolDownPeriodTooShort();
-            _oldLocked.coolDownPeriod += newCoolDownPeriod_;
-            uint256 _slope = _oldLocked.amount.toUint256() / MAX_TIME;
-            _oldLocked.bias = _slope * newCoolDownPeriod_;
-            totalBias += _oldLocked.bias;
-            locked[tokenId_] = _oldLocked;
+            uint256 _slope = _newLocked.amount.toUint256() / MAX_TIME;
+            _newLocked.bias = _slope * newCoolDownPeriod_;
+            totalBias = totalBias + _newLocked.bias - _oldLocked.bias;
+            locked[tokenId_] = _newLocked;
         }
+        _checkpoint(tokenId_, _oldLocked, _newLocked);
     }
 
     /**
@@ -182,23 +195,24 @@ contract StakedHemi is
      * @param tokenId_ The token ID
      * @param lockDuration_ The new lock duration (from now)
      */
-    function _increaseUnlockTime(uint256 tokenId_, uint256 lockDuration_) private nonReentrant {
-        LockedBalance memory _oldLocked = locked[tokenId_];
-        if (_oldLocked.end <= block.timestamp) revert LockExpired();
-        if (_oldLocked.amount <= 0) revert NoExistingLock();
-        uint256 _unlockTime = ((block.timestamp + lockDuration_) / WEEK) * WEEK; // unlock time is rounded down to weeks
-        if (_unlockTime > block.timestamp + MAX_TIME) revert LockDurationTooLong();
-        if (_unlockTime <= _oldLocked.end) revert CoolDownPeriodTooShort();
-        _updateReward(tokenId_);
-        _depositFor(tokenId_, 0, _unlockTime, _oldLocked);
-    }
+    // function _increaseUnlockTime(uint256 tokenId_, uint256 lockDuration_) private nonReentrant {
+    //     LockedBalance memory _oldLocked = locked[tokenId_];
+    //     if (_oldLocked.end <= block.timestamp) revert LockExpired();
+    //     if (_oldLocked.amount <= 0) revert NoExistingLock();
+    //     uint256 _unlockTime = ((block.timestamp + lockDuration_) / WEEK) * WEEK; // unlock time is rounded down to weeks
+    //     if (_unlockTime > block.timestamp + MAX_TIME) revert LockDurationTooLong();
+    //     if (_unlockTime <= _oldLocked.end) revert CoolDownPeriodTooShort();
+    //     _updateReward(tokenId_);
+    //     _depositFor(tokenId_, 0, _unlockTime, _oldLocked);
+    // }
 
     /**
      * @notice Get the total supply of locked HEMI at the current timestamp
      * @return The total amount of HEMI currently locked
      */
     function totalSupply() public view override returns (uint256) {
-        return totalBias + _supplyAt(block.timestamp);
+        // FIXME: This is bug. This wont give historical balance because user can add amount or increase cool down period
+        return _supplyAt(block.timestamp);
     }
 
     function totalNftSupply() external view returns (uint256) {
@@ -211,7 +225,8 @@ contract StakedHemi is
      * @return The total amount of HEMI locked at the given timestamp
      */
     function totalSupplyAt(uint256 _timestamp) external view returns (uint256) {
-        return totalBias + _supplyAt(_timestamp);
+        // FIXME: This is bug. This wont give historical balance because user can add amount or increase cool down period
+        return _supplyAt(totalBias + _timestamp);
     }
 
     /**
@@ -291,24 +306,24 @@ contract StakedHemi is
      * @return The staked balance at the given timestamp
      */
     function _balanceOfNFTAt(uint256 tokenId_, uint256 timestamp_) internal view returns (uint256) {
-        if (!locked[tokenId_].coolDownStarted) {
-            uint256 slope = locked[tokenId_].amount.toUint256() / MAX_TIME;
-            uint256 bias = slope * locked[tokenId_].coolDownPeriod;
-            return bias;
-        }
+        // if (!locked[tokenId_].coolDownStarted) {
+        //     // FIXME: This is bug. This wont give historical balance because user can add amount or increase cool down period
+        //     uint256 slope = locked[tokenId_].amount.toUint256() / MAX_TIME;
+        //     uint256 bias = slope * locked[tokenId_].coolDownPeriod;
+        //     return bias;
+        // }
         uint256 _epoch = _getPastUserPointIndex(tokenId_, timestamp_);
+
         // epoch 0 is an empty point
         if (_epoch == 0) return 0;
         Point memory _lastPoint = userPointHistory[tokenId_][_epoch];
-        if (!locked[tokenId_].coolDownStarted) {
-            return _lastPoint.bias.toUint256();
-        }
+
         _lastPoint.bias -= _lastPoint.slope * (timestamp_ - _lastPoint.timestamp).toInt128();
         if (_lastPoint.bias < 0) {
             _lastPoint.bias = 0;
         }
 
-        return _lastPoint.bias.toUint256();
+        return _lastPoint.bias.toUint256() + _lastPoint.permanentBias;
     }
 
     function _findBlockEpoch(
@@ -424,30 +439,29 @@ contract StakedHemi is
         if (tokenId_ != 0) {
             // Old lock
             if (oldLocked_.amount > 0) {
-                _oldUserPoint.slope = oldLocked_.amount / MAX_TIME.toInt128();
-
                 if (oldLocked_.coolDownStarted) {
+                    _oldUserPoint.slope = oldLocked_.amount / MAX_TIME.toInt128();
                     if (oldLocked_.end > block.timestamp) {
                         _oldUserPoint.bias =
                             _oldUserPoint.slope *
                             (oldLocked_.end - block.timestamp).toInt128();
                     }
                 } else {
-                    _oldUserPoint.bias = oldLocked_.bias.toInt128();
+                    _oldUserPoint.permanentBias = oldLocked_.bias;
                 }
             }
 
             // New lock
             if (newLocked_.amount > 0) {
-                _newUserPoint.slope = newLocked_.amount / MAX_TIME.toInt128();
                 if (newLocked_.coolDownStarted) {
+                    _newUserPoint.slope = newLocked_.amount / MAX_TIME.toInt128();
                     if (newLocked_.end > block.timestamp) {
                         _newUserPoint.bias =
                             _newUserPoint.slope *
                             (newLocked_.end - block.timestamp).toInt128();
                     }
                 } else {
-                    _newUserPoint.bias = newLocked_.bias.toInt128();
+                    _newUserPoint.permanentBias = newLocked_.bias;
                 }
             }
 
@@ -471,18 +485,24 @@ contract StakedHemi is
             slope: 0,
             timestamp: block.timestamp,
             blockNumber: block.number,
-            amount: 0
+            amount: 0,
+            permanentBias: 0
         });
+        console.log("_lastPoint bias", _lastPoint.bias);
+        console.log("_lastPoint slope", _lastPoint.slope);
         if (_epoch > 0) {
             _lastPoint = pointHistory[_epoch];
         }
+        console.log("_lastPoint bias", _lastPoint.bias);
+        console.log("_lastPoint slope", _lastPoint.slope);
         uint256 _lastCheckpoint = _lastPoint.timestamp;
         Point memory _initialLastPoint = Point({
             bias: _lastPoint.bias,
             slope: _lastPoint.slope,
             timestamp: _lastPoint.timestamp,
             blockNumber: _lastPoint.blockNumber,
-            amount: _lastPoint.amount
+            amount: _lastPoint.amount,
+            permanentBias: _lastPoint.permanentBias
         });
         uint256 _blockSlope;
         if (block.timestamp > _lastPoint.timestamp) {
@@ -504,8 +524,12 @@ contract StakedHemi is
                 } else {
                     d_slope = slopeChanges[t_i];
                 }
+                console.log("_lastPoint bias", _lastPoint.bias);
+                console.log("_lastPoint slope before substract", _lastPoint.slope);
                 _lastPoint.bias -= _lastPoint.slope * (t_i - _lastCheckpoint).toInt128();
                 _lastPoint.slope += d_slope;
+                console.log("_lastPoint bias", _lastPoint.bias);
+                console.log("_lastPoint slope", _lastPoint.slope);
                 if (_lastPoint.bias < 0) {
                     // This can happen
                     _lastPoint.bias = 0;
@@ -543,6 +567,8 @@ contract StakedHemi is
             if (_lastPoint.bias < 0) {
                 _lastPoint.bias = 0;
             }
+            console.log("totalBias", totalBias);
+            _lastPoint.permanentBias = totalBias;
         }
         // If timestamp of last global point is the same, overwrite the last global point
         // Else record the new global point into history
@@ -551,6 +577,9 @@ contract StakedHemi is
         // Missing global checkpoints in prior weeks. In this case, _epoch = epoch + x, where x > 1
         // No missing global checkpoints, but timestamp != block.timestamp. Create new checkpoint.
         // No missing global checkpoints, but timestamp == block.timestamp. Overwrite last checkpoint.
+        console.log("saving global point");
+        console.log("bias", _lastPoint.bias);
+        console.log("slope", _lastPoint.slope);
         if (_epoch != 1 && pointHistory[_epoch - 1].timestamp == block.timestamp) {
             // _epoch = epoch + 1, so we do not increment epoch
             pointHistory[_epoch - 1] = _lastPoint;
@@ -587,6 +616,7 @@ contract StakedHemi is
             _newUserPoint.timestamp = block.timestamp;
             _newUserPoint.blockNumber = block.number;
             _newUserPoint.amount = locked[tokenId_].amount.toUint256();
+            console.log("saving usr point. permanentBias", _newUserPoint.permanentBias);
             uint256 _userEpoch = userPointEpoch[tokenId_];
             if (
                 _userEpoch != 0 &&
@@ -633,7 +663,7 @@ contract StakedHemi is
         });
 
         locked[_tokenId] = _newLocked;
-        // _checkpoint(_tokenId, _oldLocked, _newLocked);
+        _checkpoint(_tokenId, LockedBalance(0, 0, 0, 0, false), _newLocked);
         address from = _msgSender();
         if (amount_ != 0) {
             HEMI.transferFrom(from, address(this), amount_);
@@ -727,9 +757,11 @@ contract StakedHemi is
      */
     function _supplyAt(uint256 timestamp_) internal view returns (uint256) {
         uint256 _epoch = _getPastGlobalPointIndex(epoch, timestamp_);
+        console.log(" _supplyAt ~ _epoch:", _epoch);
         // epoch 0 is an empty point
         if (_epoch == 0) return 0;
         Point memory _point = pointHistory[_epoch];
+        console.log(" _supplyAt ~ _point:", _point.bias);
         return _supplyAt(_point, timestamp_);
     }
 
@@ -737,7 +769,7 @@ contract StakedHemi is
         int128 bias = point_.bias;
         int128 slope = point_.slope;
         uint256 ts = point_.timestamp;
-
+        console.log("current ts", ts);
         uint256 t_i = (ts / WEEK) * WEEK;
         for (uint256 i; i < 255; ++i) {
             t_i += WEEK;
@@ -747,6 +779,7 @@ contract StakedHemi is
             } else {
                 dSlope = slopeChanges[t_i];
             }
+            console.log("t_i - ts", t_i - ts);
             bias -= slope * (t_i - ts).toInt128();
             if (t_i == timestamp_) {
                 break;
@@ -758,7 +791,8 @@ contract StakedHemi is
         if (bias < 0) {
             bias = 0;
         }
-        return bias.toUint256();
+        console.log(" _supplyAt ~ bias:", bias);
+        return bias.toUint256() + point_.permanentBias;
     }
 
     /**
