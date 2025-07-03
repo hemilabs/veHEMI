@@ -18,7 +18,6 @@ interface IStakedHemi is IERC721 {
         int128 amount;
         uint256 end;
         uint256 coolDownPeriod;
-        uint256 bias;
         bool coolDownStarted;
     }
 

@@ -64,7 +64,6 @@ contract StakedHemiTest is Test {
             int128 lockedAmount,
             uint256 lockExpiry,
             uint256 coolDownPeriod,
-            ,
             bool coolDownStarted
         ) = stakedHemi.locked(tokenId);
         assertEq(uint256(uint128(lockedAmount)), amount, "Locked amount mismatch");
@@ -89,13 +88,7 @@ contract StakedHemiTest is Test {
         uint256 tokenId = stakedHemi.createLock(amount, 2 * 365 days);
 
         vm.warp(block.timestamp + 100 days);
-        (
-            int128 lockedAmountBefore,
-            ,
-            uint256 cooldownPeriodBefore,
-            uint256 biasBefore,
-
-        ) = stakedHemi.locked(tokenId);
+        (int128 lockedAmountBefore, , uint256 cooldownPeriodBefore, ) = stakedHemi.locked(tokenId);
 
         console.log(" testIncreaseCooldownPeriod ~ _totalSupplyBefore:", stakedHemi.totalSupply());
 
@@ -113,7 +106,6 @@ contract StakedHemiTest is Test {
             int128 lockedAmount,
             uint256 lockExpiry,
             uint256 coolDownPeriod,
-            uint256 bias,
             bool coolDownStarted
         ) = stakedHemi.locked(tokenId);
         assertEq(lockedAmountBefore, lockedAmount, "Locked amount mismatch");
@@ -131,7 +123,6 @@ contract StakedHemiTest is Test {
         console.log(" testCreateLock ~ veHemiBalanceAfter:", veHemiBalance);
         assertEq(veHemiBalance, expectedBias, "veHemi balance mismatch");
 
-        assertGt(bias, biasBefore, "Bias not increased");
         assertGt(coolDownPeriod, cooldownPeriodBefore, "Cool down period not increased");
     }
 
@@ -295,7 +286,7 @@ contract StakedHemiTest is Test {
         assertEq(userBalanceAfter, userBalanceBefore + amount, "Withdraw did not return tokens");
 
         // Lock should be cleared
-        (int128 lockedAmount, uint256 lockedEnd, , , ) = stakedHemi.locked(tokenId);
+        (int128 lockedAmount, uint256 lockedEnd, , ) = stakedHemi.locked(tokenId);
         assertEq(uint256(uint128(lockedAmount)), 0, "Lock not cleared");
         assertEq(lockedEnd, 0, "Lock end not cleared");
     }
