@@ -38,17 +38,13 @@ contract StakedHemi is
     error AddressIsNull();
     error LockExpired();
     error LockNotExpired();
-    error LockDurationTooShort();
-    error LockDurationTooLong();
     error NoExistingLock();
     error NotOwner();
-    error NewLockDurationNotGreater();
-    error NonExistentToken();
     error BlockNotReached();
-    error CoolDownPeriodTooShort();
-    error CoolDownPeriodTooLong();
-    error CoolDownAlreadyStarted();
-    error CoolDownNotStarted();
+    error CooldownPeriodTooShort();
+    error CooldownPeriodTooLong();
+    error CooldownAlreadyStarted();
+    error CooldownNotStarted();
 
     // --- Events ---
 
@@ -158,51 +154,35 @@ contract StakedHemi is
         _increaseAmountFor(tokenId_, amount_);
     }
 
-    function increaseCoolDownPeriod(
+    function increaseCooldownPeriod(
         uint256 tokenId_,
-        uint256 newCoolDownPeriod_
+        uint256 newCooldownPeriod_
     ) external nonReentrant {
         address _sender = _msgSender();
         if (_ownerOf(tokenId_) != _sender) revert NotOwner();
         LockedBalance memory _oldLocked = locked[tokenId_];
         if (_oldLocked.amount <= 0) revert NoExistingLock();
-        if (newCoolDownPeriod_ <= _oldLocked.coolDownPeriod) revert CoolDownPeriodTooShort();
+        if (newCooldownPeriod_ <= _oldLocked.cooldownPeriod) revert CooldownPeriodTooShort();
         LockedBalance memory _newLocked = LockedBalance({
             amount: _oldLocked.amount,
             end: _oldLocked.end,
-            coolDownPeriod: newCoolDownPeriod_,
-            coolDownStarted: _oldLocked.coolDownStarted
+            cooldownPeriod: newCooldownPeriod_,
+            cooldownStarted: _oldLocked.cooldownStarted
         });
 
         // TODO: call updateReward()
-        if (_oldLocked.coolDownStarted) {
+        if (_oldLocked.cooldownStarted) {
             if (_oldLocked.end <= block.timestamp) revert LockExpired();
-            uint256 _unlockTime = ((block.timestamp + newCoolDownPeriod_) / WEEK) * WEEK;
-            if (_unlockTime > block.timestamp + MAX_TIME) revert LockDurationTooLong();
+            uint256 _unlockTime = ((block.timestamp + newCooldownPeriod_) / WEEK) * WEEK;
+            if (_unlockTime > block.timestamp + MAX_TIME) revert CooldownPeriodTooLong();
             _newLocked.end = _unlockTime;
         } else {
             uint256 _slope = _newLocked.amount.toUint256() / MAX_TIME;
-            totalBias = totalBias + (_slope * (newCoolDownPeriod_ - _oldLocked.coolDownPeriod));
-            locked[tokenId_] = _newLocked;
+            totalBias = totalBias + (_slope * (newCooldownPeriod_ - _oldLocked.cooldownPeriod));
         }
+        locked[tokenId_] = _newLocked;
         _checkpoint(tokenId_, _oldLocked, _newLocked);
     }
-
-    /**
-     * @notice Increases the unlock time for a given lock NFT
-     * @param tokenId_ The token ID
-     * @param lockDuration_ The new lock duration (from now)
-     */
-    // function _increaseUnlockTime(uint256 tokenId_, uint256 lockDuration_) private nonReentrant {
-    //     LockedBalance memory _oldLocked = locked[tokenId_];
-    //     if (_oldLocked.end <= block.timestamp) revert LockExpired();
-    //     if (_oldLocked.amount <= 0) revert NoExistingLock();
-    //     uint256 _unlockTime = ((block.timestamp + lockDuration_) / WEEK) * WEEK; // unlock time is rounded down to weeks
-    //     if (_unlockTime > block.timestamp + MAX_TIME) revert LockDurationTooLong();
-    //     if (_unlockTime <= _oldLocked.end) revert CoolDownPeriodTooShort();
-    //     _updateReward(tokenId_);
-    //     _depositFor(tokenId_, 0, _unlockTime, _oldLocked);
-    // }
 
     /**
      * @notice Get the total supply of locked HEMI at the current timestamp
@@ -276,7 +256,7 @@ contract StakedHemi is
         if (_ownerOf(tokenId_) != _sender) revert NotOwner();
         _updateReward(tokenId_);
         LockedBalance memory _oldLocked = locked[tokenId_];
-        if (!_oldLocked.coolDownStarted) revert CoolDownNotStarted();
+        if (!_oldLocked.cooldownStarted) revert CooldownNotStarted();
         if (block.timestamp < _oldLocked.end) revert LockNotExpired();
         uint256 _amount = _oldLocked.amount.toUint256();
 
@@ -304,12 +284,6 @@ contract StakedHemi is
      * @return The staked balance at the given timestamp
      */
     function _balanceOfNFTAt(uint256 tokenId_, uint256 timestamp_) internal view returns (uint256) {
-        // if (!locked[tokenId_].coolDownStarted) {
-        //     // FIXME: This is bug. This wont give historical balance because user can add amount or increase cool down period
-        //     uint256 slope = locked[tokenId_].amount.toUint256() / MAX_TIME;
-        //     uint256 bias = slope * locked[tokenId_].coolDownPeriod;
-        //     return bias;
-        // }
         uint256 _epoch = _getPastUserPointIndex(tokenId_, timestamp_);
 
         // epoch 0 is an empty point
@@ -437,7 +411,7 @@ contract StakedHemi is
         if (tokenId_ != 0) {
             // Old lock
             if (oldLocked_.amount > 0) {
-                if (oldLocked_.coolDownStarted) {
+                if (oldLocked_.cooldownStarted) {
                     _oldUserPoint.slope = oldLocked_.amount / MAX_TIME.toInt128();
                     if (oldLocked_.end > block.timestamp) {
                         _oldUserPoint.bias =
@@ -446,13 +420,13 @@ contract StakedHemi is
                     }
                 } else {
                     uint256 _slope = oldLocked_.amount.toUint256() / MAX_TIME;
-                    _oldUserPoint.permanentBias = _slope * oldLocked_.coolDownPeriod;
+                    _oldUserPoint.permanentBias = _slope * oldLocked_.cooldownPeriod;
                 }
             }
 
             // New lock
             if (newLocked_.amount > 0) {
-                if (newLocked_.coolDownStarted) {
+                if (newLocked_.cooldownStarted) {
                     _newUserPoint.slope = newLocked_.amount / MAX_TIME.toInt128();
                     if (newLocked_.end > block.timestamp) {
                         _newUserPoint.bias =
@@ -461,7 +435,7 @@ contract StakedHemi is
                     }
                 } else {
                     uint256 _slope = newLocked_.amount.toUint256() / MAX_TIME;
-                    _newUserPoint.permanentBias = _slope * newLocked_.coolDownPeriod;
+                    _newUserPoint.permanentBias = _slope * newLocked_.cooldownPeriod;
                 }
             }
 
@@ -621,30 +595,30 @@ contract StakedHemi is
     /**
      * @notice Internal function to create a new lock
      * @param amount_ The amount of HEMI to lock
-     * @param coolDownPeriod_ .
+     * @param cooldownPeriod_ .
      * @param account_ The address to assign the lock NFT to
      * @return _tokenId The ID of the created lock NFT .
      */
     function _createLock(
         uint256 amount_,
-        uint256 coolDownPeriod_,
+        uint256 cooldownPeriod_,
         address account_
     ) internal returns (uint256 _tokenId) {
-        if (coolDownPeriod_ < WEEK) revert CoolDownPeriodTooShort();
-        if (coolDownPeriod_ > MAX_TIME) revert CoolDownPeriodTooLong();
-        // coolDownPeriod_ = (coolDownPeriod_ / WEEK) * WEEK;
+        if (cooldownPeriod_ < WEEK) revert CooldownPeriodTooShort();
+        if (cooldownPeriod_ > MAX_TIME) revert CooldownPeriodTooLong();
+        // cooldownPeriod_ = (cooldownPeriod_ / WEEK) * WEEK;
         if (amount_ == 0) revert AmountIsZero();
         supply += amount_;
         _tokenId = nextTokenId++;
         _mint(account_, _tokenId);
         _updateReward(_tokenId);
         uint256 _slope = amount_ / MAX_TIME;
-        totalBias += _slope * coolDownPeriod_;
+        totalBias += _slope * cooldownPeriod_;
         LockedBalance memory _newLocked = LockedBalance({
             amount: amount_.toInt128(),
-            coolDownPeriod: coolDownPeriod_,
+            cooldownPeriod: cooldownPeriod_,
             end: 0,
-            coolDownStarted: false
+            cooldownStarted: false
         });
 
         locked[_tokenId] = _newLocked;
@@ -655,65 +629,24 @@ contract StakedHemi is
         }
     }
 
-    function startCoolDown(uint256 tokenId_) external {
+    function startCooldown(uint256 tokenId_) external {
         address _sender = _msgSender();
         if (_ownerOf(tokenId_) != _sender) revert NotOwner();
-        _startCoolDown(tokenId_);
+        _startCooldown(tokenId_);
     }
 
-    function _startCoolDown(uint256 tokenId_) internal {
+    function _startCooldown(uint256 tokenId_) internal {
         LockedBalance memory _locked = locked[tokenId_];
-        if (_locked.coolDownStarted) {
-            revert CoolDownAlreadyStarted();
+        if (_locked.cooldownStarted) {
+            revert CooldownAlreadyStarted();
         }
         uint256 _slope = _locked.amount.toUint256() / MAX_TIME;
-        totalBias -= _slope * _locked.coolDownPeriod;
-        _locked.coolDownStarted = true;
-        _locked.end = ((block.timestamp + _locked.coolDownPeriod) / WEEK) * WEEK;
+        totalBias -= _slope * _locked.cooldownPeriod;
+        _locked.cooldownStarted = true;
+        _locked.end = ((block.timestamp + _locked.cooldownPeriod) / WEEK) * WEEK;
 
         locked[tokenId_] = _locked;
         _checkpoint(tokenId_, LockedBalance(0, 0, 0, false), _locked);
-    }
-
-    /**
-     * @notice Internal function to deposit for a lock (increase amount or extend duration)
-     * @param tokenId_ The token ID
-     * @param amount_ The amount to deposit
-     * @param unlockTime_ The new unlock time
-     * @param oldLocked_ The previous locked balance
-     */
-    function _depositFor(
-        uint256 tokenId_,
-        uint256 amount_,
-        uint256 unlockTime_,
-        LockedBalance memory oldLocked_
-    ) internal {
-        uint256 _supplyBefore = supply;
-        supply = _supplyBefore + amount_;
-
-        // Set newLocked to _oldLocked without mangling memory
-        LockedBalance memory _newLocked;
-        (_newLocked.amount, _newLocked.end) = (oldLocked_.amount, oldLocked_.end);
-
-        // Adding to existing lock, or if a lock is expired - creating a new one
-        _newLocked.amount += amount_.toInt128();
-        if (unlockTime_ != 0) {
-            _newLocked.end = unlockTime_;
-        }
-        locked[tokenId_] = _newLocked;
-
-        // Possibilities:
-        // Both _oldLocked.end could be current or expired (>/< block.timestamp)
-        // value == 0 (extend lock) or value > 0 (add to lock or extend lock)
-        // newLocked.end > block.timestamp (always)
-        _checkpoint(tokenId_, oldLocked_, _newLocked);
-
-        address from = _msgSender();
-        if (amount_ != 0) {
-            HEMI.transferFrom(from, address(this), amount_);
-        }
-
-        emit Deposit(from, tokenId_, amount_, _newLocked.end, block.timestamp);
     }
 
     /**
@@ -723,13 +656,26 @@ contract StakedHemi is
      */
     function _increaseAmountFor(uint256 tokenId_, uint256 amount_) internal {
         _updateReward(tokenId_);
-        LockedBalance memory _oldLocked = locked[tokenId_];
-
         if (amount_ == 0) revert AmountIsZero();
+        LockedBalance memory _oldLocked = locked[tokenId_];
         if (_oldLocked.amount <= 0) revert NoExistingLock();
-        if (_oldLocked.end <= block.timestamp) revert LockExpired();
 
-        _depositFor(tokenId_, amount_, 0, _oldLocked);
+        LockedBalance memory _newLocked = LockedBalance({
+            amount: _oldLocked.amount + amount_.toInt128(),
+            end: _oldLocked.end,
+            cooldownPeriod: _oldLocked.cooldownPeriod,
+            cooldownStarted: _oldLocked.cooldownStarted
+        });
+
+        if (_oldLocked.cooldownStarted) {
+            if (_oldLocked.end <= block.timestamp) revert LockExpired();
+        } else {
+            uint256 _slope = amount_ / MAX_TIME;
+            totalBias += _slope * _newLocked.cooldownPeriod;
+        }
+        locked[tokenId_] = _newLocked;
+        _checkpoint(tokenId_, _oldLocked, _newLocked);
+        HEMI.transferFrom(msg.sender, address(this), amount_);
     }
 
     /**

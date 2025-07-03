@@ -17,8 +17,8 @@ interface IStakedHemi is IERC721 {
     struct LockedBalance {
         int128 amount;
         uint256 end;
-        uint256 coolDownPeriod;
-        bool coolDownStarted;
+        uint256 cooldownPeriod;
+        bool cooldownStarted;
     }
 
     // --- Events ---
@@ -49,7 +49,7 @@ interface IStakedHemi is IERC721 {
         address account
     ) external returns (uint256 tokenId);
     function increaseAmount(uint256 tokenId, uint256 amount) external;
-    function increaseCoolDownPeriod(uint256 tokenId, uint256 lockDuration) external;
+    function increaseCooldownPeriod(uint256 tokenId, uint256 lockDuration) external;
     function withdraw(uint256 tokenId) external;
     function getUserPoint(uint256 tokenId, uint256 epoch) external view returns (Point memory);
     function getLockedBalance(uint256 tokenId) external view returns (LockedBalance memory);

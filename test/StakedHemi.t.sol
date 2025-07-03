@@ -63,18 +63,18 @@ contract StakedHemiTest is Test {
         (
             int128 lockedAmount,
             uint256 lockExpiry,
-            uint256 coolDownPeriod,
-            bool coolDownStarted
+            uint256 cooldownPeriod,
+            bool cooldownStarted
         ) = stakedHemi.locked(tokenId);
         assertEq(uint256(uint128(lockedAmount)), amount, "Locked amount mismatch");
         assertEq(lockExpiry, 0, "Unlock time mismatch");
-        assertEq(coolDownPeriod, 2 * 365 days, "Cool down period mismatch");
-        assertEq(coolDownStarted, false, "Cool down started mismatch");
+        assertEq(cooldownPeriod, 2 * 365 days, "Cool down period mismatch");
+        assertEq(cooldownStarted, false, "Cool down started mismatch");
         assertEq(stakedHemi.supply(), amount, "Supply mismatch");
 
         uint256 slope = amount / MAX_TIME;
 
-        uint256 bias = slope * coolDownPeriod;
+        uint256 bias = slope * cooldownPeriod;
 
         uint256 veHemiBalance = stakedHemi.balanceOfNFT(tokenId);
         console.log(" testCreateLock ~ veHemiBalance:", veHemiBalance);
@@ -97,7 +97,7 @@ contract StakedHemiTest is Test {
             stakedHemi.balanceOfNFT(tokenId)
         );
         vm.prank(user);
-        stakedHemi.increaseCoolDownPeriod(tokenId, 4 * 365 days);
+        stakedHemi.increaseCooldownPeriod(tokenId, 4 * 365 days);
         uint256 _totalSupplyAfter = stakedHemi.totalSupply();
         console.log(" testIncreaseCooldownPeriod ~ _totalSupplyAfter:", _totalSupplyAfter);
 
@@ -105,41 +105,41 @@ contract StakedHemiTest is Test {
         (
             int128 lockedAmount,
             uint256 lockExpiry,
-            uint256 coolDownPeriod,
-            bool coolDownStarted
+            uint256 cooldownPeriod,
+            bool cooldownStarted
         ) = stakedHemi.locked(tokenId);
         assertEq(lockedAmountBefore, lockedAmount, "Locked amount mismatch");
         assertEq(uint256(uint128(lockedAmount)), amount, "Locked amount mismatch");
         assertEq(lockExpiry, 0, "Unlock time mismatch");
-        assertEq(coolDownPeriod, 4 * 365 days, "Cool down period mismatch");
-        assertEq(coolDownStarted, false, "Cool down started mismatch");
+        assertEq(cooldownPeriod, 4 * 365 days, "Cool down period mismatch");
+        assertEq(cooldownStarted, false, "Cool down started mismatch");
         assertEq(stakedHemi.supply(), amount, "Supply mismatch");
 
         uint256 slope = amount / MAX_TIME;
 
-        uint256 expectedBias = slope * coolDownPeriod;
+        uint256 expectedBias = slope * cooldownPeriod;
 
         uint256 veHemiBalance = stakedHemi.balanceOfNFT(tokenId);
         console.log(" testCreateLock ~ veHemiBalanceAfter:", veHemiBalance);
         assertEq(veHemiBalance, expectedBias, "veHemi balance mismatch");
 
-        assertGt(coolDownPeriod, cooldownPeriodBefore, "Cool down period not increased");
+        assertGt(cooldownPeriod, cooldownPeriodBefore, "Cool down period not increased");
     }
 
-    function testBalanceOfNFTWithoutCoolDown() public {
+    function testBalanceOfNFTWithoutCooldown() public {
         uint256 amount = 100 ether;
 
-        uint256 coolDownPeriod = 2 * 365 days;
+        uint256 cooldownPeriod = 2 * 365 days;
 
         vm.prank(user);
-        uint256 tokenId = stakedHemi.createLock(amount, coolDownPeriod);
+        uint256 tokenId = stakedHemi.createLock(amount, cooldownPeriod);
 
         // Check NFT ownership
         assertEq(stakedHemi.ownerOf(tokenId), user);
 
         uint256 slope = amount / MAX_TIME;
 
-        uint256 bias = slope * coolDownPeriod;
+        uint256 bias = slope * cooldownPeriod;
 
         uint256 veHemiBalance = stakedHemi.balanceOfNFT(tokenId);
         uint256 totalSupply = stakedHemi.totalSupply();
@@ -155,24 +155,24 @@ contract StakedHemiTest is Test {
         totalSupply = stakedHemi.totalSupply();
         assertEq(veHemiBalance, bias, "veHemi balance mismatch after 365 days");
 
-        vm.warp(block.timestamp + coolDownPeriod);
+        vm.warp(block.timestamp + cooldownPeriod);
         veHemiBalance = stakedHemi.balanceOfNFT(tokenId);
         totalSupply = stakedHemi.totalSupply();
         assertEq(veHemiBalance, bias, "veHemi balance mismatch after cool down period");
     }
 
-    function testCoolDown() public {
+    function testCooldown() public {
         uint256 amount = 2 ether;
 
-        uint256 coolDownPeriod = 2 * 365 days;
+        uint256 cooldownPeriod = 2 * 365 days;
 
         vm.startPrank(user);
-        uint256 tokenId = stakedHemi.createLock(amount, coolDownPeriod);
+        uint256 tokenId = stakedHemi.createLock(amount, cooldownPeriod);
         vm.stopPrank();
 
         uint256 slope = amount / MAX_TIME;
 
-        uint256 biasAtStart = slope * coolDownPeriod;
+        uint256 biasAtStart = slope * cooldownPeriod;
 
         uint256 veHemiBalance = stakedHemi.balanceOfNFT(tokenId);
         uint256 totalSupply = stakedHemi.totalSupply();
@@ -186,7 +186,7 @@ contract StakedHemiTest is Test {
         assertEq(totalSupply, veHemiBalance, "total supply wrong after 100 days");
 
         vm.prank(user);
-        stakedHemi.startCoolDown(tokenId);
+        stakedHemi.startCooldown(tokenId);
         veHemiBalance = stakedHemi.balanceOfNFT(tokenId);
         totalSupply = stakedHemi.totalSupply();
         assertEq(totalSupply, veHemiBalance, "total supply wrong after 100 days");
@@ -197,12 +197,12 @@ contract StakedHemiTest is Test {
         assertEq(totalSupply, veHemiBalance, "total supply wrong after 365 days");
         assertApproxEqRel(
             veHemiBalance,
-            (biasAtStart * 365 days) / coolDownPeriod,
+            (biasAtStart * 365 days) / cooldownPeriod,
             0.005e18,
             "veHemi balance mismatch after 365 days"
         );
 
-        vm.warp(block.timestamp + coolDownPeriod);
+        vm.warp(block.timestamp + cooldownPeriod);
         veHemiBalance = stakedHemi.balanceOfNFT(tokenId);
         totalSupply = stakedHemi.totalSupply();
         assertEq(veHemiBalance, 0, "veHemi balance mismatch after cool down period");
@@ -210,7 +210,7 @@ contract StakedHemiTest is Test {
         assertEq(totalSupply, 0, "total supply wrong after cool down period");
     }
 
-    function testMultipleLocksNoCoolDown() public {
+    function testMultipleLocksNoCooldown() public {
         uint256 amount = 100 ether;
 
         vm.startPrank(user);
@@ -229,13 +229,13 @@ contract StakedHemiTest is Test {
         assertEq(totalSupply, bias1 + bias2, "total supply wrong");
     }
 
-    function testMultipleLocksWithOneCoolDown() public {
+    function testMultipleLocksWithOneCooldown() public {
         uint256 amount = 100 ether;
 
         vm.startPrank(user);
         uint256 tokenId1 = stakedHemi.createLock(amount, 4 * 365 days);
         uint256 tokenId2 = stakedHemi.createLock(amount, 2 * 365 days);
-        stakedHemi.startCoolDown(tokenId2);
+        stakedHemi.startCooldown(tokenId2);
         vm.stopPrank();
 
         vm.warp(block.timestamp + 365 days);
@@ -245,11 +245,11 @@ contract StakedHemiTest is Test {
         uint256 bias2 = slope * 2 * 365 days;
 
         uint256 veHemiBalance1 = stakedHemi.balanceOfNFT(tokenId1);
-        console.log(" testMultipleLocksWithOneCoolDown ~ veHemiBalance1:", veHemiBalance1);
+        console.log(" testMultipleLocksWithOneCooldown ~ veHemiBalance1:", veHemiBalance1);
         uint256 veHemiBalance2 = stakedHemi.balanceOfNFT(tokenId2);
-        console.log(" testMultipleLocksWithOneCoolDown ~ veHemiBalance2:", veHemiBalance2);
+        console.log(" testMultipleLocksWithOneCooldown ~ veHemiBalance2:", veHemiBalance2);
         uint256 totalSupply = stakedHemi.totalSupply();
-        console.log(" testMultipleLocksWithOneCoolDown ~ totalSupply:", totalSupply);
+        console.log(" testMultipleLocksWithOneCooldown ~ totalSupply:", totalSupply);
         assertEq(veHemiBalance1, bias1, "veHemi balance1 mismatch");
         assertEq(veHemiBalance2, bias2, "veHemi balance2 mismatch");
         assertEq(totalSupply, bias1 + bias2, "total supply wrong");
@@ -268,10 +268,10 @@ contract StakedHemiTest is Test {
 
         uint256 userBalanceBefore = hemi.balanceOf(user);
 
-        vm.expectRevert(StakedHemi.CoolDownNotStarted.selector);
+        vm.expectRevert(StakedHemi.CooldownNotStarted.selector);
         stakedHemi.withdraw(tokenId);
 
-        stakedHemi.startCoolDown(tokenId);
+        stakedHemi.startCooldown(tokenId);
 
         vm.warp(block.timestamp + 2 weeks);
 
