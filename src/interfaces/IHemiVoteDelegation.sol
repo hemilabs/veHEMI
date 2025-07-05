@@ -4,20 +4,21 @@ pragma solidity ^0.8.29;
 interface IHemiVoteDelegation {
     struct Delegation {
         uint256 delegatee;
-        uint48 firstDelegationTimestamp;
-        uint48 end;
-        uint96 bias;
-        uint96 amount;
-        uint64 slope;
+        uint64 firstDelegationTimestamp;
+        uint64 end;
+        uint128 slope;
+        uint128 bias;
+        uint128 fixedBias;
+        uint256 amount;
     }
 
     /// A representation of a delegate and all its delegators at a particular timestamp
     struct DelegateCheckpoint {
         uint128 normalizedBias;
+        uint128 fixedBias;
         uint128 totalAmount;
-        // _________
-        uint128 normalizedSlope;
-        uint128 timestamp; // Rounded up to the nearest day
+        uint64 normalizedSlope;
+        uint64 timestamp;
     }
 
     /// Represents the total bias, slope, and Hemi amount of all accounts that expire for a specific delegate
@@ -31,6 +32,7 @@ interface IHemiVoteDelegation {
     // Only used in memory
     struct NormalizedVeHemiLockInfo {
         uint256 bias;
+        uint256 fixedBias;
         uint256 slope;
         uint256 amount;
         uint256 end;

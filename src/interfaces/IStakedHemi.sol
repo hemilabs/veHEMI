@@ -8,17 +8,17 @@ interface IStakedHemi is IERC721 {
     struct Point {
         int128 bias;
         int128 slope;
-        uint256 timestamp;
-        uint256 blockNumber;
-        uint256 amount;
+        uint64 timestamp;
+        uint64 blockNumber;
+        uint128 amount;
         uint256 fixedBias;
     }
 
     struct LockedBalance {
         int128 amount;
-        uint256 end;
-        uint256 cooldownPeriod;
-        uint256 fixedBias;
+        uint96 end;
+        uint32 cooldownPeriod;
+        uint128 fixedBias;
         bool cooldownStarted;
         address createdBy;
     }

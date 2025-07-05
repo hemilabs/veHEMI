@@ -184,10 +184,11 @@ contract HemiVoteDelegation is DelegationStorageV1, ReentrancyGuardTransient {
         /// NOTE: Checkpoint values will always be larger than or equal to expired values
         unchecked {
             _calculatedCheckpoint = DelegateCheckpoint({
-                timestamp: uint128(_checkpointTimestamp),
-                normalizedBias: uint128(_lastCheckpoint.normalizedBias - totalExpiredBias_),
-                normalizedSlope: uint128(_lastCheckpoint.normalizedSlope - totalExpiredSlope_),
-                totalAmount: uint128(_lastCheckpoint.totalAmount - totalExpiredAmount_)
+                timestamp: uint64(_checkpointTimestamp),
+                normalizedBias: uint64(_lastCheckpoint.normalizedBias - totalExpiredBias_),
+                normalizedSlope: uint64(_lastCheckpoint.normalizedSlope - totalExpiredSlope_),
+                totalAmount: uint128(_lastCheckpoint.totalAmount - totalExpiredAmount_),
+                fixedBias: uint128(_lastCheckpoint.fixedBias) // fixedBias never expire
             });
         }
     }
@@ -225,6 +226,7 @@ contract HemiVoteDelegation is DelegationStorageV1, ReentrancyGuardTransient {
         uint256 deltaBias_,
         uint256 deltaSlope_,
         uint256 deltaAmount_,
+        uint256 deltaFixedBias_,
         uint256 checkpointTimestamp_,
         uint256 previousDelegationEnd_
     ) private view returns (DelegateCheckpoint memory _newCheckpoint) {
@@ -233,10 +235,11 @@ contract HemiVoteDelegation is DelegationStorageV1, ReentrancyGuardTransient {
             return
                 DelegateCheckpoint({
                     // can be unsafely cast because values will never exceed uint128 max
-                    timestamp: uint128(checkpointTimestamp_),
-                    normalizedBias: uint128(deltaBias_),
-                    normalizedSlope: uint128(deltaSlope_),
-                    totalAmount: uint128(deltaAmount_)
+                    timestamp: uint64(checkpointTimestamp_),
+                    normalizedBias: uint64(deltaBias_),
+                    normalizedSlope: uint64(deltaSlope_),
+                    totalAmount: uint128(deltaAmount_),
+                    fixedBias: uint128(deltaFixedBias_)
                 });
         }
 
@@ -244,40 +247,45 @@ contract HemiVoteDelegation is DelegationStorageV1, ReentrancyGuardTransient {
         _newCheckpoint.normalizedBias = previousCheckpoint_.normalizedBias;
         _newCheckpoint.normalizedSlope = previousCheckpoint_.normalizedSlope;
         _newCheckpoint.totalAmount = previousCheckpoint_.totalAmount;
+        _newCheckpoint.fixedBias = previousCheckpoint_.fixedBias;
 
         // All checkpoint fields will never exceed their size so addition and subtraction doesnt need to be checked
         unchecked {
             // Add or subtract the delta to the previous checkpoint
             if (isDeltaPositive_) {
                 _newCheckpoint.normalizedBias += uint128(deltaBias_);
-                _newCheckpoint.normalizedSlope += uint128(deltaSlope_);
+                _newCheckpoint.normalizedSlope += uint64(deltaSlope_);
                 _newCheckpoint.totalAmount += uint128(deltaAmount_);
+                _newCheckpoint.fixedBias += uint128(deltaFixedBias_);
             } else {
                 // only subtract the weight from this tokenID if it has not already expired in a previous checkpoint
                 if (previousDelegationEnd_ > previousCheckpoint_.timestamp) {
                     _newCheckpoint.normalizedBias -= uint128(deltaBias_);
-                    _newCheckpoint.normalizedSlope -= uint128(deltaSlope_);
+                    _newCheckpoint.normalizedSlope -= uint64(deltaSlope_);
                     _newCheckpoint.totalAmount -= uint128(deltaAmount_);
+                    _newCheckpoint.fixedBias -= uint128(deltaFixedBias_);
                 }
             }
 
-            // If there have been expirations, incorporate the adjustments by subtracting them from the checkpoint
-            if (_newCheckpoint.timestamp != checkpointTimestamp_) {
-                (
-                    uint256 totalExpiredBias,
-                    uint256 totalExpiredSlope,
-                    uint256 totalExpiredAmount
-                ) = _calculateExpirations(
-                        tokenId_,
-                        _newCheckpoint.timestamp,
-                        checkpointTimestamp_,
-                        previousCheckpoint_
-                    );
+            {
+                // If there have been expirations, incorporate the adjustments by subtracting them from the checkpoint
+                if (_newCheckpoint.timestamp != checkpointTimestamp_) {
+                    (
+                        uint256 totalExpiredBias,
+                        uint256 totalExpiredSlope,
+                        uint256 totalExpiredAmount
+                    ) = _calculateExpirations(
+                            tokenId_,
+                            _newCheckpoint.timestamp,
+                            checkpointTimestamp_,
+                            previousCheckpoint_
+                        );
 
-                _newCheckpoint.timestamp = uint128(checkpointTimestamp_);
-                _newCheckpoint.normalizedBias -= uint128(totalExpiredBias);
-                _newCheckpoint.normalizedSlope -= uint128(totalExpiredSlope);
-                _newCheckpoint.totalAmount -= uint128(totalExpiredAmount);
+                    _newCheckpoint.timestamp = uint64(checkpointTimestamp_);
+                    _newCheckpoint.normalizedBias -= uint64(totalExpiredBias);
+                    _newCheckpoint.normalizedSlope -= uint64(totalExpiredSlope);
+                    _newCheckpoint.totalAmount -= uint128(totalExpiredAmount);
+                }
             }
         }
     }
@@ -387,15 +395,11 @@ contract HemiVoteDelegation is DelegationStorageV1, ReentrancyGuardTransient {
             _checkpointTimestamp
         );
 
-        _moveVotingPowerFromPreviousDelegate({
-            previousDelegation_: _previousDelegation,
-            checkpointTimestamp_: _checkpointTimestamp
-        });
+        _moveVotingPowerFromPreviousDelegate({previousDelegation_: _previousDelegation});
 
         _moveVotingPowerToNewDelegate({
             newDelegatee_: delegatee_,
-            delegatorVeLockInfo_: _normalizedVeLockInfo,
-            checkpointTimestamp_: _checkpointTimestamp
+            delegatorVeLockInfo_: _normalizedVeLockInfo
         });
 
         delegations[delegator_] = Delegation({
@@ -405,6 +409,7 @@ contract HemiVoteDelegation is DelegationStorageV1, ReentrancyGuardTransient {
                 : _previousDelegation.firstDelegationTimestamp,
             end: uint48(_normalizedVeLockInfo.end),
             bias: uint96(_normalizedVeLockInfo.bias),
+            fixedBias: uint96(_normalizedVeLockInfo.fixedBias),
             amount: uint96(_normalizedVeLockInfo.amount),
             slope: uint64(_normalizedVeLockInfo.slope)
         });
@@ -433,7 +438,10 @@ contract HemiVoteDelegation is DelegationStorageV1, ReentrancyGuardTransient {
      * @return The token's own voting power (0 if delegated or expired)
      */
     function _getSelfVotesAt(uint256 tokenId_, uint256 timestamp_) internal view returns (uint256) {
-        if (stakedHemi.getLockedBalance(tokenId_).end <= timestamp_) return 0;
+        if (
+            stakedHemi.getLockedBalance(tokenId_).cooldownStarted &&
+            stakedHemi.getLockedBalance(tokenId_).end <= timestamp_
+        ) return 0;
 
         uint256 _firstDelegation = delegations[tokenId_].firstDelegationTimestamp;
         if (_firstDelegation == 0 || timestamp_ < _firstDelegation) {
@@ -457,16 +465,22 @@ contract HemiVoteDelegation is DelegationStorageV1, ReentrancyGuardTransient {
     ) internal view returns (NormalizedVeHemiLockInfo memory _normalizedVeHemiLockInfo) {
         IStakedHemi.LockedBalance memory _lockedBalance = stakedHemi.getLockedBalance(delegator_);
         uint256 _end = _lockedBalance.end;
-        if (_end <= checkPointTimestamp_) revert CanNotDelegateExpiredLocks();
+        if (_lockedBalance.cooldownStarted && _end <= checkPointTimestamp_)
+            revert CanNotDelegateExpiredLocks();
 
-        uint256 _epoch = stakedHemi.userPointEpoch(delegator_);
+        IStakedHemi.Point memory _userPoint = stakedHemi.getUserPoint(
+            delegator_,
+            stakedHemi.userPointEpoch(delegator_)
+        );
 
-        IStakedHemi.Point memory _userPoint = stakedHemi.getUserPoint(delegator_, _epoch);
-
-        _normalizedVeHemiLockInfo.slope = _userPoint.slope.toUint256();
-        _normalizedVeHemiLockInfo.bias =
-            SafeCast.toUint256(_userPoint.bias) +
-            (_normalizedVeHemiLockInfo.slope * _userPoint.timestamp);
+        if (_lockedBalance.cooldownStarted) {
+            _normalizedVeHemiLockInfo.slope = _userPoint.slope.toUint256();
+            _normalizedVeHemiLockInfo.bias =
+                SafeCast.toUint256(_userPoint.bias) +
+                (_normalizedVeHemiLockInfo.slope * _userPoint.timestamp);
+        } else {
+            _normalizedVeHemiLockInfo.fixedBias = _userPoint.fixedBias;
+        }
         _normalizedVeHemiLockInfo.amount = _userPoint.amount;
         _normalizedVeHemiLockInfo.end = _end;
     }
@@ -510,6 +524,7 @@ contract HemiVoteDelegation is DelegationStorageV1, ReentrancyGuardTransient {
         _delegatedWeight = (expirationAdjustedBias > voteDecay)
             ? expirationAdjustedBias - voteDecay
             : 0;
+        _delegatedWeight += _checkpoint.fixedBias;
     }
 
     /**
@@ -517,63 +532,21 @@ contract HemiVoteDelegation is DelegationStorageV1, ReentrancyGuardTransient {
      * @dev This function handles removing voting power from the previous delegate when
      * a delegation is changed or removed. It updates checkpoints and expiration records.
      * @param previousDelegation_ The previous delegation information
-     * @param checkpointTimestamp_ The timestamp for the checkpoint
      */
-    function _moveVotingPowerFromPreviousDelegate(
-        Delegation memory previousDelegation_,
-        uint256 checkpointTimestamp_
-    ) private {
+    function _moveVotingPowerFromPreviousDelegate(Delegation memory previousDelegation_) private {
         if (previousDelegation_.delegatee == 0) return;
         // Remove voting power from previous delegate, if they exist
 
-        // Get the last Checkpoint for previous delegate
-        DelegateCheckpoint[] storage previousDelegationCheckpoints = delegateCheckpoints[
-            previousDelegation_.delegatee
-        ];
-        uint256 accountCheckpointsLength = previousDelegationCheckpoints.length;
-        // NOTE: we know that _accountsCheckpointLength > 0 because we have already checked that the previous delegation exists
-        DelegateCheckpoint memory _lastCheckpoint = previousDelegationCheckpoints[
-            accountCheckpointsLength - 1
-        ];
-
-        if (previousDelegation_.end > checkpointTimestamp_) {
-            // Calculations
-            Expiration memory expiration = expiredDelegations[previousDelegation_.delegatee][
-                previousDelegation_.end
-            ];
-            // All expiration fields will never exceed their size so subtraction doesnt need to be checked
-            // and they can be unsafely cast
-            unchecked {
-                expiration.bias -= uint96(previousDelegation_.bias);
-                expiration.slope -= uint64(previousDelegation_.slope);
-                expiration.amount -= uint96(previousDelegation_.amount);
-            }
-
-            // Effects
-            expiredDelegations[previousDelegation_.delegatee][previousDelegation_.end] = expiration;
-        }
-
-        {
-            // Calculate new checkpoint
-            DelegateCheckpoint memory newCheckpoint = _calculateCheckpoint({
-                previousCheckpoint_: _lastCheckpoint,
-                tokenId_: previousDelegation_.delegatee,
-                isDeltaPositive_: false,
-                deltaBias_: previousDelegation_.bias,
-                deltaSlope_: previousDelegation_.slope,
-                deltaAmount_: previousDelegation_.amount,
-                checkpointTimestamp_: checkpointTimestamp_,
-                previousDelegationEnd_: previousDelegation_.end
-            });
-
-            // Write new checkpoint
-            _writeCheckpoint({
-                userDelegationCheckpoints_: previousDelegationCheckpoints,
-                accountCheckpointsLength_: accountCheckpointsLength,
-                newCheckpoint_: newCheckpoint,
-                lastCheckpoint_: _lastCheckpoint
-            });
-        }
+        _calculateAndWriteCheckpoint({
+            isDeltaPositive_: false,
+            deltaBias_: previousDelegation_.bias,
+            deltaFixedBias_: previousDelegation_.fixedBias,
+            deltaSlope_: previousDelegation_.slope,
+            deltaAmount_: previousDelegation_.amount,
+            tokenId_: previousDelegation_.delegatee,
+            previousDelegationEnd_: previousDelegation_.end,
+            delegatee_: previousDelegation_.delegatee
+        });
     }
 
     /**
@@ -582,78 +555,162 @@ contract HemiVoteDelegation is DelegationStorageV1, ReentrancyGuardTransient {
      * a delegation is created or changed. It updates checkpoints and expiration records.
      * @param newDelegatee_ The token ID of the new delegatee (0 for no delegation)
      * @param delegatorVeLockInfo_ The normalized lock information of the delegator
-     * @param checkpointTimestamp_ The timestamp for the checkpoint
      */
     function _moveVotingPowerToNewDelegate(
         uint256 newDelegatee_,
-        NormalizedVeHemiLockInfo memory delegatorVeLockInfo_,
-        uint256 checkpointTimestamp_
+        NormalizedVeHemiLockInfo memory delegatorVeLockInfo_
     ) private {
-        // Get the last checkpoint for the new delegate
-        DelegateCheckpoint[] storage newDelegateCheckpoints = delegateCheckpoints[newDelegatee_];
-        uint256 _accountCheckpointsLength = newDelegateCheckpoints.length;
-        DelegateCheckpoint memory _lastCheckpoint = _accountCheckpointsLength == 0
-            ? DelegateCheckpoint(0, 0, 0, 0)
-            : newDelegateCheckpoints[_accountCheckpointsLength - 1];
+        if (delegatorVeLockInfo_.end != 0) {
+            Expiration memory _expiration = expiredDelegations[newDelegatee_][
+                delegatorVeLockInfo_.end
+            ];
 
-        // Handle expiration
-        // Calculations
-        Expiration memory _expiration = expiredDelegations[newDelegatee_][delegatorVeLockInfo_.end];
-
-        // NOTE: All expiration fields will never exceed their size so addition doesnt need to be checked
-        // and can be unsafely cast
-        unchecked {
-            _expiration.bias += uint96(delegatorVeLockInfo_.bias);
-            _expiration.slope += uint64(delegatorVeLockInfo_.slope);
-            _expiration.amount += uint96(delegatorVeLockInfo_.amount);
+            // NOTE: All expiration fields will never exceed their size so addition doesnt need to be checked
+            // and can be unsafely cast
+            unchecked {
+                _expiration.bias += uint96(delegatorVeLockInfo_.bias);
+                _expiration.slope += uint64(delegatorVeLockInfo_.slope);
+                _expiration.amount += uint96(delegatorVeLockInfo_.amount);
+            }
+            // Effects
+            expiredDelegations[newDelegatee_][delegatorVeLockInfo_.end] = _expiration;
         }
-        // Effects
-        expiredDelegations[newDelegatee_][delegatorVeLockInfo_.end] = _expiration;
 
-        // Calculate new checkpoint
-        DelegateCheckpoint memory _newCheckpoint = _calculateCheckpoint({
-            previousCheckpoint_: _lastCheckpoint,
-            tokenId_: newDelegatee_,
+        _calculateAndWriteCheckpoint({
             isDeltaPositive_: true,
+            tokenId_: newDelegatee_,
+            previousDelegationEnd_: 0,
             deltaBias_: delegatorVeLockInfo_.bias,
+            deltaFixedBias_: delegatorVeLockInfo_.fixedBias,
             deltaSlope_: delegatorVeLockInfo_.slope,
             deltaAmount_: delegatorVeLockInfo_.amount,
-            checkpointTimestamp_: checkpointTimestamp_,
-            previousDelegationEnd_: 0
+            delegatee_: newDelegatee_
         });
+
+        // Calculate new checkpoint
+        // DelegateCheckpoint memory _newCheckpoint = _calculateCheckpoint({
+        //     previousCheckpoint_: _lastCheckpoint,
+        //     tokenId_: newDelegatee_,
+        //     isDeltaPositive_: true,
+        //     deltaBias_: delegatorVeLockInfo_.bias,
+        //     deltaFixedBias_: delegatorVeLockInfo_.fixedBias,
+        //     deltaSlope_: delegatorVeLockInfo_.slope,
+        //     deltaAmount_: delegatorVeLockInfo_.amount,
+        //     checkpointTimestamp_: checkpointTimestamp_,
+        //     previousDelegationEnd_: 0
+        // });
 
         // Write new checkpoint
-        _writeCheckpoint({
-            userDelegationCheckpoints_: newDelegateCheckpoints,
-            accountCheckpointsLength_: _accountCheckpointsLength,
-            newCheckpoint_: _newCheckpoint,
-            lastCheckpoint_: _lastCheckpoint
-        });
+        // _writeCheckpoint({
+        //     userDelegationCheckpoints_: newDelegateCheckpoints,
+        //     accountCheckpointsLength_: _accountCheckpointsLength,
+        //     newCheckpoint_: _newCheckpoint,
+        //     lastCheckpoint_: _lastCheckpoint
+        // });
     }
 
-    /**
-     * @notice Write a new checkpoint to the user's checkpoint array
-     * @dev This function either overwrites the last checkpoint if it has the same timestamp,
-     * or pushes a new checkpoint to the array. This ensures efficient storage usage.
-     * @param userDelegationCheckpoints_ The array of checkpoints for the user
-     * @param accountCheckpointsLength_ The current length of the checkpoints array
-     * @param newCheckpoint_ The new checkpoint to write
-     * @param lastCheckpoint_ The last checkpoint in the array
-     */
-    function _writeCheckpoint(
-        DelegateCheckpoint[] storage userDelegationCheckpoints_,
-        uint256 accountCheckpointsLength_,
-        DelegateCheckpoint memory newCheckpoint_,
-        DelegateCheckpoint memory lastCheckpoint_
+    // function _writeCheckpoint(
+    //     DelegateCheckpoint[] storage userDelegationCheckpoints_,
+    //     uint256 accountCheckpointsLength_,
+    //     DelegateCheckpoint memory newCheckpoint_
+    // ) internal {
+    //     // If the newCheckpoint has the same timestamp as the last checkpoint, overwrite it
+    //     if (
+    //         accountCheckpointsLength_ > 0 && lastCheckpoint_.timestamp == newCheckpoint_.timestamp
+    //     ) {
+    //         userDelegationCheckpoints_[accountCheckpointsLength_ - 1] = newCheckpoint_;
+    //     } else {
+    //         // Otherwise, push a new checkpoint
+    //         userDelegationCheckpoints_.push(newCheckpoint_);
+    //     }
+    // }
+
+    function _calculateAndWriteCheckpoint(
+        bool isDeltaPositive_,
+        uint256 deltaBias_,
+        uint256 deltaFixedBias_,
+        uint256 deltaSlope_,
+        uint256 deltaAmount_,
+        uint256 tokenId_,
+        uint256 previousDelegationEnd_,
+        uint256 delegatee_
     ) internal {
+        DelegateCheckpoint memory newCheckpoint_;
+        uint256 _checkpointTimestamp = ((block.timestamp / 1 days) * 1 days) + 1 days;
+
+        DelegateCheckpoint[] storage userDelegationCheckpoints = delegateCheckpoints[delegatee_];
+
+        uint256 _checkpointLength = userDelegationCheckpoints.length;
+        DelegateCheckpoint memory _lastCheckpoint = _checkpointLength == 0
+            ? DelegateCheckpoint(0, 0, 0, 0, 0)
+            : userDelegationCheckpoints[_checkpointLength - 1];
+
+        uint256 _accountCheckpointsLength = userDelegationCheckpoints.length;
+        if (_lastCheckpoint.timestamp == 0) {
+            newCheckpoint_ = DelegateCheckpoint({
+                // can be unsafely cast because values will never exceed uint128 max
+                timestamp: uint64(_checkpointTimestamp),
+                normalizedBias: uint64(deltaBias_),
+                normalizedSlope: uint64(deltaSlope_),
+                totalAmount: uint128(deltaAmount_),
+                fixedBias: uint128(deltaFixedBias_)
+            });
+        } else {
+            newCheckpoint_.timestamp = _lastCheckpoint.timestamp;
+            newCheckpoint_.normalizedBias = _lastCheckpoint.normalizedBias;
+            newCheckpoint_.normalizedSlope = _lastCheckpoint.normalizedSlope;
+            newCheckpoint_.totalAmount = _lastCheckpoint.totalAmount;
+            newCheckpoint_.fixedBias = _lastCheckpoint.fixedBias;
+
+            // All checkpoint fields will never exceed their size so addition and subtraction doesnt need to be checked
+            unchecked {
+                // Add or subtract the delta to the previous checkpoint
+                if (isDeltaPositive_) {
+                    newCheckpoint_.normalizedBias += uint128(deltaBias_);
+                    newCheckpoint_.normalizedSlope += uint64(deltaSlope_);
+                    newCheckpoint_.totalAmount += uint128(deltaAmount_);
+                    newCheckpoint_.fixedBias += uint128(deltaFixedBias_);
+                } else {
+                    // only subtract the weight from this tokenID if it has not already expired in a previous checkpoint
+                    if (previousDelegationEnd_ > _lastCheckpoint.timestamp) {
+                        newCheckpoint_.normalizedBias -= uint128(deltaBias_);
+                        newCheckpoint_.normalizedSlope -= uint64(deltaSlope_);
+                        newCheckpoint_.totalAmount -= uint128(deltaAmount_);
+                        newCheckpoint_.fixedBias -= uint128(deltaFixedBias_);
+                    }
+                }
+
+                {
+                    // If there have been expirations, incorporate the adjustments by subtracting them from the checkpoint
+                    if (newCheckpoint_.timestamp != _checkpointTimestamp) {
+                        (
+                            uint256 totalExpiredBias,
+                            uint256 totalExpiredSlope,
+                            uint256 totalExpiredAmount
+                        ) = _calculateExpirations(
+                                tokenId_,
+                                newCheckpoint_.timestamp,
+                                _checkpointTimestamp,
+                                _lastCheckpoint
+                            );
+
+                        newCheckpoint_.timestamp = uint64(_checkpointTimestamp);
+                        newCheckpoint_.normalizedBias -= uint64(totalExpiredBias);
+                        newCheckpoint_.normalizedSlope -= uint64(totalExpiredSlope);
+                        newCheckpoint_.totalAmount -= uint128(totalExpiredAmount);
+                    }
+                }
+            }
+        }
+
         // If the newCheckpoint has the same timestamp as the last checkpoint, overwrite it
         if (
-            accountCheckpointsLength_ > 0 && lastCheckpoint_.timestamp == newCheckpoint_.timestamp
+            _accountCheckpointsLength > 0 && _lastCheckpoint.timestamp == newCheckpoint_.timestamp
         ) {
-            userDelegationCheckpoints_[accountCheckpointsLength_ - 1] = newCheckpoint_;
+            userDelegationCheckpoints[_accountCheckpointsLength - 1] = newCheckpoint_;
         } else {
             // Otherwise, push a new checkpoint
-            userDelegationCheckpoints_.push(newCheckpoint_);
+            userDelegationCheckpoints.push(newCheckpoint_);
         }
     }
 }
