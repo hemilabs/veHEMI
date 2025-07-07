@@ -96,7 +96,7 @@ contract TestHemiVoteDelegation is Test {
     }
 
     // Test basic delegation functionality
-    function testBasicDelegation() public {
+    function testDelegationBeforeCoolDownStarts() public {
         (uint256 billTokenId, uint256 billSlope) = _createLock(BILL, LOCK_AMOUNT, LOCK_DURATION);
         (uint256 aliceTokenId, uint256 aliceSlope) = _createLock(ALICE, LOCK_AMOUNT, LOCK_DURATION);
 
@@ -106,7 +106,6 @@ contract TestHemiVoteDelegation is Test {
         _delegateAndWarp(BILL, billTokenId, 0);
 
         uint256 selfVotes = hemiVoteDelegation.getVotes(billTokenId);
-        console2.log(" testBasicDelegation ~ selfVotes:", selfVotes);
         assertGt(selfVotes, 0, "Should have voting power when not delegated");
 
         _delegateAndWarp(BILL, billTokenId, aliceTokenId);
@@ -122,7 +121,49 @@ contract TestHemiVoteDelegation is Test {
         assertGt(aliceVotesAfter, aliceInitialVotes, "Alice should have received Bill's votes");
 
         uint256 totalVotesBefore = billInitialVotes + aliceInitialVotes;
-        assertLe(aliceVotesAfter, totalVotesBefore, "Total voting power should not increase");
+        assertEq(aliceVotesAfter, totalVotesBefore, "Total voting power is wrong");
+        uint256 expectedAliceVotes = _calculateExpectedVotes(aliceTokenId, aliceSlope) +
+            _calculateExpectedVotes(billTokenId, billSlope);
+        assertEq(
+            aliceVotesAfter,
+            expectedAliceVotes,
+            "Voting power should not decay more than 5% in one day"
+        );
+    }
+
+    function testDelegationAfterCoolDownStarts() public {
+        (uint256 billTokenId, uint256 billSlope) = _createLock(BILL, LOCK_AMOUNT, LOCK_DURATION);
+        (uint256 aliceTokenId, uint256 aliceSlope) = _createLock(ALICE, LOCK_AMOUNT, LOCK_DURATION);
+
+        uint256 billInitialVotes = hemiVoteDelegation.getVotes(billTokenId);
+        uint256 aliceInitialVotes = hemiVoteDelegation.getVotes(aliceTokenId);
+
+        vm.prank(BILL);
+        stakedHemi.startCooldown(billTokenId);
+        _delegateAndWarp(BILL, billTokenId, 0);
+
+        uint256 selfVotes = hemiVoteDelegation.getVotes(billTokenId);
+        assertGt(selfVotes, 0, "Should have voting power when not delegated");
+
+        _delegateAndWarp(BILL, billTokenId, aliceTokenId);
+
+        assertEq(
+            hemiVoteDelegation.getVotes(billTokenId),
+            0,
+            "Delegator should have no votes after delegation"
+        );
+
+        // Alice should have her own votes plus Bill's votes (with some decay)
+        uint256 aliceVotesAfter = hemiVoteDelegation.getVotes(aliceTokenId);
+        assertGt(aliceVotesAfter, aliceInitialVotes, "Alice should have received Bill's votes");
+
+        uint256 totalVotesBefore = billInitialVotes + aliceInitialVotes;
+        assertApproxEqRel(
+            aliceVotesAfter,
+            totalVotesBefore,
+            0.001e18,
+            "Total voting power is wrong"
+        );
         uint256 expectedAliceVotes = _calculateExpectedVotes(aliceTokenId, aliceSlope) +
             _calculateExpectedVotes(billTokenId, billSlope);
         assertEq(
@@ -143,12 +184,10 @@ contract TestHemiVoteDelegation is Test {
     // Test delegation with expired lock
     function testCantDelegateExpiredLock() public {
         uint256 billTokenId = 1;
-
-        // Warp to just before lock expires
+        vm.startPrank(BILL);
+        stakedHemi.startCooldown(billTokenId);
         uint256 lockEnd = stakedHemi.getLockedBalance(billTokenId).end;
         vm.warp(lockEnd - 1 days);
-
-        vm.startPrank(BILL);
         vm.expectRevert(HemiVoteDelegation.CanNotDelegateExpiredLocks.selector);
         hemiVoteDelegation.delegate(billTokenId, 2);
         vm.stopPrank();
@@ -272,13 +311,21 @@ contract TestHemiVoteDelegation is Test {
         uint256 walterTokenId = 3;
 
         uint256 aliceInitialVotes = hemiVoteDelegation.getVotes(aliceTokenId);
+        console2.log(" testDelegationSwitching ~ aliceInitialVotes:", aliceInitialVotes);
         uint256 walterInitialVotes = hemiVoteDelegation.getVotes(walterTokenId);
+        console2.log(" testDelegationSwitching ~ walterInitialVotes:", walterInitialVotes);
         uint256 billInitialVotes = hemiVoteDelegation.getVotes(billTokenId);
+        console2.log(" testDelegationSwitching ~ billInitialVotes:", billInitialVotes);
 
         _delegateAndWarp(BILL, billTokenId, aliceTokenId);
 
         uint256 aliceVotes = hemiVoteDelegation.getVotes(aliceTokenId);
-        assertGt(aliceVotes, aliceInitialVotes, "Alice should have received Bill's votes");
+        assertEq(hemiVoteDelegation.getVotes(billTokenId), 0, "Bill token should be 0");
+        assertEq(
+            aliceVotes,
+            aliceInitialVotes + billInitialVotes,
+            "Alice should have received Bill's votes"
+        );
 
         // Switch delegation to Walter
         vm.startPrank(BILL);
@@ -286,15 +333,16 @@ contract TestHemiVoteDelegation is Test {
         vm.stopPrank();
 
         // Alice should still have delegate votes until next epoch
-        assertGt(
+        assertEq(
             hemiVoteDelegation.getVotes(aliceTokenId),
-            aliceInitialVotes,
+            aliceInitialVotes + billInitialVotes,
             "Alice should still have votes until next epoch"
         );
         // Walter should have his own votes but not Bill's votes yet
         uint256 walterVotes = hemiVoteDelegation.getVotes(walterTokenId);
-        assertTrue(
-            walterVotes > 0 && walterVotes < walterInitialVotes,
+        assertEq(
+            walterVotes,
+            walterInitialVotes,
             "Walter should have his own votes but not Bill's votes yet"
         );
 
@@ -302,14 +350,20 @@ contract TestHemiVoteDelegation is Test {
         uint256 delegationStarts = ((block.timestamp / 1 days) * 1 days) + 1 days;
         vm.warp(delegationStarts + 1 days);
 
-        assertLt(
-            hemiVoteDelegation.getVotes(aliceTokenId),
+        assertEq(hemiVoteDelegation.getVotes(billTokenId), 0, "Bill token should be 0");
+
+        assertEq(
+            aliceInitialVotes,
             aliceInitialVotes,
             "Alice should have her original votes back after delegation switch"
         );
         // Walter should have his own votes plus Bill's votes (with some decay)
         uint256 walterVotesAfter = hemiVoteDelegation.getVotes(walterTokenId);
-        assertGt(walterVotesAfter, walterInitialVotes, "Walter should have received Bill's votes");
+        assertEq(
+            walterVotesAfter,
+            walterInitialVotes + billInitialVotes,
+            "Walter should have received Bill's votes"
+        );
 
         // Bill should have no votes after delegation
         assertEq(
@@ -318,17 +372,15 @@ contract TestHemiVoteDelegation is Test {
             "Bill should have no votes after delegation"
         );
 
-        // Total voting power should be preserved (with minor decay due to time)
-        uint256 totalVotesAfter = hemiVoteDelegation.getVotes(aliceTokenId) +
-            walterVotesAfter +
-            hemiVoteDelegation.getVotes(billTokenId);
+        //Now walter delegate all his votes to alice.
+
+        _delegateAndWarp(WALTER, walterTokenId, aliceTokenId);
+
+        // Alice should have total voting of all three
+        uint256 totalVotesAfter = hemiVoteDelegation.getVotes(aliceTokenId);
+
         uint256 totalVotesBefore = aliceInitialVotes + walterInitialVotes + billInitialVotes;
-        assertLe(totalVotesAfter, totalVotesBefore, "Total voting power should not increase");
-        assertGt(
-            totalVotesAfter,
-            (totalVotesBefore * 95) / 100,
-            "Voting power should not decay more than 5% in one day"
-        );
+        assertEq(totalVotesAfter, totalVotesBefore, "Total voting power should not increase");
     }
 
     // Test multiple delegations to same delegatee
@@ -577,11 +629,13 @@ contract TestHemiVoteDelegation is Test {
 
         // Bill delegates to Alice
         vm.startPrank(BILL);
+        stakedHemi.startCooldown(billTokenId);
         hemiVoteDelegation.delegate(billTokenId, aliceTokenId);
         vm.stopPrank();
 
         // Walter delegates to Bob
         vm.startPrank(WALTER);
+        stakedHemi.startCooldown(walterTokenId);
         hemiVoteDelegation.delegate(walterTokenId, bobTokenId);
         vm.stopPrank();
 

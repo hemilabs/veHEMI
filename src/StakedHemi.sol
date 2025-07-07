@@ -660,7 +660,6 @@ contract StakedHemi is
             createdBy: _oldLocked.createdBy
         });
 
-        uint256 _slope = _oldLocked.amount.toUint256() / MAX_TIME;
         totalFixedBias -= _oldLocked.fixedBias;
         _newLocked.end = uint96(((block.timestamp + _newLocked.cooldownPeriod) / WEEK) * WEEK);
 
