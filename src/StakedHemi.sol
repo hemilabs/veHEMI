@@ -17,10 +17,10 @@ import {StakedHemiStorageV1} from "./storage/StakedHemiStorageV1.sol";
  * @notice Vesting and yield system based on Curve's veCRV and AERO voting escrow mechanism. Users lock HEMI for up to 4 years for boosted stHEMI. Each lock is a non-transferable NFT.
  */
 contract StakedHemi is
-    StakedHemiStorageV1,
     ERC721EnumerableUpgradeable,
     OwnableUpgradeable,
-    ReentrancyGuardTransient
+    ReentrancyGuardTransient,
+    StakedHemiStorageV1
 {
     using SafeCast for uint256;
     using SafeCast for int128;

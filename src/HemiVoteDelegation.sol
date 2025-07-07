@@ -16,7 +16,7 @@ import {console2} from "forge-std/console2.sol";
  * (next day boundary) and expire when the delegator's lock expires.
  * @dev Based on Curve's veCRV delegation mechanism with adaptations for veHemi
  */
-contract HemiVoteDelegation is DelegationStorageV1, ReentrancyGuardTransient {
+contract HemiVoteDelegation is ReentrancyGuardTransient, DelegationStorageV1 {
     using SafeCast for uint256;
     using SafeCast for int128;
 
