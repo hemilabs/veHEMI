@@ -483,6 +483,7 @@ contract StakedHemiTest is Test {
         vm.warp(block.timestamp + lockDuration + 1);
         bal = stakedHemi.balanceOfNFT(tokenId);
         assertEq(bal, 0, "balanceOfNFT should be 0 after lock expires");
+        assertEq(stakedHemi.totalSupply(), 0, "totalSupply should be 0 after lock expires");
     }
 
     function testBalanceOfNFTAt() public {
