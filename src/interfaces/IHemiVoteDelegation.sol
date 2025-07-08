@@ -14,10 +14,10 @@ interface IHemiVoteDelegation {
     /// A representation of a delegate and all its delegators at a particular timestamp
     struct DelegateCheckpoint {
         uint128 normalizedBias;
+        uint128 fixedBias; // for v2+ use
         uint128 totalAmount;
-        // _________
-        uint128 normalizedSlope;
-        uint128 timestamp; // Rounded up to the nearest day
+        uint64 normalizedSlope;
+        uint64 timestamp;
     }
 
     /// Represents the total bias, slope, and Hemi amount of all accounts that expire for a specific delegate

@@ -64,8 +64,8 @@ contract StakedHemi is
         require(owner_ != address(0), "Owner is zero");
         __ERC721_init("veHemi", "veHemi");
         __Ownable_init_unchained(owner_);
-        pointHistory[0].blockNumber = block.number;
-        pointHistory[0].timestamp = block.timestamp;
+        pointHistory[0].blockNumber = uint64(block.number);
+        pointHistory[0].timestamp = uint64(block.timestamp);
         pointHistory[0].amount = 0;
         nextTokenId = 1;
         rewardDistributor = IRewardDistributor(rewardDistributor_); // this may be 0x0
@@ -107,7 +107,7 @@ contract StakedHemi is
         uint256 amount_,
         uint256 lockDuration_
     ) external returns (uint256 _tokenId) {
-        _tokenId = _createLock(amount_, lockDuration_, msg.sender);
+        _tokenId = _createLock(amount_, lockDuration_, _msgSender());
     }
 
     /**
@@ -424,15 +424,16 @@ contract StakedHemi is
         Point memory _lastPoint = Point({
             bias: 0,
             slope: 0,
-            timestamp: block.timestamp,
-            blockNumber: block.number,
-            amount: 0
+            timestamp: uint64(block.timestamp),
+            blockNumber: uint64(block.number),
+            amount: 0,
+            fixedBias: 0
         });
         if (_epoch > 0) {
             _lastPoint = pointHistory[_epoch];
         } else {
             // contract may have some initial balance before first checkpoint
-            _lastPoint.amount = HEMI.balanceOf(address(this));
+            _lastPoint.amount = uint128(HEMI.balanceOf(address(this)));
         }
         uint256 _lastCheckpoint = _lastPoint.timestamp;
         Point memory _initialLastPoint = Point({
@@ -440,7 +441,8 @@ contract StakedHemi is
             slope: _lastPoint.slope,
             timestamp: _lastPoint.timestamp,
             blockNumber: _lastPoint.blockNumber,
-            amount: _lastPoint.amount
+            amount: _lastPoint.amount,
+            fixedBias: 0
         });
         uint256 _blockSlope;
         if (block.timestamp > _lastPoint.timestamp) {
@@ -473,15 +475,16 @@ contract StakedHemi is
                     _lastPoint.slope = 0;
                 }
                 _lastCheckpoint = t_i;
-                _lastPoint.timestamp = t_i;
-                _lastPoint.blockNumber =
+                _lastPoint.timestamp = uint64(t_i);
+                _lastPoint.blockNumber = uint64(
                     _initialLastPoint.blockNumber +
-                    (_blockSlope * (t_i - _initialLastPoint.timestamp)) /
-                    MULTIPLIER;
+                        (_blockSlope * (t_i - _initialLastPoint.timestamp)) /
+                        MULTIPLIER
+                );
                 _epoch += 1;
                 if (t_i == block.timestamp) {
-                    _lastPoint.blockNumber = block.number;
-                    _lastPoint.amount = HEMI.balanceOf(address(this));
+                    _lastPoint.blockNumber = uint64(block.number);
+                    _lastPoint.amount = uint128(HEMI.balanceOf(address(this)));
                     break;
                 } else {
                     pointHistory[_epoch] = _lastPoint;
@@ -541,9 +544,9 @@ contract StakedHemi is
             // If timestamp of last user point is the same, overwrite the last user point
             // Else record the new user point into history
             // Exclude epoch 0
-            _newUserPoint.timestamp = block.timestamp;
-            _newUserPoint.blockNumber = block.number;
-            _newUserPoint.amount = locked[tokenId_].amount.toUint256();
+            _newUserPoint.timestamp = uint64(block.timestamp);
+            _newUserPoint.blockNumber = uint64(block.number);
+            _newUserPoint.amount = uint128(locked[tokenId_].amount.toUint256());
             uint256 _userEpoch = userPointEpoch[tokenId_];
             if (
                 _userEpoch != 0 &&
@@ -581,6 +584,8 @@ contract StakedHemi is
         _updateReward(_tokenId);
 
         _depositFor(_tokenId, amount_, unlockTime, locked[_tokenId]);
+
+        provider[_tokenId] = _msgSender();
 
         return _tokenId;
     }

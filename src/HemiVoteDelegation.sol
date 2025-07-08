@@ -184,10 +184,11 @@ contract HemiVoteDelegation is ReentrancyGuardTransient, DelegationStorageV1 {
         /// NOTE: Checkpoint values will always be larger than or equal to expired values
         unchecked {
             _calculatedCheckpoint = DelegateCheckpoint({
-                timestamp: uint128(_checkpointTimestamp),
+                timestamp: uint64(_checkpointTimestamp),
                 normalizedBias: uint128(_lastCheckpoint.normalizedBias - totalExpiredBias_),
-                normalizedSlope: uint128(_lastCheckpoint.normalizedSlope - totalExpiredSlope_),
-                totalAmount: uint128(_lastCheckpoint.totalAmount - totalExpiredAmount_)
+                normalizedSlope: uint64(_lastCheckpoint.normalizedSlope - totalExpiredSlope_),
+                totalAmount: uint128(_lastCheckpoint.totalAmount - totalExpiredAmount_),
+                fixedBias: 0
             });
         }
     }
@@ -233,10 +234,11 @@ contract HemiVoteDelegation is ReentrancyGuardTransient, DelegationStorageV1 {
             return
                 DelegateCheckpoint({
                     // can be unsafely cast because values will never exceed uint128 max
-                    timestamp: uint128(checkpointTimestamp_),
+                    timestamp: uint64(checkpointTimestamp_),
                     normalizedBias: uint128(deltaBias_),
-                    normalizedSlope: uint128(deltaSlope_),
-                    totalAmount: uint128(deltaAmount_)
+                    normalizedSlope: uint64(deltaSlope_),
+                    totalAmount: uint128(deltaAmount_),
+                    fixedBias: 0
                 });
         }
 
@@ -250,13 +252,13 @@ contract HemiVoteDelegation is ReentrancyGuardTransient, DelegationStorageV1 {
             // Add or subtract the delta to the previous checkpoint
             if (isDeltaPositive_) {
                 _newCheckpoint.normalizedBias += uint128(deltaBias_);
-                _newCheckpoint.normalizedSlope += uint128(deltaSlope_);
+                _newCheckpoint.normalizedSlope += uint64(deltaSlope_);
                 _newCheckpoint.totalAmount += uint128(deltaAmount_);
             } else {
                 // only subtract the weight from this tokenID if it has not already expired in a previous checkpoint
                 if (previousDelegationEnd_ > previousCheckpoint_.timestamp) {
                     _newCheckpoint.normalizedBias -= uint128(deltaBias_);
-                    _newCheckpoint.normalizedSlope -= uint128(deltaSlope_);
+                    _newCheckpoint.normalizedSlope -= uint64(deltaSlope_);
                     _newCheckpoint.totalAmount -= uint128(deltaAmount_);
                 }
             }
@@ -274,9 +276,9 @@ contract HemiVoteDelegation is ReentrancyGuardTransient, DelegationStorageV1 {
                         previousCheckpoint_
                     );
 
-                _newCheckpoint.timestamp = uint128(checkpointTimestamp_);
+                _newCheckpoint.timestamp = uint64(checkpointTimestamp_);
                 _newCheckpoint.normalizedBias -= uint128(totalExpiredBias);
-                _newCheckpoint.normalizedSlope -= uint128(totalExpiredSlope);
+                _newCheckpoint.normalizedSlope -= uint64(totalExpiredSlope);
                 _newCheckpoint.totalAmount -= uint128(totalExpiredAmount);
             }
         }
@@ -593,7 +595,13 @@ contract HemiVoteDelegation is ReentrancyGuardTransient, DelegationStorageV1 {
         DelegateCheckpoint[] storage newDelegateCheckpoints = delegateCheckpoints[newDelegatee_];
         uint256 _accountCheckpointsLength = newDelegateCheckpoints.length;
         DelegateCheckpoint memory _lastCheckpoint = _accountCheckpointsLength == 0
-            ? DelegateCheckpoint(0, 0, 0, 0)
+            ? DelegateCheckpoint({
+                timestamp: 0,
+                normalizedBias: 0,
+                normalizedSlope: 0,
+                totalAmount: 0,
+                fixedBias: 0
+            })
             : newDelegateCheckpoints[_accountCheckpointsLength - 1];
 
         // Handle expiration
