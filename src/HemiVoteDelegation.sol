@@ -7,7 +7,6 @@ import {IStakedHemi} from "./interfaces/IStakedHemi.sol";
 import {DelegationStorageV1} from "./storage/DelegationStorageV1.sol";
 import {SafeCast} from "./libraries/SafeCast.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
-import {console2} from "forge-std/console2.sol";
 
 /**
  * @title HemiVoteDelegation
@@ -66,7 +65,7 @@ contract HemiVoteDelegation is ReentrancyGuardTransient, DelegationStorageV1 {
      * @param delegator_ The token ID to delegate from (must be owned by msg.sender)
      * @param delegatee_ The token ID to delegate to (0 for no delegation, same as delegator_ for self-delegation)
      */
-    function delegate(uint256 delegator_, uint256 delegatee_) external {
+    function delegate(uint256 delegator_, uint256 delegatee_) external nonReentrant {
         if (stakedHemi.ownerOf(delegator_) != msg.sender) revert NotOwner();
         _delegate(delegator_, delegatee_);
     }
@@ -89,7 +88,7 @@ contract HemiVoteDelegation is ReentrancyGuardTransient, DelegationStorageV1 {
         uint8 v,
         bytes32 r,
         bytes32 s
-    ) external {
+    ) external nonReentrant {
         bytes32 domainSeparator = keccak256(
             abi.encode(
                 DOMAIN_TYPEHASH,
@@ -107,7 +106,6 @@ contract HemiVoteDelegation is ReentrancyGuardTransient, DelegationStorageV1 {
         bytes32 digest = keccak256(abi.encodePacked("\x19\x01", domainSeparator, structHash));
 
         address _signer = ecrecover(digest, v, r, s);
-        console2.log(" _signer:", _signer);
         if (_signer == address(0)) revert InvalidSignature();
         if (stakedHemi.ownerOf(delegator_) != _signer) revert NotOwner();
         if (nonce != nonces[_signer]++) revert InvalidNonce();
@@ -197,7 +195,7 @@ contract HemiVoteDelegation is ReentrancyGuardTransient, DelegationStorageV1 {
     /// @dev Long time periods between checkpoints can increase gas costs for delegate() and castVote()
     /// @dev See _calculateExpirations
     /// @param tokenId_ tokenId of delegatee
-    function writeNewCheckpointForExpiredDelegations(uint256 tokenId_) external {
+    function writeNewCheckpointForExpiredDelegations(uint256 tokenId_) external nonReentrant {
         DelegateCheckpoint memory _newCheckpoint = calculateExpiredDelegations(tokenId_);
 
         if (_newCheckpoint.timestamp == 0) revert NoExpirations();

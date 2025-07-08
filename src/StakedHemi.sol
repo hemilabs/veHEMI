@@ -106,7 +106,7 @@ contract StakedHemi is
     function createLock(
         uint256 amount_,
         uint256 lockDuration_
-    ) external returns (uint256 _tokenId) {
+    ) external nonReentrant returns (uint256 _tokenId) {
         _tokenId = _createLock(amount_, lockDuration_, _msgSender());
     }
 
@@ -121,7 +121,7 @@ contract StakedHemi is
         uint256 amount_,
         uint256 lockDuration_,
         address account_
-    ) external returns (uint256 _tokenId) {
+    ) external nonReentrant returns (uint256 _tokenId) {
         if (account_ == address(0)) revert AddressIsNull();
         _tokenId = _createLock(amount_, lockDuration_, account_);
     }

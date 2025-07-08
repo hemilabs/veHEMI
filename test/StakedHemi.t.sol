@@ -105,7 +105,6 @@ contract StakedHemiTest is Test {
 
     function testNonTransferableNFT() public {
         uint256 amount = 1 ether;
-        uint256 unlockTime = block.timestamp + 1 weeks;
 
         vm.prank(user);
         uint256 tokenId = stakedHemi.createLock(amount, 1 weeks);
@@ -167,7 +166,6 @@ contract StakedHemiTest is Test {
     function testDepositForIncreasesLockAmount() public {
         uint256 amount = 10 ether;
         uint256 extra = 5 ether;
-        uint256 unlockTime = block.timestamp + 4 weeks;
 
         // User creates a lock
         vm.prank(user);
@@ -194,7 +192,6 @@ contract StakedHemiTest is Test {
     function testIncreaseAmountIncreasesLockAmount() public {
         uint256 amount = 20 ether;
         uint256 extra = 7 ether;
-        uint256 unlockTime = block.timestamp + 8 weeks;
 
         // User creates a lock
         vm.prank(user);
@@ -461,7 +458,6 @@ contract StakedHemiTest is Test {
     function testIncreaseUnlockTimeRevertsIfNotGreater() public {
         vm.startPrank(user);
         uint256 tokenId = stakedHemi.createLock(100 ether, 365 days);
-        (, uint256 oldEnd) = stakedHemi.locked(tokenId);
         // Try to set to the same or lower end
         vm.expectRevert(StakedHemi.NewLockDurationNotGreater.selector);
         stakedHemi.increaseUnlockTime(tokenId, 100 days);
