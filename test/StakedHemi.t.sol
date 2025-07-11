@@ -24,9 +24,6 @@ contract StakedHemiTest is Test {
 
     uint256 MAX_TIME = 4 * 365 days;
     uint256 WEEK = 7 days;
-    uint256 BALANCE_WHEN_MAX_TIME = 999171462654082575;
-    uint256 BALANCE_WHEN_HALF_TIME = 495746805179602575;
-    uint256 BALANCE_WHEN_1_YEAR = 245746805209282575;
 
     struct LockedBalance {
         int128 amount;
@@ -34,7 +31,6 @@ contract StakedHemiTest is Test {
     }
 
     function setUp() public {
-        vm.createSelectFork(vm.envString("FORK_NODE_URL"), vm.envUint("FORK_BLOCK_NUMBER"));
         hemi = new ERC20Mock();
         hemi.mint(user, 1_000 ether);
 
@@ -484,12 +480,17 @@ contract StakedHemiTest is Test {
     function testTotalSupply() public {
         // Initially should be 0
         assertEq(stakedHemi.totalSupply(), 0, "Initial total supply should be 0");
+        uint256 amountIn = 1 ether;
+        uint256 lockDuration = MAX_TIME;
+        uint256 user1Slope = amountIn / MAX_TIME;
 
         vm.prank(user);
-        uint256 tokenId1 = stakedHemi.createLock(1 ether, MAX_TIME, 0);
+        uint256 tokenId1 = stakedHemi.createLock(1 ether, lockDuration, 0);
+        uint256 expectedBalance = user1Slope *
+            (stakedHemi.getLockedBalance(tokenId1).end - block.timestamp);
 
         uint256 balanceOfTokenId1 = stakedHemi.balanceOfNFT(tokenId1);
-        assertEq(balanceOfTokenId1, BALANCE_WHEN_MAX_TIME, "user1 nft balance is not correct");
+        assertEq(balanceOfTokenId1, expectedBalance, "user1 nft balance is not correct");
         assertEq(
             stakedHemi.totalSupply(),
             balanceOfTokenId1,
@@ -498,13 +499,17 @@ contract StakedHemiTest is Test {
 
         // Create another lock
         address user2 = address(0xCAFE);
-        hemi.mint(user2, 2 ether);
+        hemi.mint(user2, amountIn);
         vm.prank(user2);
         hemi.approve(address(stakedHemi), type(uint256).max);
+        uint256 user2LockDuration = MAX_TIME / 2;
+        uint256 user2Slope = amountIn / MAX_TIME;
         vm.prank(user2);
-        uint256 tokenId2 = stakedHemi.createLock(1 ether, MAX_TIME / 2, 0);
+        uint256 tokenId2 = stakedHemi.createLock(amountIn, user2LockDuration, 0);
+        uint256 expectedBalance2 = user2Slope *
+            (stakedHemi.getLockedBalance(tokenId2).end - block.timestamp);
         uint256 balanceOfTokenId2 = stakedHemi.balanceOfNFT(tokenId2);
-        assertEq(balanceOfTokenId2, BALANCE_WHEN_HALF_TIME, "user2 nft balance is not correct");
+        assertEq(balanceOfTokenId2, expectedBalance2, "user2 nft balance is not correct");
 
         assertEq(
             stakedHemi.totalSupply(),
@@ -513,9 +518,13 @@ contract StakedHemiTest is Test {
         );
 
         vm.warp(block.timestamp + 1 * 365 days);
+
+        expectedBalance2 =
+            user2Slope *
+            (stakedHemi.getLockedBalance(tokenId2).end - block.timestamp);
         balanceOfTokenId2 = stakedHemi.balanceOfNFT(tokenId2);
         balanceOfTokenId1 = stakedHemi.balanceOfNFT(tokenId1);
-        assertEq(balanceOfTokenId2, BALANCE_WHEN_1_YEAR, "user2 nft balance is not correct");
+        assertEq(balanceOfTokenId2, expectedBalance2, "user2 nft balance is not correct");
         assertGt(balanceOfTokenId1, 0, "Total supply should equal locked amount");
 
         assertEq(
@@ -527,26 +536,33 @@ contract StakedHemiTest is Test {
 
     function testSupplyAt() public {
         uint256 startTime = block.timestamp;
+        uint256 amountIn = 1 ether;
+        uint256 lockDuration = MAX_TIME;
+        uint256 slope = amountIn / lockDuration;
 
         // Initially should be 0
         assertEq(stakedHemi.totalSupplyAt(startTime), 0, "Initial total supply should be 0");
 
         // Create a lock
         vm.prank(user);
-        stakedHemi.createLock(1 ether, MAX_TIME, 0);
+        uint256 tokenId = stakedHemi.createLock(1 ether, MAX_TIME, 0);
+
+        uint256 expectedBalance = slope *
+            (stakedHemi.getLockedBalance(tokenId).end - block.timestamp);
 
         // At creation time
         assertEq(
             stakedHemi.totalSupplyAt(startTime),
-            BALANCE_WHEN_MAX_TIME,
+            expectedBalance,
             "Total supply at creation should be locked amount"
         );
 
         // At future time (before expiry)
         uint256 futureTime = startTime + (2 * 365 days);
+        expectedBalance = slope * (stakedHemi.getLockedBalance(tokenId).end - futureTime);
         assertEq(
             stakedHemi.totalSupplyAt(futureTime),
-            499171462713442575,
+            expectedBalance,
             "Total supply should remain same before expiry"
         );
 
