@@ -16,7 +16,8 @@ interface IStakedHemi is IERC721 {
 
     struct LockedBalance {
         int128 amount;
-        uint256 end;
+        uint64 end;
+        uint192 extraData;
     }
 
     // --- Events ---
@@ -34,24 +35,37 @@ interface IStakedHemi is IERC721 {
         uint256 amount,
         uint256 timestamp
     );
-    event Supply(uint256 prevSupply, uint256 supply);
+    event Lock(
+        address indexed provider,
+        address indexed account,
+        uint256 indexed tokenId,
+        uint256 amount,
+        uint256 start,
+        uint256 lockTime,
+        uint256 extraData
+    );
     event Checkpoint(uint256 epoch, uint256 tokenId, LockedBalance oldLock, LockedBalance newLock);
 
     // --- External/Public Functions ---
-    function initialize(address owner, address rewardDistributor) external;
+    function initialize(address owner) external;
     function checkpoint() external;
-    function createLock(uint256 amount, uint256 lockDuration) external returns (uint256 tokenId);
+    function createLock(
+        uint256 amount,
+        uint256 lockDuration,
+        uint256 extraData
+    ) external returns (uint256 tokenId);
     function createLockFor(
         uint256 amount,
         uint256 lockDuration,
-        address account
+        address account,
+        uint256 extraData
     ) external returns (uint256 tokenId);
     function increaseAmount(uint256 tokenId, uint256 amount) external;
     function increaseUnlockTime(uint256 tokenId, uint256 lockDuration) external;
     function withdraw(uint256 tokenId) external;
     function getUserPoint(uint256 tokenId, uint256 epoch) external view returns (Point memory);
     function getLockedBalance(uint256 tokenId) external view returns (LockedBalance memory);
-    function supply() external view returns (uint256);
+    function totalLocked() external view returns (uint256);
     function epoch() external view returns (uint256);
     function userPointEpoch(uint256 tokenId) external view returns (uint256);
     function balanceOfNFT(uint256 tokenId) external view returns (uint256);
