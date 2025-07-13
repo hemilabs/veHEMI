@@ -10,7 +10,6 @@ import {IERC721Errors} from "@openzeppelin/contracts/interfaces/draft-IERC6093.s
 import {MockERC20} from "./mocks/MockERC20.sol";
 import {IHemiVoteDelegation} from "../src/interfaces/IHemiVoteDelegation.sol";
 import "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
-import {console2} from "forge-std/console2.sol";
 
 contract TestHemiVoteDelegation is Test {
     address constant BILL = address(342_958_293_847_234_897);
@@ -67,7 +66,7 @@ contract TestHemiVoteDelegation is Test {
         hemiToken.mint(account, amount);
         vm.startPrank(account);
         hemiToken.approve(address(stakedHemi), amount);
-        tokenId = stakedHemi.createLock(amount, duration);
+        tokenId = stakedHemi.createLock(amount, duration, 0);
         vm.stopPrank();
         slope = amount / MAX_TIME;
     }

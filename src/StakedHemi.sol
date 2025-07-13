@@ -4,12 +4,10 @@ pragma solidity ^0.8.29;
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {OwnableUpgradeable} from "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
 import {SafeCast} from "./libraries/SafeCast.sol";
-import {console} from "forge-std/console.sol";
 import {IERC721} from "@openzeppelin/contracts/token/ERC721/IERC721.sol";
 import {IRewardDistributor} from "./interfaces/IRewardDistributor.sol";
 import {ERC721EnumerableUpgradeable, ERC721Upgradeable} from "@openzeppelin/contracts-upgradeable/token/ERC721/extensions/ERC721EnumerableUpgradeable.sol";
 import {ReentrancyGuardTransient} from "@openzeppelin/contracts/utils/ReentrancyGuardTransient.sol";
-
 import {StakedHemiStorageV1} from "./storage/StakedHemiStorageV1.sol";
 
 /**
@@ -43,7 +41,6 @@ contract StakedHemi is
     error NoExistingLock();
     error NotOwner();
     error NewLockDurationNotGreater();
-    error NonExistentToken();
     error BlockNotReached();
 
     // --- Events ---
@@ -58,9 +55,8 @@ contract StakedHemi is
     /**
      * @notice Initializes the contract with the owner and reward distributor addresses
      * @param owner_ The address of the contract owner
-     * @param rewardDistributor_ The address of the reward distributor contract
      */
-    function initialize(address owner_, address rewardDistributor_) external initializer {
+    function initialize(address owner_) external initializer {
         require(owner_ != address(0), "Owner is zero");
         __ERC721_init("veHemi", "veHemi");
         __Ownable_init_unchained(owner_);
@@ -68,7 +64,6 @@ contract StakedHemi is
         pointHistory[0].timestamp = uint64(block.timestamp);
         pointHistory[0].amount = 0;
         nextTokenId = 1;
-        rewardDistributor = IRewardDistributor(rewardDistributor_); // this may be 0x0
     }
 
     /**
@@ -94,7 +89,7 @@ contract StakedHemi is
      * @notice Checkpoints the contract state to update global and user point histories
      */
     function checkpoint() external nonReentrant {
-        _checkpoint(0, LockedBalance(0, 0), LockedBalance(0, 0));
+        _checkpoint(0, LockedBalance(0, 0, 0), LockedBalance(0, 0, 0));
     }
 
     /**
@@ -105,9 +100,10 @@ contract StakedHemi is
      */
     function createLock(
         uint256 amount_,
-        uint256 lockDuration_
+        uint256 lockDuration_,
+        uint256 extraData_
     ) external nonReentrant returns (uint256 _tokenId) {
-        _tokenId = _createLock(amount_, lockDuration_, _msgSender());
+        _tokenId = _createLock(amount_, lockDuration_, _msgSender(), extraData_);
     }
 
     /**
@@ -120,10 +116,11 @@ contract StakedHemi is
     function createLockFor(
         uint256 amount_,
         uint256 lockDuration_,
-        address account_
+        address account_,
+        uint256 extraData_
     ) external nonReentrant returns (uint256 _tokenId) {
         if (account_ == address(0)) revert AddressIsNull();
-        _tokenId = _createLock(amount_, lockDuration_, account_);
+        _tokenId = _createLock(amount_, lockDuration_, account_, extraData_);
     }
 
     /**
@@ -169,7 +166,7 @@ contract StakedHemi is
         if (_unlockTime > block.timestamp + MAX_TIME) revert LockDurationTooLong();
         if (_unlockTime <= _oldLocked.end) revert NewLockDurationNotGreater();
         _updateReward(tokenId_);
-        _depositFor(tokenId_, 0, _unlockTime, _oldLocked);
+        _depositFor(tokenId_, 0, uint64(_unlockTime), _oldLocked);
     }
 
     /**
@@ -248,19 +245,18 @@ contract StakedHemi is
 
         // Burn the NFT
         _burn(tokenId_);
-        locked[tokenId_] = LockedBalance(0, 0);
-        uint256 _supplyBefore = supply;
-        supply = _supplyBefore - _amount;
+        locked[tokenId_] = LockedBalance(0, 0, 0);
+        uint256 _lockedBefore = totalLocked;
+        totalLocked = _lockedBefore - _amount;
 
         // oldLocked can have either expired <= timestamp or zero end
         // oldLocked has only 0 end
         // Both can have >= 0 amount
-        _checkpoint(tokenId_, _oldLocked, LockedBalance(0, 0));
+        _checkpoint(tokenId_, _oldLocked, LockedBalance(0, 0, 0));
 
         HEMI.transfer(_sender, _amount);
 
         emit Withdraw(_sender, tokenId_, _amount, block.timestamp);
-        emit Supply(_supplyBefore, _supplyBefore - _amount);
     }
 
     /**
@@ -288,6 +284,7 @@ contract StakedHemi is
         // # Binary search
         uint256 _min = 0;
         uint256 _max = max_epoch_;
+
         for (uint256 i = 0; i < 128; i++) {
             // # Will be always enough for 128-bit numbers
             if (_min >= _max) {
@@ -534,7 +531,7 @@ contract StakedHemi is
             }
 
             if (newLocked_.end > block.timestamp) {
-                // update slope if new lock is greater than old lock and is not permanent
+                // update slope if new lock is greater than old lock
                 if ((newLocked_.end > oldLocked_.end)) {
                     _newDslope -= _newUserPoint.slope; // old slope disappeared at this point
                     slopeChanges[newLocked_.end] = _newDslope;
@@ -571,7 +568,8 @@ contract StakedHemi is
     function _createLock(
         uint256 amount_,
         uint256 lockDuration_,
-        address account_
+        address account_,
+        uint256 extraData_
     ) internal returns (uint256 _tokenId) {
         uint256 unlockTime = ((block.timestamp + lockDuration_) / WEEK) * WEEK; // Lock time is rounded down to weeks
 
@@ -583,9 +581,12 @@ contract StakedHemi is
         _mint(account_, _tokenId);
         _updateReward(_tokenId);
 
-        _depositFor(_tokenId, amount_, unlockTime, locked[_tokenId]);
+        _depositFor(_tokenId, amount_, uint64(unlockTime), locked[_tokenId]);
 
         provider[_tokenId] = _msgSender();
+        locked[_tokenId].extraData = uint192(extraData_);
+
+        emit Lock(_msgSender(), account_, _tokenId, amount_, block.timestamp, lockDuration_, 0);
 
         return _tokenId;
     }
@@ -600,11 +601,11 @@ contract StakedHemi is
     function _depositFor(
         uint256 tokenId_,
         uint256 amount_,
-        uint256 unlockTime_,
+        uint64 unlockTime_,
         LockedBalance memory oldLocked_
     ) internal {
-        uint256 _supplyBefore = supply;
-        supply = _supplyBefore + amount_;
+        uint256 _lockedBefore = totalLocked;
+        totalLocked = _lockedBefore + amount_;
 
         // Set newLocked to _oldLocked without mangling memory
         LockedBalance memory _newLocked;
@@ -717,7 +718,8 @@ contract StakedHemi is
      */
     function _updateReward(uint256 tokenId_) internal {
         if (address(rewardDistributor) != address(0)) {
-            rewardDistributor.updateRewards(tokenId_);
+            // fail silently
+            try rewardDistributor.updateRewards(tokenId_) {} catch {}
         }
     }
 

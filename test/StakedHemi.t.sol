@@ -20,11 +20,10 @@ contract StakedHemiTest is Test {
     ERC20Mock hemi;
     StakedHemi stakedHemi;
     address user = address(0xBEEF);
+    address alice = address(0x1122);
 
     uint256 MAX_TIME = 4 * 365 days;
-    uint256 BALANCE_WHEN_MAX_TIME = 999171462654082575;
-    uint256 BALANCE_WHEN_HALF_TIME = 495746805179602575;
-    uint256 BALANCE_WHEN_1_YEAR = 245746805209282575;
+    uint256 WEEK = 7 days;
 
     struct LockedBalance {
         int128 amount;
@@ -32,7 +31,6 @@ contract StakedHemiTest is Test {
     }
 
     function setUp() public {
-        vm.createSelectFork(vm.envString("FORK_NODE_URL"), vm.envUint("FORK_BLOCK_NUMBER"));
         hemi = new ERC20Mock();
         hemi.mint(user, 1_000 ether);
 
@@ -55,22 +53,27 @@ contract StakedHemiTest is Test {
         uint256 unlockTime = currentTimestamp + 2 * 365 days;
 
         vm.prank(user);
-        uint256 tokenId = stakedHemi.createLock(amount, 2 * 365 days);
+        uint256 tokenId = stakedHemi.createLock(amount, 2 * 365 days, 0);
 
         // Check NFT ownership
         assertEq(stakedHemi.ownerOf(tokenId), user);
 
         // Check locked balance
-        (int128 lockedAmount, uint256 lockedEnd) = stakedHemi.locked(tokenId);
+        (int128 lockedAmount, uint256 lockedEnd, ) = stakedHemi.locked(tokenId);
         assertEq(uint256(uint128(lockedAmount)), amount, "Locked amount mismatch");
-        assertEq(
-            lockedEnd,
-            (unlockTime / stakedHemi.WEEK()) * stakedHemi.WEEK(),
-            "Unlock time mismatch"
-        );
-
+        assertEq(lockedEnd, (unlockTime / WEEK) * WEEK, "Unlock time mismatch");
         // Check supply
-        assertEq(stakedHemi.supply(), amount, "Supply mismatch");
+        assertEq(stakedHemi.totalLocked(), amount, "Supply mismatch");
+    }
+
+    function testCreateLockFor() public {
+        uint256 amount = 100 ether;
+
+        vm.prank(user);
+        uint256 tokenId = stakedHemi.createLockFor(amount, 2 * 365 days, alice, 0);
+
+        // Check NFT ownership
+        assertEq(stakedHemi.ownerOf(tokenId), alice);
     }
 
     function testWithdraw() public {
@@ -79,7 +82,7 @@ contract StakedHemiTest is Test {
         uint256 unlockTime = nowTs + 2 weeks;
 
         vm.prank(user);
-        uint256 tokenId = stakedHemi.createLock(amount, 2 weeks);
+        uint256 tokenId = stakedHemi.createLock(amount, 2 weeks, 0);
 
         // Fast forward past unlock
         vm.warp(unlockTime + 1);
@@ -98,7 +101,7 @@ contract StakedHemiTest is Test {
         assertEq(userBalanceAfter, userBalanceBefore + amount, "Withdraw did not return tokens");
 
         // Lock should be cleared
-        (int128 lockedAmount, uint256 lockedEnd) = stakedHemi.locked(tokenId);
+        (int128 lockedAmount, uint256 lockedEnd, ) = stakedHemi.locked(tokenId);
         assertEq(uint256(uint128(lockedAmount)), 0, "Lock not cleared");
         assertEq(lockedEnd, 0, "Lock end not cleared");
     }
@@ -107,7 +110,7 @@ contract StakedHemiTest is Test {
         uint256 amount = 1 ether;
 
         vm.prank(user);
-        uint256 tokenId = stakedHemi.createLock(amount, 1 weeks);
+        uint256 tokenId = stakedHemi.createLock(amount, 1 weeks, 0);
 
         // Attempt transferFrom
         vm.prank(user);
@@ -136,10 +139,10 @@ contract StakedHemiTest is Test {
 
         // User creates two locks (two NFTs)
         vm.prank(user);
-        uint256 tokenId1 = stakedHemi.createLock(amount1, 1 weeks);
+        uint256 tokenId1 = stakedHemi.createLock(amount1, 1 weeks, 0);
 
         vm.prank(user);
-        uint256 tokenId2 = stakedHemi.createLock(amount2, 1 weeks);
+        uint256 tokenId2 = stakedHemi.createLock(amount2, 1 weeks, 0);
 
         // Check balanceOf (number of NFTs owned)
         uint256 balance = stakedHemi.balanceOf(user);
@@ -169,7 +172,7 @@ contract StakedHemiTest is Test {
 
         // User creates a lock
         vm.prank(user);
-        uint256 tokenId = stakedHemi.createLock(amount, 4 weeks);
+        uint256 tokenId = stakedHemi.createLock(amount, 4 weeks, 0);
 
         // Another user deposits for this lock
         address depositor = address(0xCAFE);
@@ -181,7 +184,7 @@ contract StakedHemiTest is Test {
         stakedHemi.increaseAmount(tokenId, extra);
 
         // Check locked amount increased
-        (int128 lockedAmount, ) = stakedHemi.locked(tokenId);
+        (int128 lockedAmount, , ) = stakedHemi.locked(tokenId);
         assertEq(
             uint256(uint128(lockedAmount)),
             amount + extra,
@@ -195,14 +198,14 @@ contract StakedHemiTest is Test {
 
         // User creates a lock
         vm.prank(user);
-        uint256 tokenId = stakedHemi.createLock(amount, 8 weeks);
+        uint256 tokenId = stakedHemi.createLock(amount, 8 weeks, 0);
 
         // User increases their lock amount
         vm.prank(user);
         stakedHemi.increaseAmount(tokenId, extra);
 
         // Check locked amount increased
-        (int128 lockedAmount, ) = stakedHemi.locked(tokenId);
+        (int128 lockedAmount, , ) = stakedHemi.locked(tokenId);
         assertEq(
             uint256(uint128(lockedAmount)),
             amount + extra,
@@ -214,15 +217,14 @@ contract StakedHemiTest is Test {
         uint256 amount_ = 10 ether;
         // User creates a lock
         vm.prank(user);
-        uint256 tokenId_ = stakedHemi.createLock(amount_, 4 * 52 weeks);
+        uint256 tokenId_ = stakedHemi.createLock(amount_, 4 * 52 weeks, 0);
 
         // Call checkpoint with old and new locked (simulate increase)
-        (int128 oldAmount_, uint256 oldEnd_) = stakedHemi.locked(tokenId_);
+        (int128 oldAmount_, uint256 oldEnd_, ) = stakedHemi.locked(tokenId_);
         uint256 extraAmount_ = 1 ether;
 
         // Only owner can call internal, so use a helper or make _checkpoint public for testing
         vm.prank(address(stakedHemi));
-        console.log("epoch", stakedHemi.epoch());
 
         // User epoch should increase
         uint256 userEpochAfter_ = stakedHemi.userPointEpoch(tokenId_);
@@ -232,12 +234,12 @@ contract StakedHemiTest is Test {
         assertEq(stakedHemi.epoch(), 52, "Global epoch should be 52 after checkpoint");
         IStakedHemi.LockedBalance memory newLocked_ = IStakedHemi.LockedBalance(
             oldAmount_ + int128(int256(extraAmount_)),
-            oldEnd_
+            uint64(oldEnd_),
+            0
         );
         vm.prank(user);
         stakedHemi.increaseAmount(tokenId_, extraAmount_);
         userEpochAfter_ = stakedHemi.userPointEpoch(tokenId_);
-        console.log(" testCheckpointUpdatesUserPointHistory ~ userEpochAfter_:", userEpochAfter_);
         assertEq(userEpochAfter_, 2, "User epoch not incremented");
 
         // User point history should be updated
@@ -250,10 +252,9 @@ contract StakedHemiTest is Test {
         // User creates a lock
         vm.startPrank(user);
 
-        uint256 initialWeekNumber = block.timestamp / stakedHemi.WEEK();
+        uint256 initialWeekNumber = block.timestamp / WEEK;
 
-        console.log("initialWeekNumber", initialWeekNumber);
-        uint256 tokenId_ = stakedHemi.createLock(amount_, 4 * 52 weeks);
+        uint256 tokenId_ = stakedHemi.createLock(amount_, 4 * 52 weeks, 0);
         uint256 userEpochBefore = stakedHemi.userPointEpoch(tokenId_);
         assertEq(userEpochBefore, 1, "user epoch not 1");
         // Increase amount through normal methods
@@ -262,154 +263,100 @@ contract StakedHemiTest is Test {
         vm.warp(block.timestamp + 8 days);
         vm.roll(block.number + 1);
         stakedHemi.increaseAmount(tokenId_, extraAmount_);
-        uint256 expectedGlobalEpoch = block.timestamp / stakedHemi.WEEK() - initialWeekNumber;
-        console.log(" testEpoch ~ expectedGlobalEpoch:", expectedGlobalEpoch);
-        console.log("current week", (block.timestamp / stakedHemi.WEEK()));
-        console.log("global epoch", stakedHemi.epoch());
+        uint256 expectedGlobalEpoch = block.timestamp / WEEK - initialWeekNumber;
         // assertEq(stakedHemi.epoch(), expectedGlobalEpoch + 2, "global epoch not incremented");
         uint256 newUserEpoch_ = stakedHemi.userPointEpoch(tokenId_);
-        console.log(" testEpoch ~ newUserEpoch_:", newUserEpoch_);
         // assertEq(newUserEpoch_, 2, "user epoch not incremented");
 
         vm.warp(block.timestamp + 8 weeks);
         vm.roll(block.number + 1);
         stakedHemi.increaseAmount(tokenId_, extraAmount_);
-        expectedGlobalEpoch = block.timestamp / stakedHemi.WEEK() - initialWeekNumber;
-        console.log(" testEpoch ~ expectedGlobalEpoch:", expectedGlobalEpoch);
-        console.log("current week", (block.timestamp / stakedHemi.WEEK()));
-        console.log("global epoch", stakedHemi.epoch());
+        expectedGlobalEpoch = block.timestamp / WEEK - initialWeekNumber;
         // assertEq(stakedHemi.epoch(), expectedGlobalEpoch + 2, "global epoch not incremented");
         newUserEpoch_ = stakedHemi.userPointEpoch(tokenId_);
-        console.log(" testEpoch ~ newUserEpoch_:", newUserEpoch_);
 
         vm.warp(block.timestamp + 12 weeks);
         vm.roll(block.number + 1);
         stakedHemi.increaseAmount(tokenId_, extraAmount_);
-        expectedGlobalEpoch = block.timestamp / stakedHemi.WEEK() - initialWeekNumber;
-        console.log(" testEpoch ~ expectedGlobalEpoch:", expectedGlobalEpoch);
-        console.log("current week", (block.timestamp / stakedHemi.WEEK()));
-        console.log("global epoch", stakedHemi.epoch());
+        expectedGlobalEpoch = block.timestamp / WEEK - initialWeekNumber;
         // assertEq(stakedHemi.epoch(), expectedGlobalEpoch + 2, "global epoch not incremented");
         newUserEpoch_ = stakedHemi.userPointEpoch(tokenId_);
-        console.log(" testEpoch ~ newUserEpoch_:", newUserEpoch_);
 
         vm.warp(block.timestamp + 15 weeks);
         vm.roll(block.number + 1);
         stakedHemi.increaseAmount(tokenId_, extraAmount_);
-        expectedGlobalEpoch = block.timestamp / stakedHemi.WEEK() - initialWeekNumber;
-        console.log(" testEpoch ~ expectedGlobalEpoch:", expectedGlobalEpoch);
-        console.log("current week", (block.timestamp / stakedHemi.WEEK()));
-        console.log("global epoch", stakedHemi.epoch());
+        expectedGlobalEpoch = block.timestamp / WEEK - initialWeekNumber;
         // assertEq(stakedHemi.epoch(), expectedGlobalEpoch + 2, "global epoch not incremented");
         newUserEpoch_ = stakedHemi.userPointEpoch(tokenId_);
-        console.log(" testEpoch ~ newUserEpoch_:", newUserEpoch_);
 
         vm.warp(block.timestamp + 16 weeks);
         vm.roll(block.number + 1);
         stakedHemi.increaseAmount(tokenId_, extraAmount_);
-        expectedGlobalEpoch = block.timestamp / stakedHemi.WEEK() - initialWeekNumber;
-        console.log(" testEpoch ~ expectedGlobalEpoch:", expectedGlobalEpoch);
-        console.log("current week", (block.timestamp / stakedHemi.WEEK()));
-        console.log("global epoch", stakedHemi.epoch());
+        expectedGlobalEpoch = block.timestamp / WEEK - initialWeekNumber;
         // assertEq(stakedHemi.epoch(), expectedGlobalEpoch + 2, "global epoch not incremented");
         newUserEpoch_ = stakedHemi.userPointEpoch(tokenId_);
-        console.log(" testEpoch ~ newUserEpoch_:", newUserEpoch_);
 
         vm.warp(block.timestamp + 19 weeks);
         vm.roll(block.number + 1);
         stakedHemi.increaseAmount(tokenId_, extraAmount_);
-        expectedGlobalEpoch = block.timestamp / stakedHemi.WEEK() - initialWeekNumber;
-        console.log(" testEpoch ~ expectedGlobalEpoch:", expectedGlobalEpoch);
-        console.log("current week", (block.timestamp / stakedHemi.WEEK()));
-        console.log("global epoch", stakedHemi.epoch());
+        expectedGlobalEpoch = block.timestamp / WEEK - initialWeekNumber;
         // assertEq(stakedHemi.epoch(), expectedGlobalEpoch + 2, "global epoch not incremented");
         newUserEpoch_ = stakedHemi.userPointEpoch(tokenId_);
-        console.log(" testEpoch ~ newUserEpoch_:", newUserEpoch_);
 
         vm.warp(block.timestamp + 23 weeks);
         vm.roll(block.number + 1);
         stakedHemi.increaseAmount(tokenId_, extraAmount_);
-        expectedGlobalEpoch = block.timestamp / stakedHemi.WEEK() - initialWeekNumber;
-        console.log(" testEpoch ~ expectedGlobalEpoch:", expectedGlobalEpoch);
-        console.log("current week", (block.timestamp / stakedHemi.WEEK()));
-        console.log("global epoch", stakedHemi.epoch());
+        expectedGlobalEpoch = block.timestamp / WEEK - initialWeekNumber;
         // assertEq(stakedHemi.epoch(), expectedGlobalEpoch + 2, "global epoch not incremented");
         newUserEpoch_ = stakedHemi.userPointEpoch(tokenId_);
-        console.log(" testEpoch ~ newUserEpoch_:", newUserEpoch_);
 
         vm.warp(block.timestamp + 29 weeks);
         vm.roll(block.number + 1);
         stakedHemi.increaseAmount(tokenId_, extraAmount_);
-        expectedGlobalEpoch = block.timestamp / stakedHemi.WEEK() - initialWeekNumber;
-        console.log(" testEpoch ~ expectedGlobalEpoch:", expectedGlobalEpoch);
-        console.log("current week", (block.timestamp / stakedHemi.WEEK()));
-        console.log("global epoch", stakedHemi.epoch());
+        expectedGlobalEpoch = block.timestamp / WEEK - initialWeekNumber;
         // assertEq(stakedHemi.epoch(), expectedGlobalEpoch + 2, "global epoch not incremented");
         newUserEpoch_ = stakedHemi.userPointEpoch(tokenId_);
-        console.log(" testEpoch ~ newUserEpoch_:", newUserEpoch_);
 
         vm.warp(block.timestamp + 39 weeks);
         vm.roll(block.number + 1);
         stakedHemi.increaseAmount(tokenId_, extraAmount_);
-        expectedGlobalEpoch = block.timestamp / stakedHemi.WEEK() - initialWeekNumber;
-        console.log(" testEpoch ~ expectedGlobalEpoch:", expectedGlobalEpoch);
-        console.log("current week", (block.timestamp / stakedHemi.WEEK()));
-        console.log("global epoch", stakedHemi.epoch());
+        expectedGlobalEpoch = block.timestamp / WEEK - initialWeekNumber;
         // assertEq(stakedHemi.epoch(), expectedGlobalEpoch + 2, "global epoch not incremented");
         newUserEpoch_ = stakedHemi.userPointEpoch(tokenId_);
-        console.log(" testEpoch ~ newUserEpoch_:", newUserEpoch_);
 
         vm.warp(block.timestamp + 49 weeks);
         vm.roll(block.number + 1);
-        stakedHemi.createLock(amount_, 4 * 52 weeks);
-        expectedGlobalEpoch = block.timestamp / stakedHemi.WEEK() - initialWeekNumber;
-        console.log(" testEpoch ~ expectedGlobalEpoch:", expectedGlobalEpoch);
-        console.log("current week", (block.timestamp / stakedHemi.WEEK()));
-        console.log("global epoch", stakedHemi.epoch());
+        stakedHemi.createLock(amount_, 4 * 52 weeks, 0);
+        expectedGlobalEpoch = block.timestamp / WEEK - initialWeekNumber;
         // assertEq(stakedHemi.epoch(), expectedGlobalEpoch + 2, "global epoch not incremented");
         newUserEpoch_ = stakedHemi.userPointEpoch(tokenId_);
-        console.log(" testEpoch ~ newUserEpoch_:", newUserEpoch_);
 
         vm.warp(block.timestamp + 71 weeks);
         vm.roll(block.number + 1);
-        stakedHemi.createLock(amount_, 4 * 52 weeks);
-        expectedGlobalEpoch = block.timestamp / stakedHemi.WEEK() - initialWeekNumber;
-        console.log(" testEpoch ~ expectedGlobalEpoch:", expectedGlobalEpoch);
-        console.log("current week", (block.timestamp / stakedHemi.WEEK()));
-        console.log("global epoch", stakedHemi.epoch());
+        stakedHemi.createLock(amount_, 4 * 52 weeks, 0);
+        expectedGlobalEpoch = block.timestamp / WEEK - initialWeekNumber;
         // assertEq(stakedHemi.epoch(), expectedGlobalEpoch + 2, "global epoch not incremented");
         newUserEpoch_ = stakedHemi.userPointEpoch(tokenId_);
-        console.log(" testEpoch ~ newUserEpoch_:", newUserEpoch_);
 
         vm.warp(block.timestamp + 75 weeks);
         vm.roll(block.number + 1);
-        stakedHemi.createLock(amount_, 4 * 52 weeks);
-        expectedGlobalEpoch = block.timestamp / stakedHemi.WEEK() - initialWeekNumber;
-        console.log(" testEpoch ~ expectedGlobalEpoch:", expectedGlobalEpoch);
-        console.log("current week", (block.timestamp / stakedHemi.WEEK()));
-        console.log("global epoch", stakedHemi.epoch());
+        stakedHemi.createLock(amount_, 4 * 52 weeks, 0);
+        expectedGlobalEpoch = block.timestamp / WEEK - initialWeekNumber;
         // assertEq(stakedHemi.epoch(), expectedGlobalEpoch + 2, "global epoch not incremented");
         newUserEpoch_ = stakedHemi.userPointEpoch(tokenId_);
-        console.log(" testEpoch ~ newUserEpoch_:", newUserEpoch_);
 
         vm.warp(block.timestamp + 91 weeks);
         vm.roll(block.number + 1);
-        stakedHemi.createLock(amount_, 4 * 52 weeks);
-        expectedGlobalEpoch = block.timestamp / stakedHemi.WEEK() - initialWeekNumber;
-        console.log(" testEpoch ~ expectedGlobalEpoch:", expectedGlobalEpoch);
-        console.log("current week", (block.timestamp / stakedHemi.WEEK()));
-        console.log("global epoch", stakedHemi.epoch());
+        stakedHemi.createLock(amount_, 4 * 52 weeks, 0);
+        expectedGlobalEpoch = block.timestamp / WEEK - initialWeekNumber;
         // assertEq(stakedHemi.epoch(), expectedGlobalEpoch + 2, "global epoch not incremented");
         newUserEpoch_ = stakedHemi.userPointEpoch(tokenId_);
-        console.log(" testEpoch ~ newUserEpoch_:", newUserEpoch_);
 
         // assertEq(newUserEpoch_, 2, "user epoch not incremented");
 
-        // console.log("current week", (block.timestamp / stakedHemi.WEEK()));
         // newUserEpoch_ = stakedHemi.userPointEpoch(tokenId_);
         // assertEq(newUserEpoch_, 3, "user epoch not incremented");
-        // expectedGlobalEpoch = block.timestamp / stakedHemi.WEEK() - initialWeekNumber;
-        // console.log("current week", (block.timestamp / stakedHemi.WEEK()));
+        // expectedGlobalEpoch = block.timestamp / WEEK - initialWeekNumber;
         // assertEq(stakedHemi.epoch(), expectedGlobalEpoch, "global epoch not incremented");
 
         // vm.warp(block.timestamp + 5 weeks);
@@ -425,7 +372,7 @@ contract StakedHemiTest is Test {
         // Create a lock for 1 year
         uint256 amount = 100 ether;
         uint256 oneYear = 365 days;
-        uint256 tokenId = stakedHemi.createLock(amount, oneYear);
+        uint256 tokenId = stakedHemi.createLock(amount, oneYear, 0);
 
         // Fast forward half a year
         vm.warp(block.timestamp + 182 days);
@@ -435,9 +382,8 @@ contract StakedHemiTest is Test {
         stakedHemi.increaseUnlockTime(tokenId, newDuration);
 
         // Check that the lock's end is updated
-        (, uint256 end) = stakedHemi.locked(tokenId);
-        uint256 expectedUnlockTime = ((block.timestamp + newDuration) / stakedHemi.WEEK()) *
-            stakedHemi.WEEK();
+        (, uint256 end, ) = stakedHemi.locked(tokenId);
+        uint256 expectedUnlockTime = ((block.timestamp + newDuration) / WEEK) * WEEK;
         assertEq(end, expectedUnlockTime);
 
         vm.stopPrank();
@@ -445,7 +391,7 @@ contract StakedHemiTest is Test {
 
     function testIncreaseUnlockTimeRevertsIfNotOwner() public {
         vm.startPrank(user);
-        uint256 tokenId = stakedHemi.createLock(100 ether, 365 days);
+        uint256 tokenId = stakedHemi.createLock(100 ether, 365 days, 0);
         vm.stopPrank();
 
         // Try from another address
@@ -457,7 +403,7 @@ contract StakedHemiTest is Test {
 
     function testIncreaseUnlockTimeRevertsIfNotGreater() public {
         vm.startPrank(user);
-        uint256 tokenId = stakedHemi.createLock(100 ether, 365 days);
+        uint256 tokenId = stakedHemi.createLock(100 ether, 365 days, 0);
         // Try to set to the same or lower end
         vm.expectRevert(StakedHemi.NewLockDurationNotGreater.selector);
         stakedHemi.increaseUnlockTime(tokenId, 100 days);
@@ -468,7 +414,7 @@ contract StakedHemiTest is Test {
         uint256 amount = 100 ether;
         uint256 lockDuration = 4 weeks;
         vm.prank(user);
-        uint256 tokenId = stakedHemi.createLock(amount, lockDuration);
+        uint256 tokenId = stakedHemi.createLock(amount, lockDuration, 0);
 
         // Should return the full amount right after creation
         uint256 bal = stakedHemi.balanceOfNFT(tokenId);
@@ -487,7 +433,7 @@ contract StakedHemiTest is Test {
         uint256 lockDuration = 4 weeks;
         uint256 start = block.timestamp;
         vm.prank(user);
-        uint256 tokenId = stakedHemi.createLock(amount, lockDuration);
+        uint256 tokenId = stakedHemi.createLock(amount, lockDuration, 0);
 
         // At creation time
         uint256 balAtStart = stakedHemi.balanceOfNFTAt(tokenId, start);
@@ -534,12 +480,17 @@ contract StakedHemiTest is Test {
     function testTotalSupply() public {
         // Initially should be 0
         assertEq(stakedHemi.totalSupply(), 0, "Initial total supply should be 0");
+        uint256 amountIn = 1 ether;
+        uint256 lockDuration = MAX_TIME;
+        uint256 user1Slope = amountIn / MAX_TIME;
 
         vm.prank(user);
-        uint256 tokenId1 = stakedHemi.createLock(1 ether, MAX_TIME);
+        uint256 tokenId1 = stakedHemi.createLock(1 ether, lockDuration, 0);
+        uint256 expectedBalance = user1Slope *
+            (stakedHemi.getLockedBalance(tokenId1).end - block.timestamp);
 
         uint256 balanceOfTokenId1 = stakedHemi.balanceOfNFT(tokenId1);
-        assertEq(balanceOfTokenId1, BALANCE_WHEN_MAX_TIME, "user1 nft balance is not correct");
+        assertEq(balanceOfTokenId1, expectedBalance, "user1 nft balance is not correct");
         assertEq(
             stakedHemi.totalSupply(),
             balanceOfTokenId1,
@@ -548,13 +499,17 @@ contract StakedHemiTest is Test {
 
         // Create another lock
         address user2 = address(0xCAFE);
-        hemi.mint(user2, 2 ether);
+        hemi.mint(user2, amountIn);
         vm.prank(user2);
         hemi.approve(address(stakedHemi), type(uint256).max);
+        uint256 user2LockDuration = MAX_TIME / 2;
+        uint256 user2Slope = amountIn / MAX_TIME;
         vm.prank(user2);
-        uint256 tokenId2 = stakedHemi.createLock(1 ether, MAX_TIME / 2);
+        uint256 tokenId2 = stakedHemi.createLock(amountIn, user2LockDuration, 0);
+        uint256 expectedBalance2 = user2Slope *
+            (stakedHemi.getLockedBalance(tokenId2).end - block.timestamp);
         uint256 balanceOfTokenId2 = stakedHemi.balanceOfNFT(tokenId2);
-        assertEq(balanceOfTokenId2, BALANCE_WHEN_HALF_TIME, "user2 nft balance is not correct");
+        assertEq(balanceOfTokenId2, expectedBalance2, "user2 nft balance is not correct");
 
         assertEq(
             stakedHemi.totalSupply(),
@@ -563,9 +518,13 @@ contract StakedHemiTest is Test {
         );
 
         vm.warp(block.timestamp + 1 * 365 days);
+
+        expectedBalance2 =
+            user2Slope *
+            (stakedHemi.getLockedBalance(tokenId2).end - block.timestamp);
         balanceOfTokenId2 = stakedHemi.balanceOfNFT(tokenId2);
         balanceOfTokenId1 = stakedHemi.balanceOfNFT(tokenId1);
-        assertEq(balanceOfTokenId2, BALANCE_WHEN_1_YEAR, "user2 nft balance is not correct");
+        assertEq(balanceOfTokenId2, expectedBalance2, "user2 nft balance is not correct");
         assertGt(balanceOfTokenId1, 0, "Total supply should equal locked amount");
 
         assertEq(
@@ -577,26 +536,33 @@ contract StakedHemiTest is Test {
 
     function testSupplyAt() public {
         uint256 startTime = block.timestamp;
+        uint256 amountIn = 1 ether;
+        uint256 lockDuration = MAX_TIME;
+        uint256 slope = amountIn / lockDuration;
 
         // Initially should be 0
         assertEq(stakedHemi.totalSupplyAt(startTime), 0, "Initial total supply should be 0");
 
         // Create a lock
         vm.prank(user);
-        stakedHemi.createLock(1 ether, MAX_TIME);
+        uint256 tokenId = stakedHemi.createLock(1 ether, MAX_TIME, 0);
+
+        uint256 expectedBalance = slope *
+            (stakedHemi.getLockedBalance(tokenId).end - block.timestamp);
 
         // At creation time
         assertEq(
             stakedHemi.totalSupplyAt(startTime),
-            BALANCE_WHEN_MAX_TIME,
+            expectedBalance,
             "Total supply at creation should be locked amount"
         );
 
         // At future time (before expiry)
         uint256 futureTime = startTime + (2 * 365 days);
+        expectedBalance = slope * (stakedHemi.getLockedBalance(tokenId).end - futureTime);
         assertEq(
             stakedHemi.totalSupplyAt(futureTime),
-            499171462713442575,
+            expectedBalance,
             "Total supply should remain same before expiry"
         );
 
@@ -613,17 +579,45 @@ contract StakedHemiTest is Test {
 
         // Create a lock
         vm.prank(user);
-        stakedHemi.createLock(1 ether, MAX_TIME);
+        stakedHemi.createLock(1 ether, MAX_TIME, 0);
 
         vm.warp(block.timestamp + 100 days);
-
-        uint256 timestamp_ = block.timestamp;
-
-        uint256 supplyAt_ = stakedHemi.totalSupply();
-
+        uint256 t1 = block.timestamp;
+        uint256 supplyAtT1 = stakedHemi.totalSupply();
         vm.warp(block.timestamp + 200 days);
 
+        vm.prank(user);
+        stakedHemi.createLock(1 ether, MAX_TIME, 0);
+        vm.warp(block.timestamp + 10);
+
         // At creation time
-        assertEq(stakedHemi.totalSupplyAt(timestamp_), supplyAt_, "Total at past is not correct");
+        assertEq(stakedHemi.totalSupplyAt(t1), supplyAtT1, "Total at past is not correct");
+    }
+
+    function testPastSupplyAtBlock() public {
+        uint256 blockNumber = block.number;
+
+        // Initially should be 0
+        assertEq(
+            stakedHemi.totalSupplyAtBlock(blockNumber - 1),
+            0,
+            "Initial total supply should be 0"
+        );
+
+        // Create a lock
+        vm.prank(user);
+        stakedHemi.createLock(1 ether, MAX_TIME, 0);
+        uint256 b1 = block.number;
+        uint256 supplyAtT1 = stakedHemi.totalSupply();
+
+        vm.warp(block.timestamp + 200 days);
+        vm.roll(block.number + (200 days / 10));
+
+        vm.prank(user);
+        stakedHemi.createLock(1 ether, MAX_TIME, 0);
+        vm.warp(block.timestamp + 10);
+        vm.roll(block.number + 1);
+
+        assertEq(stakedHemi.totalSupplyAtBlock(b1), supplyAtT1, "Total at past is not correct");
     }
 }

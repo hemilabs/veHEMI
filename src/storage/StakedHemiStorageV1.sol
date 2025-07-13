@@ -8,7 +8,7 @@ import {IRewardDistributor} from "../interfaces/IRewardDistributor.sol";
 abstract contract StakedHemiStorageV1 is IStakedHemi {
     IERC20 public immutable HEMI;
     // --- State ---
-    uint256 public supply;
+    uint256 public totalLocked;
     uint256 public epoch;
     uint256 public nextTokenId;
 
