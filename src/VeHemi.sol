@@ -9,17 +9,17 @@ import {IRewardDistributor} from "./interfaces/IRewardDistributor.sol";
 import {IHemiVoteDelegation} from "./interfaces/IHemiVoteDelegation.sol";
 import {ERC721EnumerableUpgradeable, ERC721Upgradeable} from "@openzeppelin/contracts-upgradeable/token/ERC721/extensions/ERC721EnumerableUpgradeable.sol";
 import {ReentrancyGuardTransient} from "@openzeppelin/contracts/utils/ReentrancyGuardTransient.sol";
-import {StakedHemiStorageV1} from "./storage/StakedHemiStorageV1.sol";
+import {VeHemiStorageV1} from "./storage/VeHemiStorageV1.sol";
 
 /**
- * @title StakedHemi (veHemi)
- * @notice Vesting and yield system based on Curve's veCRV and AERO voting escrow mechanism. Users lock HEMI for up to 4 years for boosted stHEMI. Each lock is a non-transferable NFT.
+ * @title  veHemi
+ * @notice Vesting and yield system based on Curve's veCRV and AERO voting escrow mechanism. Users lock HEMI for up to 4 years for boosted veHEMI.
  */
-contract StakedHemi is
+contract VeHemi is
     ERC721EnumerableUpgradeable,
     OwnableUpgradeable,
     ReentrancyGuardTransient,
-    StakedHemiStorageV1
+    VeHemiStorageV1
 {
     using SafeCast for uint256;
     using SafeCast for int128;

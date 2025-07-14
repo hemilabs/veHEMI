@@ -5,7 +5,7 @@ import {IERC721} from "@openzeppelin/contracts/token/ERC721/IERC721.sol";
 import {IHemiVoteDelegation} from "./IHemiVoteDelegation.sol";
 import {IRewardDistributor} from "./IRewardDistributor.sol";
 
-interface IStakedHemi is IERC721 {
+interface IVeHemi is IERC721 {
     // --- Structs ---
     struct Point {
         int128 bias;
