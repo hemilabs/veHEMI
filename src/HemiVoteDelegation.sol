@@ -47,6 +47,7 @@ contract HemiVoteDelegation is ReentrancyGuardTransient, DelegationStorageV1 {
     error InvalidSignature();
     error InvalidNonce();
     error SignatureExpired();
+    error InvalidDelegatee();
 
     /**
      * @notice Constructor to initialize the vote delegation contract
@@ -373,9 +374,12 @@ contract HemiVoteDelegation is ReentrancyGuardTransient, DelegationStorageV1 {
     }
 
     function _delegate(uint256 delegator_, uint256 delegatee_) internal {
-        if (delegatee_ != 0 && stakedHemi.ownerOf(delegatee_) == address(0))
-            revert NonExistentToken();
-        if (delegatee_ == delegator_) delegatee_ = 0;
+        if (delegatee_ == 0) revert InvalidDelegatee();
+        if (stakedHemi.ownerOf(delegatee_) == address(0)) revert NonExistentToken();
+
+        if (delegations[delegator_].firstDelegationTimestamp == 0 && delegator_ == delegatee_)
+            return;
+
         if (delegations[delegator_].delegatee == delegatee_) return;
 
         Delegation memory _previousDelegation = delegations[delegator_];

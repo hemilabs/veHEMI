@@ -6,6 +6,7 @@ import {OwnableUpgradeable} from "@openzeppelin/contracts-upgradeable/access/Own
 import {SafeCast} from "./libraries/SafeCast.sol";
 import {IERC721} from "@openzeppelin/contracts/token/ERC721/IERC721.sol";
 import {IRewardDistributor} from "./interfaces/IRewardDistributor.sol";
+import {IHemiVoteDelegation} from "./interfaces/IHemiVoteDelegation.sol";
 import {ERC721EnumerableUpgradeable, ERC721Upgradeable} from "@openzeppelin/contracts-upgradeable/token/ERC721/extensions/ERC721EnumerableUpgradeable.sol";
 import {ReentrancyGuardTransient} from "@openzeppelin/contracts/utils/ReentrancyGuardTransient.sol";
 import {StakedHemiStorageV1} from "./storage/StakedHemiStorageV1.sol";
@@ -89,7 +90,7 @@ contract StakedHemi is
      * @notice Checkpoints the contract state to update global and user point histories
      */
     function checkpoint() external nonReentrant {
-        _checkpoint(0, LockedBalance(0, 0, 0), LockedBalance(0, 0, 0));
+        _checkpoint(0, LockedBalance(0, 0), LockedBalance(0, 0));
     }
 
     /**
@@ -100,10 +101,9 @@ contract StakedHemi is
      */
     function createLock(
         uint256 amount_,
-        uint256 lockDuration_,
-        uint256 extraData_
+        uint256 lockDuration_
     ) external nonReentrant returns (uint256 _tokenId) {
-        _tokenId = _createLock(amount_, lockDuration_, _msgSender(), extraData_);
+        _tokenId = _createLock(amount_, lockDuration_, _msgSender(), true);
     }
 
     /**
@@ -117,10 +117,10 @@ contract StakedHemi is
         uint256 amount_,
         uint256 lockDuration_,
         address account_,
-        uint256 extraData_
+        bool transferable_
     ) external nonReentrant returns (uint256 _tokenId) {
         if (account_ == address(0)) revert AddressIsNull();
-        _tokenId = _createLock(amount_, lockDuration_, account_, extraData_);
+        _tokenId = _createLock(amount_, lockDuration_, account_, transferable_);
     }
 
     /**
@@ -223,11 +223,23 @@ contract StakedHemi is
     /**
      * @notice Update the reward distributor contract address
      * @dev Only callable by the contract owner. Can be set to address(0) to disable rewards.
-     * @param rewardDistributor_ The new reward distributor contract address
+     * @param newRewardDistributor_ The new reward distributor contract address
      */
-    function updateRewardDistributor(address rewardDistributor_) external onlyOwner {
+    function updateRewardDistributor(IRewardDistributor newRewardDistributor_) external onlyOwner {
         // Allowed to set to 0x0
-        rewardDistributor = IRewardDistributor(rewardDistributor_);
+        IRewardDistributor _oldRewardDistributor = rewardDistributor;
+        rewardDistributor = newRewardDistributor_;
+        emit RewardDistributorUpdated(_oldRewardDistributor, newRewardDistributor_);
+    }
+
+    /**
+     * @notice Update the vote delegation contract address
+     * @param newVoteDelegation_ The new vote delegation contract address
+     */
+    function updateVoteDelegation(IHemiVoteDelegation newVoteDelegation_) external onlyOwner {
+        IHemiVoteDelegation _oldVoteDelegation = voteDelegation;
+        voteDelegation = newVoteDelegation_;
+        emit VoteDelegationUpdated(_oldVoteDelegation, newVoteDelegation_);
     }
 
     /**
@@ -236,7 +248,6 @@ contract StakedHemi is
      */
     function withdraw(uint256 tokenId_) external nonReentrant {
         address _sender = _msgSender();
-        // TODO: should check approvedOrOwner?
         if (_ownerOf(tokenId_) != _sender) revert NotOwner();
         _updateReward(tokenId_);
         LockedBalance memory _oldLocked = locked[tokenId_];
@@ -245,14 +256,14 @@ contract StakedHemi is
 
         // Burn the NFT
         _burn(tokenId_);
-        locked[tokenId_] = LockedBalance(0, 0, 0);
+        locked[tokenId_] = LockedBalance(0, 0);
         uint256 _lockedBefore = totalLocked;
         totalLocked = _lockedBefore - _amount;
 
         // oldLocked can have either expired <= timestamp or zero end
         // oldLocked has only 0 end
         // Both can have >= 0 amount
-        _checkpoint(tokenId_, _oldLocked, LockedBalance(0, 0, 0));
+        _checkpoint(tokenId_, _oldLocked, LockedBalance(0, 0));
 
         HEMI.transfer(_sender, _amount);
 
@@ -569,7 +580,7 @@ contract StakedHemi is
         uint256 amount_,
         uint256 lockDuration_,
         address account_,
-        uint256 extraData_
+        bool transferable_
     ) internal returns (uint256 _tokenId) {
         uint256 unlockTime = ((block.timestamp + lockDuration_) / WEEK) * WEEK; // Lock time is rounded down to weeks
 
@@ -584,7 +595,9 @@ contract StakedHemi is
         _depositFor(_tokenId, amount_, uint64(unlockTime), locked[_tokenId]);
 
         provider[_tokenId] = _msgSender();
-        locked[_tokenId].extraData = uint192(extraData_);
+        if (!transferable_) {
+            transferableAfter[_tokenId] = unlockTime;
+        }
 
         emit Lock(_msgSender(), account_, _tokenId, amount_, block.timestamp, lockDuration_, 0);
 
@@ -649,6 +662,21 @@ contract StakedHemi is
     }
 
     /**
+     * @notice Check if a token is transferable based on its extraData
+     * @param tokenId_ The token ID
+     * @return True if the token is transferable (default), false if transfer is not allowed
+     */
+    function isTransferable(uint256 tokenId_) public view returns (bool) {
+        return (transferableAfter[tokenId_] < block.timestamp);
+    }
+
+    function _delegateToSelf(uint256 tokenId_) internal {
+        if (address(voteDelegation) != address(0)) {
+            try voteDelegation.delegate(tokenId_, tokenId_) {} catch {}
+        }
+    }
+
+    /**
      * @notice Calculate the total supply of locked HEMI at a specific timestamp
      * @dev This function calculates the total voting power (supply) at a given timestamp
      * by finding the appropriate global checkpoint and calculating the decay from that point.
@@ -693,26 +721,6 @@ contract StakedHemi is
     }
 
     /**
-     * @notice Internal function to update the owner of a token (only allows mint and burn)
-     * @param to_ The new owner address
-     * @param tokenId_ The token ID
-     * @param auth_ The authorized address
-     * @return from The previous owner address
-     */
-    function _update(
-        address to_,
-        uint256 tokenId_,
-        address auth_
-    ) internal virtual override(ERC721EnumerableUpgradeable) returns (address from) {
-        // Only allow mint (from == address(0)) and burn (to == address(0))
-        from = super._ownerOf(tokenId_);
-        if (from != address(0) && to_ != address(0)) {
-            revert("NFT is non-transferable");
-        }
-        return super._update(to_, tokenId_, auth_);
-    }
-
-    /**
      * @notice Internal function to update rewards for a token
      * @param tokenId_ The token ID
      */
@@ -724,30 +732,19 @@ contract StakedHemi is
     }
 
     /**
-     * Disabled functions
-     */
-    /**
-     * @notice Disabled: Approve is not allowed (NFT is non-transferable)
-     */
-    function approve(address, uint256) public pure override(ERC721Upgradeable, IERC721) {
-        revert("NFT is non-transferable");
-    }
-
-    /**
-     * @notice Disabled: setApprovalForAll is not allowed (NFT is non-transferable)
-     */
-    function setApprovalForAll(address, bool) public pure override(ERC721Upgradeable, IERC721) {
-        revert("NFT is non-transferable");
-    }
-
-    /**
      * @notice Disabled: transferFrom is not allowed (NFT is non-transferable)
      */
     function transferFrom(
-        address,
-        address,
-        uint256
-    ) public pure override(ERC721Upgradeable, IERC721) {
-        revert("NFT is non-transferable");
+        address from_,
+        address to_,
+        uint256 tokenId_
+    ) public override(ERC721Upgradeable, IERC721) {
+        if (!isTransferable(tokenId_)) {
+            revert("NFT is non-transferable");
+        }
+        if (from_ != address(0)) {
+            _delegateToSelf(tokenId_);
+        }
+        super.transferFrom(from_, to_, tokenId_);
     }
 }
