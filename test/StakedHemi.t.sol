@@ -7,20 +7,18 @@ import "../src/interfaces/IStakedHemi.sol";
 import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
-
-contract ERC20Mock is ERC20 {
-    constructor() ERC20("HEMI", "HEMI") {}
-
-    function mint(address to, uint256 amount) external {
-        _mint(to, amount);
-    }
-}
+import "../src/interfaces/IHemiVoteDelegation.sol";
+import "./mocks/MockERC20.sol";
+import "./mocks/MockHemiVoteDelegation.sol";
 
 contract StakedHemiTest is Test {
-    ERC20Mock hemi;
+    MockERC20 hemi;
     StakedHemi stakedHemi;
+    MockHemiVoteDelegation mockDelegation;
     address user = address(0xBEEF);
     address alice = address(0x1122);
+    address bob = address(0x3344);
+    address charlie = address(0x5566);
 
     uint256 MAX_TIME = 4 * 365 days;
     uint256 WEEK = 7 days;
@@ -31,8 +29,11 @@ contract StakedHemiTest is Test {
     }
 
     function setUp() public {
-        hemi = new ERC20Mock();
+        hemi = new MockERC20("HEMI", "HEMI", 18);
         hemi.mint(user, 1_000 ether);
+        hemi.mint(alice, 1_000 ether);
+        hemi.mint(bob, 1_000 ether);
+        hemi.mint(charlie, 1_000 ether);
 
         // Deploy logic contract
         StakedHemi logic = new StakedHemi(address(hemi));
@@ -43,7 +44,18 @@ contract StakedHemiTest is Test {
         );
         stakedHemi = StakedHemi(address(proxy));
 
+        // Deploy and set mock delegation contract
+        mockDelegation = new MockHemiVoteDelegation();
+        vm.prank(address(this));
+        stakedHemi.updateVoteDelegation(IHemiVoteDelegation(address(mockDelegation)));
+
         vm.prank(user);
+        hemi.approve(address(stakedHemi), type(uint256).max);
+        vm.prank(alice);
+        hemi.approve(address(stakedHemi), type(uint256).max);
+        vm.prank(bob);
+        hemi.approve(address(stakedHemi), type(uint256).max);
+        vm.prank(charlie);
         hemi.approve(address(stakedHemi), type(uint256).max);
     }
 
@@ -509,10 +521,9 @@ contract StakedHemiTest is Test {
         vm.warp(block.timestamp + 2 * 365 days + 1);
         assertTrue(stakedHemi.isTransferable(tokenId), "Token should be transferable");
 
-        address bob = address(0xB);
         vm.prank(alice);
         stakedHemi.transferFrom(alice, bob, tokenId);
-        assertEq(stakedHemi.ownerOf(tokenId), bob, "Token should be transferred to bob");
+        assertEq(stakedHemi.ownerOf(tokenId), bob, "Token should be transferred to john");
     }
 
     function testTransferAllowedByDefault() public {
@@ -539,7 +550,6 @@ contract StakedHemiTest is Test {
         vm.warp(block.timestamp + firstLockDuration + 1);
         assertTrue(stakedHemi.isTransferable(tokenId), "Token should be transferable by default");
 
-        address bob = address(0xB);
         vm.prank(alice);
         stakedHemi.transferFrom(alice, bob, tokenId);
         assertEq(stakedHemi.ownerOf(tokenId), bob, "Token should be transferred to bob");
@@ -549,5 +559,79 @@ contract StakedHemiTest is Test {
             block.timestamp,
             "Lock should be extended"
         );
+    }
+
+    function testTransferFrom_CallsDelegateToSelf() public {
+        // Create a lock
+        vm.prank(user);
+        uint256 tokenId = stakedHemi.createLock(100 ether, 1 weeks);
+
+        // First, delegate the token to another token
+        vm.prank(user);
+        mockDelegation.delegate(tokenId, 999);
+
+        // Transfer token to alice
+        vm.prank(user);
+        stakedHemi.transferFrom(user, alice, tokenId);
+
+        // Check that delegation was updated in the mock
+        assertEq(
+            mockDelegation.delegation(tokenId).delegatee,
+            tokenId,
+            "Delegation should move to self on transfer"
+        );
+    }
+
+    function testTransferFrom_DelegationMovesToSelf_WhenNoPreviousDelegation() public {
+        // Switch to real delegation contract for this test
+        // Create a lock
+        vm.prank(user);
+        uint256 tokenId = stakedHemi.createLock(100 ether, 1 weeks);
+
+        // Transfer token to alice
+        vm.prank(user);
+        stakedHemi.transferFrom(user, alice, tokenId);
+
+        // Check that delegation was updated in the mock
+        assertEq(
+            mockDelegation.delegation(tokenId).delegatee,
+            0,
+            "Delegation should move to self on transfer"
+        );
+    }
+
+    function testTransferFrom_WhenTokenIsExpired() public {
+        // Switch to real delegation contract for this test
+        // Create a lock
+        vm.prank(user);
+        uint256 tokenId = stakedHemi.createLock(100 ether, 1 weeks);
+
+        // First, delegate the token to another token (alice's token)
+        vm.prank(user);
+        mockDelegation.delegate(tokenId, 999); // Delegate to a non-existent token for testing
+
+        vm.warp(block.timestamp + 1 weeks + 1);
+        // Transfer token to alice
+        vm.prank(user);
+        stakedHemi.transferFrom(user, alice, tokenId);
+
+        assertEq(stakedHemi.ownerOf(tokenId), alice, "Token should be transferred to alice");
+    }
+
+    function testTransferFrom_WhenVoteDelegationContractIsNotSet() public {
+        // Remove vote delegation contract
+        vm.prank(address(this));
+        stakedHemi.updateVoteDelegation(IHemiVoteDelegation(address(0)));
+
+        // Create locks
+        vm.prank(user);
+        uint256 userTokenId = stakedHemi.createLock(100 ether, 2 * 365 days);
+
+        // User transfers token to Alice
+        vm.prank(user);
+        stakedHemi.transferFrom(user, alice, userTokenId);
+
+        // Verify token ownership changed
+        assertEq(stakedHemi.ownerOf(userTokenId), alice, "Token should be transferred to Alice");
     }
 }

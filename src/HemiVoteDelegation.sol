@@ -48,6 +48,14 @@ contract HemiVoteDelegation is ReentrancyGuardTransient, DelegationStorageV1 {
     error InvalidNonce();
     error SignatureExpired();
     error InvalidDelegatee();
+    error CallerIsNotAuthorized();
+
+    modifier onlyAuthorized(uint256 tokenId_) {
+        address _msgSender = msg.sender;
+        if (_msgSender != stakedHemi.ownerOf(tokenId_) && _msgSender != address(stakedHemi))
+            revert CallerIsNotAuthorized();
+        _;
+    }
 
     /**
      * @notice Constructor to initialize the vote delegation contract
@@ -66,8 +74,10 @@ contract HemiVoteDelegation is ReentrancyGuardTransient, DelegationStorageV1 {
      * @param delegator_ The token ID to delegate from (must be owned by msg.sender)
      * @param delegatee_ The token ID to delegate to (0 for no delegation, same as delegator_ for self-delegation)
      */
-    function delegate(uint256 delegator_, uint256 delegatee_) external nonReentrant {
-        if (stakedHemi.ownerOf(delegator_) != msg.sender) revert NotOwner();
+    function delegate(
+        uint256 delegator_,
+        uint256 delegatee_
+    ) external onlyAuthorized(delegator_) nonReentrant {
         _delegate(delegator_, delegatee_);
     }
 
@@ -118,6 +128,15 @@ contract HemiVoteDelegation is ReentrancyGuardTransient, DelegationStorageV1 {
         uint256 tokenId_
     ) external view returns (DelegateCheckpoint[] memory) {
         return delegateCheckpoints[tokenId_];
+    }
+
+    /**
+     * @notice Get the delegation information for a token
+     * @param tokenId_ The token ID to check
+     * @return The delegation information
+     */
+    function delegation(uint256 tokenId_) external view returns (Delegation memory) {
+        return delegations[tokenId_];
     }
 
     /**

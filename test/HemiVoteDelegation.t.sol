@@ -238,7 +238,7 @@ contract TestHemiVoteDelegation is Test {
         uint256 billTokenId = 1;
 
         vm.startPrank(ALICE);
-        vm.expectRevert(HemiVoteDelegation.NotOwner.selector);
+        vm.expectRevert(HemiVoteDelegation.CallerIsNotAuthorized.selector);
         hemiVoteDelegation.delegate(billTokenId, 2); // ALICE trying to delegate BILL's token
         vm.stopPrank();
     }

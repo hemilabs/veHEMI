@@ -672,7 +672,10 @@ contract StakedHemi is
 
     function _delegateToSelf(uint256 tokenId_) internal {
         if (address(voteDelegation) != address(0)) {
-            try voteDelegation.delegate(tokenId_, tokenId_) {} catch {}
+            uint256 _delegatee = voteDelegation.delegation(tokenId_).delegatee;
+            if (_delegatee != 0) {
+                try voteDelegation.delegate(tokenId_, tokenId_) {} catch {}
+            }
         }
     }
 

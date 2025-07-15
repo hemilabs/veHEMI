@@ -38,6 +38,8 @@ interface IHemiVoteDelegation {
 
     function delegate(uint256 delegator_, uint256 delegatee_) external;
 
+    function delegation(uint256 tokenId_) external view returns (Delegation memory);
+
     function getVotes(uint256 tokenId_) external view returns (uint256);
 
     function getPastVotes(uint256 tokenId_, uint256 timestamp_) external view returns (uint256);
