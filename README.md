@@ -1,172 +1,97 @@
 # veHemi
 
-A decentralized voting escrow and delegation system for HEMI tokens. This project implements a time-locked staking system where users can lock their HEMI tokens for up to 4 years to receive voting power and delegate it to other users.
+A decentralized voting escrow system for HEMI tokens implementing time-locked staking with voting power and incentive distribution.
 
 ## Overview
 
 veHemi consists of two main contracts:
+1. **veHemi** - Main voting escrow contract handling token locking, voting power calculation, and NFT transfers
+2. **HemiVoteDelegation** - Delegation system for voting power
 
-1. **StakedHemi (veHemi)** - The main voting escrow contract that handles token locking and voting power calculation
-2. **HemiVoteDelegation** - The delegation system that allows users to delegate their voting power to other users
+## Core Mechanics
 
-## Description
+### Voting Power & Incentives
 
-### Voting Power Mechanics
+veHemi uses a linear decay system where both voting power and incentives are calculated using the same formula:
+- **Formula**: `locked_amount * (lock_end_time - current_time) / max_lock_duration`
+- **Voting power**: Determines governance voting weight
+- **Incentive distribution**: Determines reward allocation proportion
+- **Longer locks = more weight**: Users locking for longer durations get proportionally more voting power and incentives
 
-veHemi implements a linear decay voting power system where:
+#### Example: Lock Duration Impact
 
-- **Initial voting power**: 1 HEMI locked for 4 years = 1 veHEMI voting power
-- **Linear decay**: Voting power decreases linearly over time
-- **Example**: After 2 years, 1 HEMI locked for 4 years will have 0.5 veHEMI voting power
-- **Maximum lock duration**: 4 years (1,460 days)
-- **Formula**: `voting_power = locked_amount * (lock_end_time - current_time) / max_lock_duration`
+Consider two users in veHemi:
+- **User A**: Locks 100 HEMI for 4 years (single lock)
+- **User B**: Locks 100 HEMI for 2 years, then relocks for 2 more years
+
+**User A gets more weight** because:
+- Single 4-year lock has higher average voting power over the entire period
+- Linear decay curve favors longer initial lock durations
+- More consistent incentive distribution throughout the lock period
 
 ### Lock Management
 
-#### Creating Locks
-- Users can lock HEMI tokens for any duration up to 4 years
-- Each lock is represented as a unique, non-transferable NFT
-- Lock duration is rounded down to the nearest week
-- Minimum lock duration is 1 week
+- **Duration**: Up to 4 years maximum
+- **NFT representation**: Each lock is a unique NFT
+- **Transferability**: Default transferable, can be non-transferable
+- **Extensions**: Only NFT owner can extend lock duration
+- **Amount increases**: Anyone can increase locked amount
 
-#### Extending Lock Duration
-- **Owner-only**: Only the NFT owner can extend the lock duration
-- **Must be longer**: New lock duration must be greater than the current lock end time
-- **Cannot exceed maximum**: Lock duration cannot exceed 4 years from the current time
-- **Function**: `increaseUnlockTime(tokenId, lockDuration)`
+### NFT Transferability
 
-#### Increasing Lock Amount
-- **Anyone can increase**: Any user can increase the HEMI amount in an existing lock
-- **No duration change**: Increasing amount doesn't affect the lock duration
-- **Immediate effect**: Additional voting power is available immediately
-- **Function**: `increaseAmount(tokenId, amount)`
-
-#### Lock Expiration
-- When a lock expires, the user can withdraw their HEMI tokens
-- The NFT is burned upon withdrawal
-- No voting power remains after lock expiration
+- **Default**: Transferable by default
+- **Non-transferable**: Created with `transferable = false` (e.g., protocol distributions)
+- **Auto-transferable**: Non-transferable NFTs become transferable after first lock duration ends
+- **Delegation reset**: Transfers automatically move delegation to self
 
 ### Delegation System
 
-The delegation system allows users to delegate their voting power to other token holders:
+- **Epoch-based**: Delegations take effect at next day boundary
+- **Flexible**: Delegate to any token ID or self
+- **Revocable**: Change or revoke at any time
 
-- **Epoch-based**: Delegations take effect at the next day boundary
-- **Automatic expiration**: Delegations expire when the delegator's lock expires
-- **Flexible delegation**: Users can delegate to any valid token ID or to themselves (no delegation)
-- **Revocable**: Users can change or revoke delegations at any time
+## Installation & Testing
 
-## Architecture
-
-### Core Contracts
-
-```
-src/
-├── StakedHemi.sol                 # Main voting escrow contract
-├── HemiVoteDelegation.sol         # Vote delegation system
-├── interfaces/
-│   ├── IHemiVoteDelegation.sol    # Delegation interface
-│   ├── IRewardDistributor.sol     # Reward distributor interface
-│   └── IStakedHemi.sol           # StakedHemi interface
-├── libraries/
-│   └── SafeCast.sol              # Safe casting utilities
-└── storage/
-    ├── StakedHemiStorageV1.sol   # StakedHemi storage layout
-    └── DelegationStorageV1.sol   # Delegation storage layout
-```
-
-### Key Concepts
-
-#### Voting Power Calculation
-Voting power is calculated using a bias-slope model:
-- **Bias**: Current voting power at a given timestamp
-- **Slope**: Rate of voting power decay over time
-- **Formula**: `voting_power = bias - (slope * time_since_checkpoint)`
-
-#### Delegation System
-- Delegations are stored as checkpoints with timestamps
-- Binary search is used to efficiently find voting power at any point in time
-- Expired delegations are automatically tracked and can be cleaned up
-
-
-## Installation & Setup
-
-### Prerequisites
-- Node.js (v16 or higher)
-- Foundry (latest version)
-
-### Installation
 ```bash
-# Clone the repository
-git clone git@github.com:hemilabs/veHEMI.git
-cd veHemi
-
-# Install dependencies
+# Install and build
 forge install
-
-# Build contracts
 forge build
-```
 
-### Testing
-```bash
-# Run all tests
+# Run tests
 forge test
-
-# Run specific test file
-forge test --match-contract TestHemiVoteDelegation
-
-# Run with verbose output
-forge test -vvv
 ```
 
-## Usage
+## Usage Examples
 
-### Creating a Lock
-
+### Creating Locks
 ```solidity
-// Approve HEMI tokens
-hemiToken.approve(address(stakedHemi), amount);
+// Transferable lock
+uint256 tokenId = veHemi.createLock(amount, 4 * 365 days);
 
-// Create lock for 4 years
-uint256 tokenId = stakedHemi.createLock(amount, 4 * 365 days);
+// Non-transferable lock
+uint256 tokenId = veHemi.createLockFor(amount, 4 * 365 days, recipient, false);
 ```
 
-### Delegating Voting Power
-
+### Delegation
 ```solidity
 // Direct delegation
 hemiVoteDelegation.delegate(delegatorTokenId, delegateeTokenId);
 
-// Gasless delegation via signature
-bytes32 digest = getTypedDataHash(delegator, delegatee, nonce, expiry);
-(uint8 v, bytes32 r, bytes32 s) = sign(digest, privateKey);
-hemiVoteDelegation.delegateBySig(delegator, delegatee, nonce, expiry, v, r, s);
-```
-
-### Checking Voting Power
-
-```solidity
-// Current voting power
+// Check voting power
 uint256 votes = hemiVoteDelegation.getVotes(tokenId);
-
-// Voting power at specific timestamp
-uint256 pastVotes = hemiVoteDelegation.getPastVotes(tokenId, timestamp);
 ```
 
+### Transfers
+```solidity
+// Check transferability
+bool isTransferable = veHemi.isTransferable(tokenId);
 
-## Deployment
-
-### Prerequisites
-- HEMI token contract address
-- Owner address
-- Reward distributor address (optional)
-
-### Deployment Steps
-
-
+// Transfer NFT
+veHemi.transferFrom(from, to, tokenId);
+```
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+MIT License
 
 
