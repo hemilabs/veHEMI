@@ -739,10 +739,10 @@ contract StakedHemi is
         address to_,
         uint256 tokenId_
     ) public override(ERC721Upgradeable, IERC721) {
-        if (!isTransferable(tokenId_)) {
-            revert("NFT is non-transferable");
-        }
         if (from_ != address(0)) {
+            if (!isTransferable(tokenId_)) {
+                revert("NFT is non-transferable");
+            }
             _delegateToSelf(tokenId_);
         }
         super.transferFrom(from_, to_, tokenId_);
