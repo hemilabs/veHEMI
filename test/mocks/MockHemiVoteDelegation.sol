@@ -2,9 +2,9 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.29;
 
-import {IHemiVoteDelegation} from "../../src/interfaces/IHemiVoteDelegation.sol";
+import {IVeHemiVoteDelegation} from "../../src/interfaces/IVeHemiVoteDelegation.sol";
 
-contract MockHemiVoteDelegation is IHemiVoteDelegation {
+contract MockHemiVoteDelegation is IVeHemiVoteDelegation {
     mapping(uint256 => Delegation) public delegations;
     event Delegated(uint256 indexed delegator, uint256 indexed delegatee);
 

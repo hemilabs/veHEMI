@@ -3,19 +3,19 @@ pragma solidity ^0.8.29;
 
 import {OwnableUpgradeable} from "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
 import {ReentrancyGuardTransient} from "@openzeppelin/contracts/utils/ReentrancyGuardTransient.sol";
-import {IStakedHemi} from "./interfaces/IStakedHemi.sol";
-import {DelegationStorageV1} from "./storage/DelegationStorageV1.sol";
+import {IVeHemi} from "./interfaces/IVeHemi.sol";
+import {VeHemDelegationStorageV1} from "./storage/VeHemiDelegationStorageV1.sol";
 import {SafeCast} from "./libraries/SafeCast.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 
 /**
- * @title HemiVoteDelegation
+ * @title VeHemiVoteDelegation
  * @notice Vote delegation system for veHemi tokens. Allows token holders to delegate their voting power
  * to other token holders without transferring ownership. Delegations take effect at the next epoch
  * (next day boundary) and expire when the delegator's lock expires.
- * @dev Based on Curve's veCRV delegation mechanism with adaptations for veHemi
+ * @dev Based on veFXS and veCRV delegation mechanism with adaptations for veHemi
  */
-contract HemiVoteDelegation is ReentrancyGuardTransient, DelegationStorageV1 {
+contract VeHemiVoteDelegation is ReentrancyGuardTransient, VeHemDelegationStorageV1 {
     using SafeCast for uint256;
     using SafeCast for int128;
 
@@ -30,7 +30,7 @@ contract HemiVoteDelegation is ReentrancyGuardTransient, DelegationStorageV1 {
     string public constant version = "1.0.0";
 
     /// @notice The veHemi contract that manages locked balances
-    IStakedHemi public immutable stakedHemi;
+    IVeHemi public immutable veHemi;
 
     /// @notice Maximum lock duration (4 years)
     uint256 public constant MAX_LOCK_DURATION = 365 days * 4;
@@ -38,7 +38,7 @@ contract HemiVoteDelegation is ReentrancyGuardTransient, DelegationStorageV1 {
     uint256 public constant WEEK = 7 days;
 
     // --- Errors ---
-    error InvalidStakedHemi();
+    error InvalidVeHemi();
     error NonExistentToken();
     error CanNotDelegateExpiredLocks();
     error NotOwner();
@@ -52,18 +52,18 @@ contract HemiVoteDelegation is ReentrancyGuardTransient, DelegationStorageV1 {
 
     modifier onlyAuthorized(uint256 tokenId_) {
         address _msgSender = msg.sender;
-        if (_msgSender != stakedHemi.ownerOf(tokenId_) && _msgSender != address(stakedHemi))
+        if (_msgSender != veHemi.ownerOf(tokenId_) && _msgSender != address(veHemi))
             revert CallerIsNotAuthorized();
         _;
     }
 
     /**
      * @notice Constructor to initialize the vote delegation contract
-     * @param stakedHemi_ Address of the veHemi contract
+     * @param veHemi_ Address of the veHemi contract
      */
-    constructor(address stakedHemi_) {
-        if (stakedHemi_ == address(0)) revert InvalidStakedHemi();
-        stakedHemi = IStakedHemi(stakedHemi_);
+    constructor(address veHemi_) {
+        if (veHemi_ == address(0)) revert InvalidVeHemi();
+        veHemi = IVeHemi(veHemi_);
     }
 
     /**
@@ -118,7 +118,7 @@ contract HemiVoteDelegation is ReentrancyGuardTransient, DelegationStorageV1 {
 
         address _signer = ecrecover(digest, v, r, s);
         if (_signer == address(0)) revert InvalidSignature();
-        if (stakedHemi.ownerOf(delegator_) != _signer) revert NotOwner();
+        if (veHemi.ownerOf(delegator_) != _signer) revert NotOwner();
         if (nonce != nonces[_signer]++) revert InvalidNonce();
         if (block.timestamp > expiry) revert SignatureExpired();
         return _delegate(delegator_, delegatee_);
@@ -394,7 +394,7 @@ contract HemiVoteDelegation is ReentrancyGuardTransient, DelegationStorageV1 {
 
     function _delegate(uint256 delegator_, uint256 delegatee_) internal {
         if (delegatee_ == 0) revert InvalidDelegatee();
-        if (stakedHemi.ownerOf(delegatee_) == address(0)) revert NonExistentToken();
+        if (veHemi.ownerOf(delegatee_) == address(0)) revert NonExistentToken();
 
         if (delegations[delegator_].firstDelegationTimestamp == 0 && delegator_ == delegatee_)
             return;
@@ -456,11 +456,11 @@ contract HemiVoteDelegation is ReentrancyGuardTransient, DelegationStorageV1 {
      * @return The token's own voting power (0 if delegated or expired)
      */
     function _getSelfVotesAt(uint256 tokenId_, uint256 timestamp_) internal view returns (uint256) {
-        if (stakedHemi.getLockedBalance(tokenId_).end <= timestamp_) return 0;
+        if (veHemi.getLockedBalance(tokenId_).end <= timestamp_) return 0;
 
         uint256 _firstDelegation = delegations[tokenId_].firstDelegationTimestamp;
         if (_firstDelegation == 0 || timestamp_ < _firstDelegation) {
-            return stakedHemi.balanceOfNFTAt(tokenId_, timestamp_);
+            return veHemi.balanceOfNFTAt(tokenId_, timestamp_);
         }
         return 0;
     }
@@ -478,13 +478,13 @@ contract HemiVoteDelegation is ReentrancyGuardTransient, DelegationStorageV1 {
         uint256 delegator_,
         uint256 checkPointTimestamp_
     ) internal view returns (NormalizedVeHemiLockInfo memory _normalizedVeHemiLockInfo) {
-        IStakedHemi.LockedBalance memory _lockedBalance = stakedHemi.getLockedBalance(delegator_);
+        IVeHemi.LockedBalance memory _lockedBalance = veHemi.getLockedBalance(delegator_);
         uint256 _end = _lockedBalance.end;
         if (_end <= checkPointTimestamp_) revert CanNotDelegateExpiredLocks();
 
-        uint256 _epoch = stakedHemi.userPointEpoch(delegator_);
+        uint256 _epoch = veHemi.userPointEpoch(delegator_);
 
-        IStakedHemi.Point memory _userPoint = stakedHemi.getUserPoint(delegator_, _epoch);
+        IVeHemi.Point memory _userPoint = veHemi.getUserPoint(delegator_, _epoch);
 
         _normalizedVeHemiLockInfo.slope = _userPoint.slope.toUint256();
         _normalizedVeHemiLockInfo.bias =

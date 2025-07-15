@@ -2,18 +2,18 @@
 pragma solidity ^0.8.29;
 
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import {IStakedHemi} from "../interfaces/IStakedHemi.sol";
+import {IVeHemi} from "../interfaces/IVeHemi.sol";
 import {IRewardDistributor} from "../interfaces/IRewardDistributor.sol";
-import {IHemiVoteDelegation} from "../interfaces/IHemiVoteDelegation.sol";
+import {IVeHemiVoteDelegation} from "../interfaces/IVeHemiVoteDelegation.sol";
 
-abstract contract StakedHemiStorageV1 is IStakedHemi {
+abstract contract VeHemiStorageV1 is IVeHemi {
     IERC20 public immutable HEMI;
     // --- State ---
     uint256 public totalLocked;
     uint256 public epoch;
     uint256 public nextTokenId;
 
-    IHemiVoteDelegation public voteDelegation;
+    IVeHemiVoteDelegation public voteDelegation;
 
     IRewardDistributor public rewardDistributor; // 0x0 is valid
     mapping(uint256 => Point) public pointHistory; // epoch -> Point

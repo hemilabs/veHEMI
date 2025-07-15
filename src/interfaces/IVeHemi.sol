@@ -2,10 +2,10 @@
 pragma solidity ^0.8.29;
 
 import {IERC721} from "@openzeppelin/contracts/token/ERC721/IERC721.sol";
-import {IHemiVoteDelegation} from "./IHemiVoteDelegation.sol";
+import {IVeHemiVoteDelegation} from "./IVeHemiVoteDelegation.sol";
 import {IRewardDistributor} from "./IRewardDistributor.sol";
 
-interface IStakedHemi is IERC721 {
+interface IVeHemi is IERC721 {
     // --- Structs ---
     struct Point {
         int128 bias;
@@ -48,8 +48,8 @@ interface IStakedHemi is IERC721 {
     event Checkpoint(uint256 epoch, uint256 tokenId, LockedBalance oldLock, LockedBalance newLock);
 
     event VoteDelegationUpdated(
-        IHemiVoteDelegation indexed oldVoteDelegation,
-        IHemiVoteDelegation indexed newVoteDelegation
+        IVeHemiVoteDelegation indexed oldVoteDelegation,
+        IVeHemiVoteDelegation indexed newVoteDelegation
     );
 
     event RewardDistributorUpdated(

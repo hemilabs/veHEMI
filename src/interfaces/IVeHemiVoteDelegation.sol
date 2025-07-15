@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.29;
 
-interface IHemiVoteDelegation {
+interface IVeHemiVoteDelegation {
     struct Delegation {
         uint256 delegatee;
         uint48 firstDelegationTimestamp;
