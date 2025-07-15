@@ -2,18 +2,18 @@
 pragma solidity ^0.8.29;
 
 import {Test} from "forge-std/Test.sol";
-import {HemiVoteDelegation} from "../src/HemiVoteDelegation.sol";
-import {StakedHemi} from "../src/StakedHemi.sol";
+import {VeHemiVoteDelegation} from "../src/VeHemiVoteDelegation.sol";
+import {VeHemi} from "../src/VeHemi.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {IERC721} from "@openzeppelin/contracts/token/ERC721/IERC721.sol";
 import {IERC721Errors} from "@openzeppelin/contracts/interfaces/draft-IERC6093.sol";
 import {MockERC20} from "./mocks/MockERC20.sol";
-import {IHemiVoteDelegation} from "../src/interfaces/IHemiVoteDelegation.sol";
+import {IVeHemiVoteDelegation} from "../src/interfaces/IVeHemiVoteDelegation.sol";
 import "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import {SafeCast} from "../src/libraries/SafeCast.sol";
 import {console2} from "forge-std/console2.sol";
 
-contract TestHemiVoteDelegation is Test {
+contract TestVeHemiVoteDelegation is Test {
     using SafeCast for uint256;
     using SafeCast for int128;
 
@@ -22,8 +22,8 @@ contract TestHemiVoteDelegation is Test {
     address constant WALTER = address(12_345_678);
     address constant BOB = address(987_654_321);
 
-    HemiVoteDelegation public hemiVoteDelegation;
-    StakedHemi public stakedHemi;
+    VeHemiVoteDelegation public hemiVoteDelegation;
+    VeHemi public veHemi;
     MockERC20 public hemiToken;
 
     uint256 public constant LOCK_AMOUNT = 1e18;
@@ -34,16 +34,16 @@ contract TestHemiVoteDelegation is Test {
         // Deploy mock HEMI token
         hemiToken = new MockERC20("HEMI", "HEMI", 18);
 
-        StakedHemi logic = new StakedHemi(address(hemiToken));
+        VeHemi logic = new VeHemi(address(hemiToken));
         // Deploy proxy
         ERC1967Proxy proxy = new ERC1967Proxy(
             address(logic),
-            abi.encodeWithSelector(StakedHemi.initialize.selector, address(this), address(0))
+            abi.encodeWithSelector(VeHemi.initialize.selector, address(this), address(0))
         );
-        stakedHemi = StakedHemi(address(proxy));
+        veHemi = VeHemi(address(proxy));
 
-        // Deploy HemiVoteDelegation
-        hemiVoteDelegation = new HemiVoteDelegation(address(stakedHemi));
+        // Deploy VeHemiVoteDelegation
+        hemiVoteDelegation = new VeHemiVoteDelegation(address(veHemi));
 
         // Setup initial state
         _setupInitialState();
@@ -70,8 +70,8 @@ contract TestHemiVoteDelegation is Test {
     ) internal returns (uint256 tokenId, uint256 slope) {
         hemiToken.mint(account, amount);
         vm.startPrank(account);
-        hemiToken.approve(address(stakedHemi), amount);
-        tokenId = stakedHemi.createLock(amount, duration);
+        hemiToken.approve(address(veHemi), amount);
+        tokenId = veHemi.createLock(amount, duration);
         vm.stopPrank();
         slope = amount / MAX_TIME;
     }
@@ -80,10 +80,10 @@ contract TestHemiVoteDelegation is Test {
         uint256 tokenId,
         uint256 slope
     ) internal view returns (uint256) {
-        if (block.timestamp > stakedHemi.getLockedBalance(tokenId).end) {
+        if (block.timestamp > veHemi.getLockedBalance(tokenId).end) {
             return 0;
         }
-        return slope * (stakedHemi.getLockedBalance(tokenId).end - block.timestamp);
+        return slope * (veHemi.getLockedBalance(tokenId).end - block.timestamp);
     }
 
     function _delegate(address account, uint256 tokenId, uint256 delegateeTokenId) internal {
@@ -148,7 +148,7 @@ contract TestHemiVoteDelegation is Test {
         // Switch delegation to Walter
         _delegateAndWarp(BILL, billTokenId, billTokenId);
 
-        uint256 end = stakedHemi.getLockedBalance(aliceTokenId).end;
+        uint256 end = veHemi.getLockedBalance(aliceTokenId).end;
         uint256 aliceExpectedVotes = aliceSlope * (end - block.timestamp);
 
         uint256 aliceVotesAfterDelegationRemoved = hemiVoteDelegation.getVotes(aliceTokenId);
@@ -174,11 +174,11 @@ contract TestHemiVoteDelegation is Test {
         uint256 billTokenId = 1;
 
         // Warp to just before lock expires
-        uint256 lockEnd = stakedHemi.getLockedBalance(billTokenId).end;
+        uint256 lockEnd = veHemi.getLockedBalance(billTokenId).end;
         vm.warp(lockEnd - 1 days);
 
         vm.startPrank(BILL);
-        vm.expectRevert(HemiVoteDelegation.CanNotDelegateExpiredLocks.selector);
+        vm.expectRevert(VeHemiVoteDelegation.CanNotDelegateExpiredLocks.selector);
         hemiVoteDelegation.delegate(billTokenId, 2);
         vm.stopPrank();
     }
@@ -238,7 +238,7 @@ contract TestHemiVoteDelegation is Test {
         uint256 billTokenId = 1;
 
         vm.startPrank(ALICE);
-        vm.expectRevert(HemiVoteDelegation.CallerIsNotAuthorized.selector);
+        vm.expectRevert(VeHemiVoteDelegation.CallerIsNotAuthorized.selector);
         hemiVoteDelegation.delegate(billTokenId, 2); // ALICE trying to delegate BILL's token
         vm.stopPrank();
     }
@@ -415,10 +415,10 @@ contract TestHemiVoteDelegation is Test {
         assertGt(aliceVotes, aliceInitialVotes, "Alice should have received Bill's votes");
 
         // Warp to lock expiration
-        uint256 lockEnd = stakedHemi.getLockedBalance(billTokenId).end;
+        uint256 lockEnd = veHemi.getLockedBalance(billTokenId).end;
         vm.warp(lockEnd);
         uint256 expectedAliceVotes = aliceSlope *
-            (stakedHemi.getLockedBalance(aliceTokenId).end - block.timestamp);
+            (veHemi.getLockedBalance(aliceTokenId).end - block.timestamp);
 
         // Alice should have her own votes back after Bill's lock expires
         uint256 aliceVotesAfterExpiry = hemiVoteDelegation.getVotes(aliceTokenId);
@@ -490,7 +490,7 @@ contract TestHemiVoteDelegation is Test {
     function testGetPastVotesFutureTimestamp() public {
         uint256 billTokenId = 1;
 
-        vm.expectRevert(HemiVoteDelegation.TimestampInFuture.selector);
+        vm.expectRevert(VeHemiVoteDelegation.TimestampInFuture.selector);
         hemiVoteDelegation.getPastVotes(billTokenId, block.timestamp + 1);
     }
 
@@ -542,7 +542,7 @@ contract TestHemiVoteDelegation is Test {
         assertGt(totalVotes, delegateInitialVotes, "Should have combined delegated votes");
 
         // Let one lock expire
-        uint256 billLockEnd = stakedHemi.getLockedBalance(billTokenId).end;
+        uint256 billLockEnd = veHemi.getLockedBalance(billTokenId).end;
         vm.warp(billLockEnd + 1);
 
         uint256 votesAfterOneExpiry = hemiVoteDelegation.getVotes(delegateTokenId);
@@ -554,14 +554,14 @@ contract TestHemiVoteDelegation is Test {
         );
 
         // Let all locks expire
-        uint256 aliceLockEnd = stakedHemi.getLockedBalance(aliceTokenId).end;
-        uint256 walterLockEnd = stakedHemi.getLockedBalance(walterTokenId).end;
+        uint256 aliceLockEnd = veHemi.getLockedBalance(aliceTokenId).end;
+        uint256 walterLockEnd = veHemi.getLockedBalance(walterTokenId).end;
         uint256 lastExpiry = aliceLockEnd > walterLockEnd ? aliceLockEnd : walterLockEnd;
         vm.warp(lastExpiry + 1);
 
         // Should have only the delegate's own votes after all delegations expire
         uint256 expectedDelegateVotes = delegateSlope *
-            (stakedHemi.getLockedBalance(delegateTokenId).end - block.timestamp);
+            (veHemi.getLockedBalance(delegateTokenId).end - block.timestamp);
 
         uint256 votesAfterAllExpiry = hemiVoteDelegation.getVotes(delegateTokenId);
         assertEq(
@@ -657,7 +657,7 @@ contract TestHemiVoteDelegation is Test {
         uint256 tokenId = 1;
 
         // No delegations exist, should return empty checkpoint
-        IHemiVoteDelegation.DelegateCheckpoint memory emptyCheckpoint = hemiVoteDelegation
+        IVeHemiVoteDelegation.DelegateCheckpoint memory emptyCheckpoint = hemiVoteDelegation
             .calculateExpiredDelegations(tokenId);
 
         assertEq(
@@ -685,7 +685,7 @@ contract TestHemiVoteDelegation is Test {
 
         // Calculate expired delegations immediately after delegation starts
         // Should return empty checkpoint since no time has passed for expirations
-        IHemiVoteDelegation.DelegateCheckpoint memory noExpirationCheckpoint = hemiVoteDelegation
+        IVeHemiVoteDelegation.DelegateCheckpoint memory noExpirationCheckpoint = hemiVoteDelegation
             .calculateExpiredDelegations(aliceTokenId);
 
         assertEq(
@@ -708,13 +708,13 @@ contract TestHemiVoteDelegation is Test {
         vm.stopPrank();
 
         // Get the lock end time
-        uint256 lockEnd = stakedHemi.getLockedBalance(billTokenIdNew).end;
+        uint256 lockEnd = veHemi.getLockedBalance(billTokenIdNew).end;
 
         // Warp past the lock expiration
         vm.warp(lockEnd + 1 days);
 
         // Calculate expired delegations
-        IHemiVoteDelegation.DelegateCheckpoint memory expirationCheckpoint = hemiVoteDelegation
+        IVeHemiVoteDelegation.DelegateCheckpoint memory expirationCheckpoint = hemiVoteDelegation
             .calculateExpiredDelegations(aliceTokenId);
 
         // Should have a new checkpoint with expired values
@@ -738,7 +738,7 @@ contract TestHemiVoteDelegation is Test {
         vm.warp(delegationStarts);
 
         // Should revert with NoExpirations error
-        vm.expectRevert(HemiVoteDelegation.NoExpirations.selector);
+        vm.expectRevert(VeHemiVoteDelegation.NoExpirations.selector);
         hemiVoteDelegation.writeNewCheckpointForExpiredDelegations(aliceTokenId);
     }
 
@@ -758,7 +758,7 @@ contract TestHemiVoteDelegation is Test {
         uint256 delegationStarts = ((block.timestamp / 1 days) * 1 days) + 1 days;
         vm.warp(delegationStarts);
 
-        IHemiVoteDelegation.DelegateCheckpoint[]
+        IVeHemiVoteDelegation.DelegateCheckpoint[]
             memory delegationCheckpointsBefore = hemiVoteDelegation.getDelegationCheckpoints(
                 aliceTokenId
             );
@@ -769,7 +769,7 @@ contract TestHemiVoteDelegation is Test {
         // Write new checkpoint for expirations
         hemiVoteDelegation.writeNewCheckpointForExpiredDelegations(aliceTokenId);
 
-        IHemiVoteDelegation.DelegateCheckpoint[] memory delegationCheckpoints = hemiVoteDelegation
+        IVeHemiVoteDelegation.DelegateCheckpoint[] memory delegationCheckpoints = hemiVoteDelegation
             .getDelegationCheckpoints(aliceTokenId);
 
         assertEq(
@@ -799,7 +799,7 @@ contract TestHemiVoteDelegation is Test {
         // Warp to delegation start
         vm.warp(block.timestamp + 9 days);
 
-        IHemiVoteDelegation.DelegateCheckpoint[] memory delegationCheckpoints = hemiVoteDelegation
+        IVeHemiVoteDelegation.DelegateCheckpoint[] memory delegationCheckpoints = hemiVoteDelegation
             .getDelegationCheckpoints(delegateTokenId);
 
         assertEq(delegationCheckpoints.length, 1, "Should have 2 checkpoints");
@@ -873,7 +873,7 @@ contract TestHemiVoteDelegation is Test {
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(wrongPrivateKey, digest);
 
         // Should revert with NotOwner
-        vm.expectRevert(HemiVoteDelegation.NotOwner.selector);
+        vm.expectRevert(VeHemiVoteDelegation.NotOwner.selector);
         hemiVoteDelegation.delegateBySig(aliceTokenId, bobTokenId, 0, expiry, v, r, s);
     }
 
@@ -898,7 +898,7 @@ contract TestHemiVoteDelegation is Test {
         vm.warp(expiry + 1);
 
         // Should revert with SignatureExpired
-        vm.expectRevert(HemiVoteDelegation.SignatureExpired.selector);
+        vm.expectRevert(VeHemiVoteDelegation.SignatureExpired.selector);
         hemiVoteDelegation.delegateBySig(aliceTokenId, bobTokenId, 0, expiry, v, r, s);
     }
 
@@ -920,7 +920,7 @@ contract TestHemiVoteDelegation is Test {
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(alicePrivateKey, digest);
 
         // Should revert with InvalidNonce
-        vm.expectRevert(HemiVoteDelegation.InvalidNonce.selector);
+        vm.expectRevert(VeHemiVoteDelegation.InvalidNonce.selector);
         hemiVoteDelegation.delegateBySig(aliceTokenId, bobTokenId, 1, expiry, v, r, s);
     }
 
