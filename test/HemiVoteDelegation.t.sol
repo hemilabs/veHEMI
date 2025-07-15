@@ -10,8 +10,13 @@ import {IERC721Errors} from "@openzeppelin/contracts/interfaces/draft-IERC6093.s
 import {MockERC20} from "./mocks/MockERC20.sol";
 import {IHemiVoteDelegation} from "../src/interfaces/IHemiVoteDelegation.sol";
 import "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
+import {SafeCast} from "../src/libraries/SafeCast.sol";
+import {console2} from "forge-std/console2.sol";
 
 contract TestHemiVoteDelegation is Test {
+    using SafeCast for uint256;
+    using SafeCast for int128;
+
     address constant BILL = address(342_958_293_847_234_897);
     address constant ALICE = address(23_984_723_894_798);
     address constant WALTER = address(12_345_678);
@@ -66,7 +71,7 @@ contract TestHemiVoteDelegation is Test {
         hemiToken.mint(account, amount);
         vm.startPrank(account);
         hemiToken.approve(address(stakedHemi), amount);
-        tokenId = stakedHemi.createLock(amount, duration, 0);
+        tokenId = stakedHemi.createLock(amount, duration);
         vm.stopPrank();
         slope = amount / MAX_TIME;
     }
@@ -100,11 +105,6 @@ contract TestHemiVoteDelegation is Test {
         uint256 billInitialVotes = hemiVoteDelegation.getVotes(billTokenId);
         uint256 aliceInitialVotes = hemiVoteDelegation.getVotes(aliceTokenId);
 
-        _delegateAndWarp(BILL, billTokenId, 0);
-
-        uint256 selfVotes = hemiVoteDelegation.getVotes(billTokenId);
-        assertGt(selfVotes, 0, "Should have voting power when not delegated");
-
         _delegateAndWarp(BILL, billTokenId, aliceTokenId);
 
         assertEq(
@@ -126,6 +126,39 @@ contract TestHemiVoteDelegation is Test {
             expectedAliceVotes,
             "Voting power should not decay more than 5% in one day"
         );
+    }
+
+    function testRemoveDelegation() public {
+        (uint256 billTokenId, ) = _createLock(BILL, LOCK_AMOUNT, LOCK_DURATION);
+        (uint256 aliceTokenId, uint256 aliceSlope) = _createLock(ALICE, LOCK_AMOUNT, LOCK_DURATION);
+
+        uint256 aliceInitialVotes = hemiVoteDelegation.getVotes(aliceTokenId);
+
+        _delegateAndWarp(BILL, billTokenId, aliceTokenId);
+
+        uint256 aliceVotesAfterDelegation = hemiVoteDelegation.getVotes(aliceTokenId);
+        assertGt(
+            aliceVotesAfterDelegation,
+            aliceInitialVotes,
+            "Alice should have received Bill's votes"
+        );
+        uint256 billVoteAfterDelegation = hemiVoteDelegation.getVotes(billTokenId);
+        assertEq(billVoteAfterDelegation, 0, "Bill should have no votes after delegation");
+
+        // Switch delegation to Walter
+        _delegateAndWarp(BILL, billTokenId, billTokenId);
+
+        uint256 end = stakedHemi.getLockedBalance(aliceTokenId).end;
+        uint256 aliceExpectedVotes = aliceSlope * (end - block.timestamp);
+
+        uint256 aliceVotesAfterDelegationRemoved = hemiVoteDelegation.getVotes(aliceTokenId);
+        assertEq(
+            aliceVotesAfterDelegationRemoved,
+            aliceExpectedVotes,
+            "Alice should have her original votes back after delegation switch"
+        );
+        uint256 billVoteAfterDelegationRemoved = hemiVoteDelegation.getVotes(billTokenId);
+        assertGt(billVoteAfterDelegationRemoved, 0, "Bill should have received his own votes");
     }
 
     // Test delegation to non-existent token
@@ -205,7 +238,7 @@ contract TestHemiVoteDelegation is Test {
         uint256 billTokenId = 1;
 
         vm.startPrank(ALICE);
-        vm.expectRevert(HemiVoteDelegation.NotOwner.selector);
+        vm.expectRevert(HemiVoteDelegation.CallerIsNotAuthorized.selector);
         hemiVoteDelegation.delegate(billTokenId, 2); // ALICE trying to delegate BILL's token
         vm.stopPrank();
     }

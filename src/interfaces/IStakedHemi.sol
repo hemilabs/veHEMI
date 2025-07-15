@@ -2,6 +2,8 @@
 pragma solidity ^0.8.29;
 
 import {IERC721} from "@openzeppelin/contracts/token/ERC721/IERC721.sol";
+import {IHemiVoteDelegation} from "./IHemiVoteDelegation.sol";
+import {IRewardDistributor} from "./IRewardDistributor.sol";
 
 interface IStakedHemi is IERC721 {
     // --- Structs ---
@@ -17,7 +19,6 @@ interface IStakedHemi is IERC721 {
     struct LockedBalance {
         int128 amount;
         uint64 end;
-        uint192 extraData;
     }
 
     // --- Events ---
@@ -46,19 +47,25 @@ interface IStakedHemi is IERC721 {
     );
     event Checkpoint(uint256 epoch, uint256 tokenId, LockedBalance oldLock, LockedBalance newLock);
 
+    event VoteDelegationUpdated(
+        IHemiVoteDelegation indexed oldVoteDelegation,
+        IHemiVoteDelegation indexed newVoteDelegation
+    );
+
+    event RewardDistributorUpdated(
+        IRewardDistributor indexed oldRewardDistributor,
+        IRewardDistributor indexed newRewardDistributor
+    );
+
     // --- External/Public Functions ---
     function initialize(address owner) external;
     function checkpoint() external;
-    function createLock(
-        uint256 amount,
-        uint256 lockDuration,
-        uint256 extraData
-    ) external returns (uint256 tokenId);
+    function createLock(uint256 amount, uint256 lockDuration) external returns (uint256 tokenId);
     function createLockFor(
         uint256 amount,
         uint256 lockDuration,
         address account,
-        uint256 extraData
+        bool transferable
     ) external returns (uint256 tokenId);
     function increaseAmount(uint256 tokenId, uint256 amount) external;
     function increaseUnlockTime(uint256 tokenId, uint256 lockDuration) external;
