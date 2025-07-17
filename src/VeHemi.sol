@@ -26,8 +26,10 @@ contract VeHemi is
     // --- Types ---
 
     // --- Constants ---
-    uint256 public constant WEEK = 7 days;
-    uint256 public constant MAX_TIME = 4 * 365 days; // 4 years
+    uint256 public constant YEAR = 365.25 days;
+    uint256 public constant MONTH = YEAR / 12;
+    uint256 public constant SIX_DAYS = MONTH / 5;
+    uint256 public constant MAX_TIME = 4 * YEAR; // 4 years
     uint256 internal constant MULTIPLIER = 1 ether;
     string public constant version = "1.0.0";
     uint8 public constant decimals = 18;
@@ -162,7 +164,7 @@ contract VeHemi is
         LockedBalance memory _oldLocked = locked[tokenId_];
         if (_oldLocked.end <= block.timestamp) revert LockExpired();
         if (_oldLocked.amount <= 0) revert NoExistingLock();
-        uint256 _unlockTime = ((block.timestamp + lockDuration_) / WEEK) * WEEK; // unlock time is rounded down to weeks
+        uint256 _unlockTime = ((block.timestamp + lockDuration_) / SIX_DAYS) * SIX_DAYS; // unlock time is rounded down to SIX_DAYS
         if (_unlockTime > block.timestamp + MAX_TIME) revert LockDurationTooLong();
         if (_unlockTime <= _oldLocked.end) revert NewLockDurationNotGreater();
         _updateReward(tokenId_);
@@ -459,13 +461,13 @@ contract VeHemi is
                 (block.timestamp - _lastPoint.timestamp);
         }
 
-        // Go over weeks to fill history and calculate what the current point is
+        // Go over SIX_DAYS to fill history and calculate what the current point is
         {
-            uint256 t_i = (_lastCheckpoint / WEEK) * WEEK;
-            for (uint256 i; i < 255; ++i) {
+            uint256 t_i = (_lastCheckpoint / SIX_DAYS) * SIX_DAYS;
+            for (uint256 i; i < 300; ++i) {
                 // Hopefully it won't happen that this won't get used in 5 years!
                 // If it does, users will be able to withdraw but vote weight will be broken
-                t_i += WEEK; // Initial value of t_i is always larger than the ts of the last point
+                t_i += SIX_DAYS; // Initial value of t_i is always larger than the ts of the last point
                 int128 d_slope;
                 if (t_i > block.timestamp) {
                     t_i = block.timestamp;
@@ -516,7 +518,7 @@ contract VeHemi is
         // Else record the new global point into history
         // Exclude epoch 0 (note: _epoch is always >= 1, see above)
         // Two possible outcomes:
-        // Missing global checkpoints in prior weeks. In this case, _epoch = epoch + x, where x > 1
+        // Missing global checkpoints in prior SIX_DAYS. In this case, _epoch = epoch + x, where x > 1
         // No missing global checkpoints, but timestamp != block.timestamp. Create new checkpoint.
         // No missing global checkpoints, but timestamp == block.timestamp. Overwrite last checkpoint.
         if (_epoch != 1 && pointHistory[_epoch - 1].timestamp == block.timestamp) {
@@ -582,7 +584,7 @@ contract VeHemi is
         address account_,
         bool transferable_
     ) internal returns (uint256 _tokenId) {
-        uint256 unlockTime = ((block.timestamp + lockDuration_) / WEEK) * WEEK; // Lock time is rounded down to weeks
+        uint256 unlockTime = ((block.timestamp + lockDuration_) / SIX_DAYS) * SIX_DAYS; // Lock time is rounded down to SIX_DAYS
 
         if (amount_ == 0) revert AmountIsZero();
         if (unlockTime <= block.timestamp) revert LockDurationTooShort();
@@ -700,9 +702,9 @@ contract VeHemi is
         int128 slope = point_.slope;
         uint256 ts = point_.timestamp;
 
-        uint256 t_i = (ts / WEEK) * WEEK;
+        uint256 t_i = (ts / SIX_DAYS) * SIX_DAYS;
         for (uint256 i; i < 255; ++i) {
-            t_i += WEEK;
+            t_i += SIX_DAYS;
             int128 dSlope = 0;
             if (t_i > timestamp_) {
                 t_i = timestamp_;

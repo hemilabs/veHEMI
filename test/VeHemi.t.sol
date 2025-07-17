@@ -20,9 +20,9 @@ contract VeHemiTest is Test {
     address bob = address(0x3344);
     address charlie = address(0x5566);
 
-    uint256 MAX_TIME = 4 * 365 days;
+    uint256 MAX_TIME;
     uint256 MAX_AMOUNT = 1_000 ether;
-    uint256 WEEK = 7 days;
+    uint256 SIX_DAYS;
 
     struct LockedBalance {
         int128 amount;
@@ -44,6 +44,8 @@ contract VeHemiTest is Test {
             abi.encodeWithSelector(VeHemi.initialize.selector, address(this), address(0))
         );
         veHemi = VeHemi(address(proxy));
+        MAX_TIME = veHemi.MAX_TIME();
+        SIX_DAYS = veHemi.SIX_DAYS();
 
         // Deploy and set mock delegation contract
         mockDelegation = new MockHemiVoteDelegation();
@@ -88,7 +90,7 @@ contract VeHemiTest is Test {
         // Check locked balance
         (int128 lockedAmount, uint256 lockedEnd) = veHemi.locked(tokenId);
         assertEq(uint256(uint128(lockedAmount)), amount, "Locked amount mismatch");
-        assertEq(lockedEnd, (unlockTime / WEEK) * WEEK, "Unlock time mismatch");
+        assertEq(lockedEnd, (unlockTime / SIX_DAYS) * SIX_DAYS, "Unlock time mismatch");
         // Check supply
         assertEq(veHemi.totalLocked(), amount, "Supply mismatch");
     }
@@ -214,7 +216,7 @@ contract VeHemiTest is Test {
         assertEq(userEpochAfter_, 1, "User epoch not incremented");
         vm.warp(block.timestamp + 50 weeks); // Simulate time passing
         veHemi.checkpoint();
-        assertEq(veHemi.epoch(), 52, "Global epoch should be 52 after checkpoint");
+        assertEq(veHemi.epoch(), 59, "Global epoch should be 52 after checkpoint");
         IVeHemi.LockedBalance memory newLocked_ = IVeHemi.LockedBalance(
             oldAmount_ + int128(int256(extraAmount_)),
             uint64(oldEnd_)
@@ -234,7 +236,7 @@ contract VeHemiTest is Test {
     function testEpoch() public {
         uint256 amount_ = 10 ether;
 
-        uint256 initialWeekNumber = block.timestamp / WEEK;
+        uint256 initialSixDaysCount = block.timestamp / SIX_DAYS;
 
         (uint256 tokenId_, , ) = createLock(user, amount_, 4 * 52 weeks);
         uint256 userEpochBefore = veHemi.userPointEpoch(tokenId_);
@@ -246,7 +248,7 @@ contract VeHemiTest is Test {
         vm.roll(block.number + 1);
         vm.prank(user);
         veHemi.increaseAmount(tokenId_, extraAmount_);
-        uint256 expectedGlobalEpoch = block.timestamp / WEEK - initialWeekNumber;
+        uint256 expectedGlobalEpoch = block.timestamp / SIX_DAYS - initialSixDaysCount;
         assertEq(veHemi.epoch(), expectedGlobalEpoch + 2, "global epoch not incremented1");
         uint256 newUserEpoch_ = veHemi.userPointEpoch(tokenId_);
         assertEq(newUserEpoch_, 2, "user epoch not incremented");
@@ -268,7 +270,7 @@ contract VeHemiTest is Test {
 
         // Check that the lock's end is updated
         (, uint256 end) = veHemi.locked(tokenId);
-        uint256 expectedUnlockTime = ((block.timestamp + newDuration) / WEEK) * WEEK;
+        uint256 expectedUnlockTime = ((block.timestamp + newDuration) / SIX_DAYS) * SIX_DAYS;
         assertEq(end, expectedUnlockTime);
     }
 

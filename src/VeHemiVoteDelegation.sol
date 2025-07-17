@@ -33,9 +33,9 @@ contract VeHemiVoteDelegation is ReentrancyGuardTransient, VeHemDelegationStorag
     IVeHemi public immutable veHemi;
 
     /// @notice Maximum lock duration (4 years)
-    uint256 public constant MAX_LOCK_DURATION = 365 days * 4;
-    /// @notice Week duration in seconds
-    uint256 public constant WEEK = 7 days;
+    uint256 public immutable MAX_LOCK_DURATION;
+    /// @notice Six days duration in seconds
+    uint256 public immutable SIX_DAYS;
 
     // --- Errors ---
     error InvalidVeHemi();
@@ -64,6 +64,8 @@ contract VeHemiVoteDelegation is ReentrancyGuardTransient, VeHemDelegationStorag
     constructor(address veHemi_) {
         if (veHemi_ == address(0)) revert InvalidVeHemi();
         veHemi = IVeHemi(veHemi_);
+        MAX_LOCK_DURATION = veHemi.MAX_TIME();
+        SIX_DAYS = veHemi.SIX_DAYS();
     }
 
     /**
@@ -331,17 +333,17 @@ contract VeHemiVoteDelegation is ReentrancyGuardTransient, VeHemDelegationStorag
                 totalExpiredAmount = checkpoint_.totalAmount;
             } else {
                 // Total values will always be less than or equal to a checkpoint's values
-                uint256 currentWeek = WEEK + (start_ / WEEK) * WEEK;
+                uint256 currentSixDayWindow = SIX_DAYS + (start_ / SIX_DAYS) * SIX_DAYS;
                 mapping(uint256 => Expiration) storage delegateExpirations = expiredDelegations[
                     tokenId_
                 ];
-                // Sum values from currentWeek until end
-                while (currentWeek <= end_) {
-                    Expiration memory expiration = delegateExpirations[currentWeek];
+                // Sum values from currentSixDayWindow until end
+                while (currentSixDayWindow <= end_) {
+                    Expiration memory expiration = delegateExpirations[currentSixDayWindow];
                     totalExpiredBias += expiration.bias;
                     totalExpiredSlope += expiration.slope;
                     totalExpiredAmount += expiration.amount;
-                    currentWeek += WEEK;
+                    currentSixDayWindow += SIX_DAYS;
                 }
             }
         }
@@ -518,7 +520,7 @@ contract VeHemiVoteDelegation is ReentrancyGuardTransient, VeHemDelegationStorag
         }
 
         // It's possible that some delegated  veHemi has expired.
-        // Add up all expirations during this time period, week by week.
+        // Add up all expirations during this time period, SIX_DAYS by SIX_DAYS.
         (uint256 totalExpiredBias, uint256 totalExpiredSlope, ) = _calculateExpirations({
             tokenId_: tokenId_,
             start_: _checkpoint.timestamp,
