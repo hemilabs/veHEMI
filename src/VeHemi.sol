@@ -45,6 +45,8 @@ contract VeHemi is
     error NotOwner();
     error NewLockDurationNotGreater();
     error BlockNotReached();
+    error NotForfeitable();
+    error NotForfeitAdmin();
 
     // --- Events ---
 
@@ -72,19 +74,36 @@ contract VeHemi is
     /**
      * @notice Returns the current staked balance for a given NFT
      * @param tokenId_ The token ID
-     * @return The staked balance for the NFT
+     * @return _balance The staked balance for the NFT
      */
-    function balanceOfNFT(uint256 tokenId_) external view returns (uint256) {
-        return _balanceOfNFTAt(tokenId_, block.timestamp);
+    function balanceOfNFT(uint256 tokenId_) external view returns (uint256 _balance) {
+        (_balance, ) = _balanceOfNFTAt(tokenId_, block.timestamp);
     }
 
     /**
      * @notice Returns the current staked balance for a given NFT
      * @param tokenId_ The token ID
      * @param timestamp_ timestamp
-     * @return The staked balance for the NFT
+     * @return _balance The staked balance for the NFT
      */
-    function balanceOfNFTAt(uint256 tokenId_, uint256 timestamp_) external view returns (uint256) {
+    function balanceOfNFTAt(
+        uint256 tokenId_,
+        uint256 timestamp_
+    ) external view returns (uint256 _balance) {
+        (_balance, ) = _balanceOfNFTAt(tokenId_, timestamp_);
+    }
+
+    /**
+     * @notice Returns the current staked balance for a given NFT
+     * @param tokenId_ The token ID
+     * @param timestamp_ timestamp
+     * @return _balance The staked balance for the NFT
+     * @return _owner The owner of the NFT
+     */
+    function balanceAndOwnerOfNFTAt(
+        uint256 tokenId_,
+        uint256 timestamp_
+    ) external view returns (uint256 _balance, address _owner) {
         return _balanceOfNFTAt(tokenId_, timestamp_);
     }
 
@@ -105,7 +124,7 @@ contract VeHemi is
         uint256 amount_,
         uint256 lockDuration_
     ) external nonReentrant returns (uint256 _tokenId) {
-        _tokenId = _createLock(amount_, lockDuration_, _msgSender(), true);
+        _tokenId = _createLock(amount_, lockDuration_, _msgSender(), true, false);
     }
 
     /**
@@ -119,10 +138,11 @@ contract VeHemi is
         uint256 amount_,
         uint256 lockDuration_,
         address account_,
-        bool transferable_
+        bool transferable_,
+        bool forfeitable_
     ) external nonReentrant returns (uint256 _tokenId) {
         if (account_ == address(0)) revert AddressIsNull();
-        _tokenId = _createLock(amount_, lockDuration_, account_, transferable_);
+        _tokenId = _createLock(amount_, lockDuration_, account_, transferable_, forfeitable_);
     }
 
     /**
@@ -140,8 +160,20 @@ contract VeHemi is
      * @param epoch_ The epoch number
      * @return The Point struct for the user at the given epoch
      */
-    function getUserPoint(uint256 tokenId_, uint256 epoch_) external view returns (Point memory) {
+    function getUserPoint(
+        uint256 tokenId_,
+        uint256 epoch_
+    ) external view returns (UserPoint memory) {
         return userPointHistory[tokenId_][epoch_];
+    }
+
+    /**
+     * @notice Returns the global point for a given epoch
+     * @param epoch_ The epoch number
+     * @return The Point struct for the global point at the given epoch
+     */
+    function getGlobalPoint(uint256 epoch_) external view returns (Point memory) {
+        return pointHistory[epoch_];
     }
 
     /**
@@ -234,6 +266,12 @@ contract VeHemi is
         emit RewardDistributorUpdated(_oldRewardDistributor, newRewardDistributor_);
     }
 
+    function updateForfeitAdmin(address newForfeitAdmin_) external onlyOwner {
+        address _oldForfeitAdmin = forfeitAdmin;
+        forfeitAdmin = newForfeitAdmin_;
+        emit ForfeitAdminUpdated(_oldForfeitAdmin, newForfeitAdmin_);
+    }
+
     /**
      * @notice Update the vote delegation contract address
      * @param newVoteDelegation_ The new vote delegation contract address
@@ -249,11 +287,14 @@ contract VeHemi is
      * @param tokenId_ The token ID to withdraw from
      */
     function withdraw(uint256 tokenId_) external nonReentrant {
-        address _sender = _msgSender();
-        if (_ownerOf(tokenId_) != _sender) revert NotOwner();
+        if (_ownerOf(tokenId_) != _msgSender()) revert NotOwner();
+        if (block.timestamp < locked[tokenId_].end) revert LockNotExpired();
+        _withdraw(tokenId_);
+    }
+
+    function _withdraw(uint256 tokenId_) internal {
         _updateReward(tokenId_);
         LockedBalance memory _oldLocked = locked[tokenId_];
-        if (block.timestamp < _oldLocked.end) revert LockNotExpired();
         uint256 _amount = _oldLocked.amount.toUint256();
 
         // Burn the NFT
@@ -267,9 +308,17 @@ contract VeHemi is
         // Both can have >= 0 amount
         _checkpoint(tokenId_, _oldLocked, LockedBalance(0, 0));
 
+        address _sender = _msgSender();
         HEMI.transfer(_sender, _amount);
-
         emit Withdraw(_sender, tokenId_, _amount, block.timestamp);
+    }
+
+    function forfeit(uint256 tokenId_) external nonReentrant {
+        if (_msgSender() != forfeitAdmin) revert NotForfeitAdmin();
+        if (!forfeitable[tokenId_]) revert NotForfeitable();
+        if (locked[tokenId_].end < block.timestamp) revert LockExpired();
+        _delegateToSelf(tokenId_);
+        _withdraw(tokenId_);
     }
 
     /**
@@ -278,16 +327,21 @@ contract VeHemi is
      * @param timestamp_ The timestamp to check the balance at
      * @return The staked balance at the given timestamp
      */
-    function _balanceOfNFTAt(uint256 tokenId_, uint256 timestamp_) internal view returns (uint256) {
+    function _balanceOfNFTAt(
+        uint256 tokenId_,
+        uint256 timestamp_
+    ) internal view returns (uint256, address) {
         uint256 _epoch = _getPastUserPointIndex(tokenId_, timestamp_);
         // epoch 0 is an empty point
-        if (_epoch == 0) return 0;
-        Point memory _lastPoint = userPointHistory[tokenId_][_epoch];
-        _lastPoint.bias -= _lastPoint.slope * (timestamp_ - _lastPoint.timestamp).toInt128();
-        if (_lastPoint.bias < 0) {
-            _lastPoint.bias = 0;
+        if (_epoch == 0) return (0, address(0));
+        UserPoint memory _lastUserPoint = userPointHistory[tokenId_][_epoch];
+        _lastUserPoint.point.bias -=
+            _lastUserPoint.point.slope *
+            (timestamp_ - _lastUserPoint.point.timestamp).toInt128();
+        if (_lastUserPoint.point.bias < 0) {
+            _lastUserPoint.point.bias = 0;
         }
-        return _lastPoint.bias.toUint256();
+        return (_lastUserPoint.point.bias.toUint256(), _lastUserPoint.owner);
     }
 
     function _findBlockEpoch(
@@ -361,17 +415,17 @@ contract VeHemi is
     ) internal view returns (uint256) {
         uint256 _userEpoch = userPointEpoch[tokenId_];
         if (_userEpoch == 0) return 0;
-        Point memory _lastPoint = userPointHistory[tokenId_][_userEpoch];
+        Point memory _lastPoint = userPointHistory[tokenId_][_userEpoch].point;
         // First check most recent balance
         if (_lastPoint.timestamp <= timestamp_) return (_userEpoch);
         // Next check implicit zero balance
-        if (userPointHistory[tokenId_][1].timestamp > timestamp_) return 0;
+        if (userPointHistory[tokenId_][1].point.timestamp > timestamp_) return 0;
 
         uint256 lower = 0;
         uint256 upper = _userEpoch;
         while (upper > lower) {
             uint256 center = upper - (upper - lower) / 2; // ceil, avoiding overflow
-            Point memory _userPoint = userPointHistory[tokenId_][center];
+            Point memory _userPoint = userPointHistory[tokenId_][center].point;
             if (_userPoint.timestamp == timestamp_) {
                 return center;
             } else if (_userPoint.timestamp < timestamp_) {
@@ -560,12 +614,16 @@ contract VeHemi is
             uint256 _userEpoch = userPointEpoch[tokenId_];
             if (
                 _userEpoch != 0 &&
-                userPointHistory[tokenId_][_userEpoch].timestamp == block.timestamp
+                userPointHistory[tokenId_][_userEpoch].point.timestamp == block.timestamp
             ) {
-                userPointHistory[tokenId_][_userEpoch] = _newUserPoint;
+                // Update existing point
+                userPointHistory[tokenId_][_userEpoch].point = _newUserPoint;
+                userPointHistory[tokenId_][_userEpoch].owner = _ownerOf(tokenId_);
             } else {
+                // Create new point at next epoch
                 userPointEpoch[tokenId_] = ++_userEpoch;
-                userPointHistory[tokenId_][_userEpoch] = _newUserPoint;
+                userPointHistory[tokenId_][_userEpoch].point = _newUserPoint;
+                userPointHistory[tokenId_][_userEpoch].owner = _ownerOf(tokenId_);
             }
         }
         emit Checkpoint(_epoch, tokenId_, oldLocked_, newLocked_);
@@ -582,7 +640,8 @@ contract VeHemi is
         uint256 amount_,
         uint256 lockDuration_,
         address account_,
-        bool transferable_
+        bool transferable_,
+        bool forfeitable_
     ) internal returns (uint256 _tokenId) {
         uint256 unlockTime = ((block.timestamp + lockDuration_) / SIX_DAYS) * SIX_DAYS; // Lock time is rounded down to SIX_DAYS
 
@@ -600,8 +659,19 @@ contract VeHemi is
         if (!transferable_) {
             transferableAfter[_tokenId] = unlockTime;
         }
+        if (forfeitable_) forfeitable[_tokenId] = forfeitable_;
 
-        emit Lock(_msgSender(), account_, _tokenId, amount_, block.timestamp, lockDuration_, 0);
+        emit Lock(
+            _msgSender(),
+            account_,
+            _tokenId,
+            amount_,
+            block.timestamp,
+            lockDuration_,
+            0,
+            transferable_,
+            forfeitable_
+        );
 
         return _tokenId;
     }
@@ -751,5 +821,8 @@ contract VeHemi is
             _delegateToSelf(tokenId_);
         }
         super.transferFrom(from_, to_, tokenId_);
+        if (from_ != address(0)) {
+            _checkpoint(tokenId_, locked[tokenId_], locked[tokenId_]);
+        }
     }
 }

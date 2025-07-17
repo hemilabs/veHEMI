@@ -20,10 +20,10 @@ contract MockHemiVoteDelegation is IVeHemiVoteDelegation {
         emit Delegated(delegator_, delegatee_);
     }
 
-    function getVotes(uint256) external pure override returns (uint256) {
+    function getVotes(uint256, address) external pure override returns (uint256) {
         return 0;
     }
-    function getPastVotes(uint256, uint256) external pure override returns (uint256) {
+    function getPastVotes(uint256, uint256, address) external pure override returns (uint256) {
         return 0;
     }
     function delegation(uint256 tokenId_) external view override returns (Delegation memory) {
