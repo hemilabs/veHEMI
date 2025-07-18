@@ -16,6 +16,11 @@ interface IVeHemi is IERC721 {
         uint256 fixedBias; // for v2+ use
     }
 
+    struct UserPoint {
+        Point point;
+        address owner;
+    }
+
     struct LockedBalance {
         int128 amount;
         uint64 end;
@@ -43,7 +48,9 @@ interface IVeHemi is IERC721 {
         uint256 amount,
         uint256 start,
         uint256 lockTime,
-        uint256 extraData
+        uint256 extraData,
+        bool transferable,
+        bool forfeitable
     );
     event Checkpoint(uint256 epoch, uint256 tokenId, LockedBalance oldLock, LockedBalance newLock);
 
@@ -57,6 +64,8 @@ interface IVeHemi is IERC721 {
         IRewardDistributor indexed newRewardDistributor
     );
 
+    event ForfeitAdminUpdated(address indexed oldRevokeAdmin, address indexed newRevokeAdmin);
+
     // --- External/Public Functions ---
     function initialize(address owner) external;
     function checkpoint() external;
@@ -65,18 +74,24 @@ interface IVeHemi is IERC721 {
         uint256 amount,
         uint256 lockDuration,
         address account,
-        bool transferable
+        bool transferable,
+        bool revokable
     ) external returns (uint256 tokenId);
     function increaseAmount(uint256 tokenId, uint256 amount) external;
     function increaseUnlockTime(uint256 tokenId, uint256 lockDuration) external;
     function withdraw(uint256 tokenId) external;
-    function getUserPoint(uint256 tokenId, uint256 epoch) external view returns (Point memory);
+    function getUserPoint(uint256 tokenId, uint256 epoch) external view returns (UserPoint memory);
+    function getGlobalPoint(uint256 epoch) external view returns (Point memory);
     function getLockedBalance(uint256 tokenId) external view returns (LockedBalance memory);
     function totalLocked() external view returns (uint256);
     function epoch() external view returns (uint256);
     function userPointEpoch(uint256 tokenId) external view returns (uint256);
     function balanceOfNFT(uint256 tokenId) external view returns (uint256);
     function balanceOfNFTAt(uint256 tokenId, uint256 timestamp) external view returns (uint256);
+    function balanceAndOwnerOfNFTAt(
+        uint256 tokenId,
+        uint256 timestamp
+    ) external view returns (uint256, address);
     function MAX_TIME() external view returns (uint256);
     function SIX_DAYS() external view returns (uint256);
 }

@@ -144,21 +144,27 @@ contract VeHemiVoteDelegation is ReentrancyGuardTransient, VeHemDelegationStorag
     /**
      * @notice Get the current voting power for a token
      * @param tokenId_ The token ID to check
+     * @param account_ The account to check voting power for
      * @return The current voting power (includes both self votes and delegated votes)
      */
-    function getVotes(uint256 tokenId_) external view returns (uint256) {
-        return _getPastVotes(tokenId_, block.timestamp);
+    function getVotes(uint256 tokenId_, address account_) external view returns (uint256) {
+        return _getPastVotes(tokenId_, block.timestamp, account_);
     }
 
     /**
      * @notice Get the voting power for a token at a specific timestamp
      * @param tokenId_ The token ID to check
      * @param timestamp_ The timestamp to check voting power at (must not be in the future)
+     * @param account_ The account to check voting power for
      * @return The voting power at the given timestamp
      */
-    function getPastVotes(uint256 tokenId_, uint256 timestamp_) external view returns (uint256) {
+    function getPastVotes(
+        uint256 tokenId_,
+        uint256 timestamp_,
+        address account_
+    ) external view returns (uint256) {
         if (timestamp_ > block.timestamp) revert TimestampInFuture();
-        return _getPastVotes(tokenId_, timestamp_);
+        return _getPastVotes(tokenId_, timestamp_, account_);
     }
 
     /// @notice The ```calculateExpirations``` function calculates all expired delegations for an account since the last checkpoint.
@@ -443,28 +449,22 @@ contract VeHemiVoteDelegation is ReentrancyGuardTransient, VeHemDelegationStorag
      * @param timestamp_ The timestamp to check voting power at
      * @return The total voting power (self votes + delegated votes)
      */
-    function _getPastVotes(uint256 tokenId_, uint256 timestamp_) internal view returns (uint256) {
-        uint256 _selfVotes = _getSelfVotesAt(tokenId_, timestamp_);
-        uint256 _delegateVotes = _getDelegateVotesAt(tokenId_, timestamp_);
-        return _selfVotes + _delegateVotes;
-    }
-
-    /**
-     * @notice Get the token's own voting power at a specific timestamp
-     * @dev A token has its own voting power only if it has never been delegated or if the
-     * timestamp is before the first delegation. Once delegated, the token loses its own voting power.
-     * @param tokenId_ The token ID to check
-     * @param timestamp_ The timestamp to check voting power at
-     * @return The token's own voting power (0 if delegated or expired)
-     */
-    function _getSelfVotesAt(uint256 tokenId_, uint256 timestamp_) internal view returns (uint256) {
+    function _getPastVotes(
+        uint256 tokenId_,
+        uint256 timestamp_,
+        address account_
+    ) internal view returns (uint256) {
+        uint256 _selfVotes;
         if (veHemi.getLockedBalance(tokenId_).end <= timestamp_) return 0;
+        (uint256 _balance, address _owner) = veHemi.balanceAndOwnerOfNFTAt(tokenId_, timestamp_);
+        if (_owner != account_) return 0;
 
         uint256 _firstDelegation = delegations[tokenId_].firstDelegationTimestamp;
         if (_firstDelegation == 0 || timestamp_ < _firstDelegation) {
-            return veHemi.balanceOfNFTAt(tokenId_, timestamp_);
+            _selfVotes = _balance;
         }
-        return 0;
+        uint256 _delegateVotes = _getDelegateVotesAt(tokenId_, timestamp_);
+        return _selfVotes + _delegateVotes;
     }
 
     /**
@@ -486,13 +486,13 @@ contract VeHemiVoteDelegation is ReentrancyGuardTransient, VeHemDelegationStorag
 
         uint256 _epoch = veHemi.userPointEpoch(delegator_);
 
-        IVeHemi.Point memory _userPoint = veHemi.getUserPoint(delegator_, _epoch);
+        IVeHemi.UserPoint memory _userPoint = veHemi.getUserPoint(delegator_, _epoch);
 
-        _normalizedVeHemiLockInfo.slope = _userPoint.slope.toUint256();
+        _normalizedVeHemiLockInfo.slope = _userPoint.point.slope.toUint256();
         _normalizedVeHemiLockInfo.bias =
-            SafeCast.toUint256(_userPoint.bias) +
-            (_normalizedVeHemiLockInfo.slope * _userPoint.timestamp);
-        _normalizedVeHemiLockInfo.amount = _userPoint.amount;
+            SafeCast.toUint256(_userPoint.point.bias) +
+            (_normalizedVeHemiLockInfo.slope * _userPoint.point.timestamp);
+        _normalizedVeHemiLockInfo.amount = _userPoint.point.amount;
         _normalizedVeHemiLockInfo.end = _end;
     }
 

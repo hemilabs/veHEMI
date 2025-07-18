@@ -14,13 +14,14 @@ abstract contract VeHemiStorageV1 is IVeHemi {
     uint256 public nextTokenId;
 
     IVeHemiVoteDelegation public voteDelegation;
-
     IRewardDistributor public rewardDistributor; // 0x0 is valid
+    address public forfeitAdmin;
     mapping(uint256 => Point) public pointHistory; // epoch -> Point
-    mapping(uint256 => Point[1000000000]) public userPointHistory; // tokenId -> Point[userEpoch]
+    mapping(uint256 => UserPoint[1000000000]) public userPointHistory; // tokenId -> UserPoint[userEpoch]
     mapping(uint256 => uint256) public userPointEpoch; // tokenId -> epoch
     mapping(uint256 => int128) public slopeChanges; // time -> signed slope change
     mapping(uint256 => LockedBalance) public locked; // tokenId -> LockedBalance
     mapping(uint256 => address) public provider; // tokenId -> address.
     mapping(uint256 => uint256) public transferableAfter; // tokenId -> timestamp // nft transferable from timestamp
+    mapping(uint256 => bool) public forfeitable; // tokenId -> bool
 }
