@@ -20,9 +20,12 @@ contract VeHemiTest is Test {
     address bob = address(0x3344);
     address charlie = address(0x5566);
 
-    uint256 MAX_TIME;
+    uint256 private constant YEAR = 365.25 days;
+    uint256 private constant MONTH = YEAR / 12;
+    uint256 private constant SIX_DAYS = MONTH / 5;
+    uint256 private constant MAX_TIME = 4 * YEAR; // 4 years
+
     uint256 MAX_AMOUNT = 1_000 ether;
-    uint256 SIX_DAYS;
 
     struct LockedBalance {
         int128 amount;
@@ -44,8 +47,6 @@ contract VeHemiTest is Test {
             abi.encodeWithSelector(VeHemi.initialize.selector, address(this), address(0))
         );
         veHemi = VeHemi(address(proxy));
-        MAX_TIME = veHemi.MAX_TIME();
-        SIX_DAYS = veHemi.SIX_DAYS();
 
         // Deploy and set mock delegation contract
         mockDelegation = new MockHemiVoteDelegation();
@@ -88,9 +89,9 @@ contract VeHemiTest is Test {
         assertEq(veHemi.ownerOf(tokenId), user);
 
         // Check locked balance
-        (int128 lockedAmount, uint256 lockedEnd) = veHemi.locked(tokenId);
-        assertEq(uint256(uint128(lockedAmount)), amount, "Locked amount mismatch");
-        assertEq(lockedEnd, (unlockTime / SIX_DAYS) * SIX_DAYS, "Unlock time mismatch");
+        IVeHemi.LockedBalance memory lockedBalance = veHemi.getLockedBalance(tokenId);
+        assertEq(uint256(uint128(lockedBalance.amount)), amount, "Locked amount mismatch");
+        assertEq(lockedBalance.end, (unlockTime / SIX_DAYS) * SIX_DAYS, "Unlock time mismatch");
         // Check supply
         assertEq(veHemi.totalLocked(), amount, "Supply mismatch");
     }
@@ -129,9 +130,9 @@ contract VeHemiTest is Test {
         );
 
         // Lock should be cleared
-        (int128 lockedAmount, uint256 lockedEnd) = veHemi.locked(tokenId);
-        assertEq(uint256(uint128(lockedAmount)), 0, "Lock not cleared");
-        assertEq(lockedEnd, 0, "Lock end not cleared");
+        IVeHemi.LockedBalance memory lockedBalance = veHemi.getLockedBalance(tokenId);
+        assertEq(uint256(uint128(lockedBalance.amount)), 0, "Lock not cleared");
+        assertEq(lockedBalance.end, 0, "Lock end not cleared");
     }
 
     function testNonTransferableNFT() public {
@@ -194,9 +195,9 @@ contract VeHemiTest is Test {
         vm.stopPrank();
 
         // Check locked amount increased
-        (int128 lockedAmount, ) = veHemi.locked(tokenId);
+        IVeHemi.LockedBalance memory lockedBalance = veHemi.getLockedBalance(tokenId);
         assertEq(
-            uint256(uint128(lockedAmount)),
+            uint256(uint128(lockedBalance.amount)),
             amount + extra,
             "depositFor did not increase lock amount"
         );
@@ -208,7 +209,7 @@ contract VeHemiTest is Test {
         (uint256 tokenId_, , ) = createLock(user, amount_, 4 * 52 weeks);
 
         // Call checkpoint with old and new locked (simulate increase)
-        (int128 oldAmount_, uint256 oldEnd_) = veHemi.locked(tokenId_);
+        IVeHemi.LockedBalance memory oldLocked_ = veHemi.getLockedBalance(tokenId_);
         uint256 extraAmount_ = 1 ether;
 
         // User epoch should increase
@@ -218,8 +219,8 @@ contract VeHemiTest is Test {
         veHemi.checkpoint();
         assertEq(veHemi.epoch(), 59, "Global epoch should be 52 after checkpoint");
         IVeHemi.LockedBalance memory newLocked_ = IVeHemi.LockedBalance(
-            oldAmount_ + int128(int256(extraAmount_)),
-            uint64(oldEnd_)
+            oldLocked_.amount + int128(int256(extraAmount_)),
+            uint64(oldLocked_.end)
         );
         vm.startPrank(user);
         hemi.approve(address(veHemi), extraAmount_);
@@ -269,9 +270,9 @@ contract VeHemiTest is Test {
         veHemi.increaseUnlockTime(tokenId, newDuration);
 
         // Check that the lock's end is updated
-        (, uint256 end) = veHemi.locked(tokenId);
+        IVeHemi.LockedBalance memory lockedBalance = veHemi.getLockedBalance(tokenId);
         uint256 expectedUnlockTime = ((block.timestamp + newDuration) / SIX_DAYS) * SIX_DAYS;
-        assertEq(end, expectedUnlockTime);
+        assertEq(lockedBalance.end, expectedUnlockTime);
     }
 
     function testIncreaseUnlockTimeRevertsIfNotOwner() public {
@@ -826,9 +827,9 @@ contract VeHemiTest is Test {
         veHemi.ownerOf(tokenId);
 
         // Lock should be cleared
-        (int128 lockedAmount, uint256 lockedEnd) = veHemi.locked(tokenId);
-        assertEq(uint256(uint128(lockedAmount)), 0, "Lock not cleared");
-        assertEq(lockedEnd, 0, "Lock end not cleared");
+        IVeHemi.LockedBalance memory lockedBalance = veHemi.getLockedBalance(tokenId);
+        assertEq(uint256(uint128(lockedBalance.amount)), 0, "Lock not cleared");
+        assertEq(lockedBalance.end, 0, "Lock end not cleared");
 
         // Total locked should be reduced
         assertEq(veHemi.totalLocked(), 0, "Total locked should be reduced");
@@ -1186,8 +1187,8 @@ contract VeHemiTest is Test {
         veHemi.ownerOf(tokenId);
 
         // Lock should be cleared
-        (int128 lockedAmount, uint256 lockedEnd) = veHemi.locked(tokenId);
-        assertEq(uint256(uint128(lockedAmount)), 0, "Lock not cleared");
-        assertEq(lockedEnd, 0, "Lock end not cleared");
+        IVeHemi.LockedBalance memory lockedBalance = veHemi.getLockedBalance(tokenId);
+        assertEq(uint256(uint128(lockedBalance.amount)), 0, "Lock not cleared");
+        assertEq(lockedBalance.end, 0, "Lock end not cleared");
     }
 }

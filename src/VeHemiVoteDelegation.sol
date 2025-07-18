@@ -2,11 +2,11 @@
 pragma solidity ^0.8.29;
 
 import {OwnableUpgradeable} from "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
-import {ReentrancyGuardTransient} from "@openzeppelin/contracts/utils/ReentrancyGuardTransient.sol";
-import {IVeHemi} from "./interfaces/IVeHemi.sol";
-import {VeHemDelegationStorageV1} from "./storage/VeHemiDelegationStorageV1.sol";
-import {SafeCast} from "./libraries/SafeCast.sol";
+import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
+import {IVeHemi} from "./interfaces/IVeHemi.sol";
+import {VeHemiDelegationStorageV1} from "./storage/VeHemiDelegationStorageV1.sol";
+import {SafeCast} from "./libraries/SafeCast.sol";
 
 /**
  * @title VeHemiVoteDelegation
@@ -15,15 +15,22 @@ import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
  * (next day boundary) and expire when the delegator's lock expires.
  * @dev Based on veFXS and veCRV delegation mechanism with adaptations for veHemi
  */
-contract VeHemiVoteDelegation is ReentrancyGuardTransient, VeHemDelegationStorageV1 {
+contract VeHemiVoteDelegation is ReentrancyGuard, VeHemiDelegationStorageV1 {
     using SafeCast for uint256;
     using SafeCast for int128;
 
+    // --- Constants ---
+    uint256 private constant YEAR = 365.25 days;
+    uint256 private constant MONTH = YEAR / 12;
+    uint256 private constant SIX_DAYS = MONTH / 5;
+    uint256 private constant MAX_LOCK_DURATION = 4 * YEAR;
+    uint256 private constant ONE_DAY = 1 days;
+
     /// @notice The EIP-712 typehash for the contract's domain
-    bytes32 public constant DOMAIN_TYPEHASH =
+    bytes32 private constant DOMAIN_TYPEHASH =
         keccak256("EIP712Domain(string name,uint256 chainId,address verifyingContract)");
     /// @notice The EIP-712 typehash for the delegation struct used by the contract
-    bytes32 public constant DELEGATION_TYPEHASH =
+    bytes32 private constant DELEGATION_TYPEHASH =
         keccak256("Delegation(uint256 delegator,uint256 delegatee,uint256 nonce,uint256 expiry)");
 
     string public constant name = "veHEMIDelegation";
@@ -31,11 +38,6 @@ contract VeHemiVoteDelegation is ReentrancyGuardTransient, VeHemDelegationStorag
 
     /// @notice The veHemi contract that manages locked balances
     IVeHemi public immutable veHemi;
-
-    /// @notice Maximum lock duration (4 years)
-    uint256 public immutable MAX_LOCK_DURATION;
-    /// @notice Six days duration in seconds
-    uint256 public immutable SIX_DAYS;
 
     // --- Errors ---
     error InvalidVeHemi();
@@ -64,8 +66,6 @@ contract VeHemiVoteDelegation is ReentrancyGuardTransient, VeHemDelegationStorag
     constructor(address veHemi_) {
         if (veHemi_ == address(0)) revert InvalidVeHemi();
         veHemi = IVeHemi(veHemi_);
-        MAX_LOCK_DURATION = veHemi.MAX_TIME();
-        SIX_DAYS = veHemi.SIX_DAYS();
     }
 
     /**
@@ -126,6 +126,11 @@ contract VeHemiVoteDelegation is ReentrancyGuardTransient, VeHemDelegationStorag
         return _delegate(delegator_, delegatee_);
     }
 
+    /**
+     * @notice Get the delegation checkpoints for a token
+     * @param tokenId_ The token ID to get checkpoints for
+     * @return The array of delegation checkpoints
+     */
     function getDelegationCheckpoints(
         uint256 tokenId_
     ) external view returns (DelegateCheckpoint[] memory) {
@@ -167,12 +172,13 @@ contract VeHemiVoteDelegation is ReentrancyGuardTransient, VeHemDelegationStorag
         return _getPastVotes(tokenId_, timestamp_, account_);
     }
 
-    /// @notice The ```calculateExpirations``` function calculates all expired delegations for an account since the last checkpoint.
-    /// @dev Can be used in tandem with writeNewCheckpointForExpirations() to write a new checkpoint
-    /// @dev Long time periods between checkpoints can increase gas costs for delegate() and castVote()
-    /// @dev See _calculateExpirations
-    /// @param tokenId_ tokenId of delegate
-    /// @return _calculatedCheckpoint A new DelegateCheckpoint to write based on expirations since previous checkpoint
+    /**
+     * @notice Calculate all expired delegations for an account since the last checkpoint
+     * @dev Can be used in tandem with writeNewCheckpointForExpirations() to write a new checkpoint
+     * @dev Long time periods between checkpoints can increase gas costs for delegate() and castVote()
+     * @param tokenId_ tokenId of delegate
+     * @return _calculatedCheckpoint A new DelegateCheckpoint to write based on expirations since previous checkpoint
+     */
     function calculateExpiredDelegations(
         uint256 tokenId_
     ) public view returns (DelegateCheckpoint memory _calculatedCheckpoint) {
@@ -186,7 +192,7 @@ contract VeHemiVoteDelegation is ReentrancyGuardTransient, VeHemDelegationStorag
         DelegateCheckpoint memory _lastCheckpoint = delegationCheckpoints[_checkpointsLength - 1];
 
         // This ensures that checkpoints take effect at the next epoch
-        uint256 _checkpointTimestamp = ((block.timestamp / 1 days) * 1 days) + 1 days;
+        uint256 _checkpointTimestamp = ((block.timestamp / ONE_DAY) * ONE_DAY) + ONE_DAY;
 
         // Nothing expired because the most recent checkpoint is already written
         if (_lastCheckpoint.timestamp == _checkpointTimestamp) {
@@ -219,10 +225,11 @@ contract VeHemiVoteDelegation is ReentrancyGuardTransient, VeHemDelegationStorag
         }
     }
 
-    /// @notice The ```writeNewCheckpointForExpirations``` function writes a new checkpoint if any weight has expired since the previous checkpoint
-    /// @dev Long time periods between checkpoints can increase gas costs for delegate() and castVote()
-    /// @dev See _calculateExpirations
-    /// @param tokenId_ tokenId of delegatee
+    /**
+     * @notice Write a new checkpoint if any weight has expired since the previous checkpoint
+     * @dev Long time periods between checkpoints can increase gas costs for delegate() and castVote()
+     * @param tokenId_ tokenId of delegatee
+     */
     function writeNewCheckpointForExpiredDelegations(uint256 tokenId_) external nonReentrant {
         DelegateCheckpoint memory _newCheckpoint = calculateExpiredDelegations(tokenId_);
 
@@ -231,20 +238,6 @@ contract VeHemiVoteDelegation is ReentrancyGuardTransient, VeHemDelegationStorag
         delegateCheckpoints[tokenId_].push(_newCheckpoint);
     }
 
-    /**
-     * @notice Calculate a new checkpoint based on previous checkpoint and changes
-     * @dev This function handles the complex logic of updating checkpoints with new delegations
-     * and expirations. It ensures that voting power is correctly tracked over time.
-     * @param previousCheckpoint_ The previous checkpoint to build upon
-     * @param tokenId_ The token ID this checkpoint is for
-     * @param isDeltaPositive_ Whether this is adding (true) or removing (false) voting power
-     * @param deltaBias_ The change in bias (voting power at current time)
-     * @param deltaSlope_ The change in slope (rate of voting power decay)
-     * @param deltaAmount_ The change in locked amount
-     * @param checkpointTimestamp_ The timestamp for this checkpoint
-     * @param previousDelegationEnd_ The end time of the previous delegation (for expiration handling)
-     * @return _newCheckpoint The calculated new checkpoint
-     */
     function _calculateCheckpoint(
         DelegateCheckpoint memory previousCheckpoint_,
         uint256 tokenId_,
@@ -310,18 +303,6 @@ contract VeHemiVoteDelegation is ReentrancyGuardTransient, VeHemDelegationStorag
         }
     }
 
-    /**
-     * @notice Calculate expired voting power between two timestamps
-     * @dev This function handles the complex calculation of how much voting power has expired
-     * due to lock expirations between the start and end timestamps.
-     * @param tokenId_ The token ID to calculate expirations for
-     * @param start_ The start timestamp
-     * @param end_ The end timestamp
-     * @param checkpoint_ The checkpoint to calculate expirations from
-     * @return totalExpiredBias The total expired bias
-     * @return totalExpiredSlope The total expired slope
-     * @return totalExpiredAmount The total expired amount
-     */
     function _calculateExpirations(
         uint256 tokenId_,
         uint256 start_,
@@ -355,14 +336,6 @@ contract VeHemiVoteDelegation is ReentrancyGuardTransient, VeHemDelegationStorag
         }
     }
 
-    /**
-     * @notice Perform binary search to find the closest checkpoint for a given timestamp
-     * @dev This function efficiently finds the most recent checkpoint that is at or before
-     * the given timestamp using binary search for optimal performance.
-     * @param checkpoints_ The array of checkpoints to search through
-     * @param timestamp_ The timestamp to search for
-     * @return closestCheckpoint_ The closest checkpoint at or before the timestamp
-     */
     function _checkpointBinarySearch(
         DelegateCheckpoint[] storage checkpoints_,
         uint256 timestamp_
@@ -370,7 +343,7 @@ contract VeHemiVoteDelegation is ReentrancyGuardTransient, VeHemDelegationStorag
         uint256 checkpointsLength_ = checkpoints_.length;
 
         // What the newest checkpoint could be for timestamp (rounded to whole days). It will be earlier when checkpoints are sparse.
-        uint256 roundedDownTimestamp_ = (timestamp_ / 1 days) * 1 days;
+        uint256 roundedDownTimestamp_ = (timestamp_ / ONE_DAY) * ONE_DAY;
         // Newest checkpoint's timestamp (already rounded to whole days)
         uint256 lastCheckpointTimestamp_ = checkpointsLength_ > 0
             ? checkpoints_[checkpointsLength_ - 1].timestamp
@@ -380,7 +353,7 @@ contract VeHemiVoteDelegation is ReentrancyGuardTransient, VeHemDelegationStorag
         // If roundedDownTimestamp > lastCheckpointTimestamp that means that we can just use the last index as
         // the checkpoint.
         uint256 delta = lastCheckpointTimestamp_ > roundedDownTimestamp_
-            ? (lastCheckpointTimestamp_ - roundedDownTimestamp_) / 1 days
+            ? (lastCheckpointTimestamp_ - roundedDownTimestamp_) / ONE_DAY
             : 0;
         // low index is equal to the last checkpoints index minus the index delta
         uint256 low = (checkpointsLength_ > 0 && checkpointsLength_ - 1 > delta)
@@ -411,7 +384,7 @@ contract VeHemiVoteDelegation is ReentrancyGuardTransient, VeHemDelegationStorag
 
         Delegation memory _previousDelegation = delegations[delegator_];
 
-        uint256 _checkpointTimestamp = ((block.timestamp / 1 days) * 1 days) + 1 days;
+        uint256 _checkpointTimestamp = ((block.timestamp / ONE_DAY) * ONE_DAY) + ONE_DAY;
 
         NormalizedVeHemiLockInfo memory _normalizedVeLockInfo = _getNormalizedLockedInfo(
             delegator_,
@@ -441,14 +414,6 @@ contract VeHemiVoteDelegation is ReentrancyGuardTransient, VeHemDelegationStorag
         });
     }
 
-    /**
-     * @notice Get the total voting power for a token at a specific timestamp
-     * @dev This function combines the token's own voting power with any delegated voting power
-     * it has received from other tokens.
-     * @param tokenId_ The token ID to check
-     * @param timestamp_ The timestamp to check voting power at
-     * @return The total voting power (self votes + delegated votes)
-     */
     function _getPastVotes(
         uint256 tokenId_,
         uint256 timestamp_,
@@ -467,15 +432,6 @@ contract VeHemiVoteDelegation is ReentrancyGuardTransient, VeHemDelegationStorag
         return _selfVotes + _delegateVotes;
     }
 
-    /**
-     * @notice Get normalized lock information for a delegator at a specific timestamp
-     * @dev This function calculates the normalized voting power parameters (bias, slope, amount, end)
-     * for a delegator at the given checkpoint timestamp. These values are used to track
-     * delegated voting power over time.
-     * @param delegator_ The token ID of the delegator
-     * @param checkPointTimestamp_ The timestamp to calculate the lock info at
-     * @return _normalizedVeHemiLockInfo The normalized lock information
-     */
     function _getNormalizedLockedInfo(
         uint256 delegator_,
         uint256 checkPointTimestamp_
@@ -496,19 +452,11 @@ contract VeHemiVoteDelegation is ReentrancyGuardTransient, VeHemDelegationStorag
         _normalizedVeHemiLockInfo.end = _end;
     }
 
-    /**
-     * @notice Get delegated voting power for a token at a specific timestamp
-     * @dev This function calculates the total voting power that has been delegated to this token
-     * by other tokens, taking into account any expirations that have occurred.
-     * @param tokenId_ The token ID to check delegated votes for
-     * @param timestamp_ The timestamp to check delegated votes at
-     * @return _delegatedWeight The total delegated voting power
-     */
     function _getDelegateVotesAt(
         uint256 tokenId_,
         uint256 timestamp_
     ) internal view returns (uint256 _delegatedWeight) {
-        // Check if delegate token  has any delegations
+        // Check if delegate token has any delegations
         DelegateCheckpoint memory _checkpoint = _checkpointBinarySearch({
             checkpoints_: delegateCheckpoints[tokenId_],
             timestamp_: timestamp_
@@ -519,7 +467,7 @@ contract VeHemiVoteDelegation is ReentrancyGuardTransient, VeHemDelegationStorag
             return 0;
         }
 
-        // It's possible that some delegated  veHemi has expired.
+        // It's possible that some delegated veHemi has expired.
         // Add up all expirations during this time period, SIX_DAYS by SIX_DAYS.
         (uint256 totalExpiredBias, uint256 totalExpiredSlope, ) = _calculateExpirations({
             tokenId_: tokenId_,
@@ -537,13 +485,6 @@ contract VeHemiVoteDelegation is ReentrancyGuardTransient, VeHemDelegationStorag
             : 0;
     }
 
-    /**
-     * @notice Move voting power away from the previous delegate
-     * @dev This function handles removing voting power from the previous delegate when
-     * a delegation is changed or removed. It updates checkpoints and expiration records.
-     * @param previousDelegation_ The previous delegation information
-     * @param checkpointTimestamp_ The timestamp for the checkpoint
-     */
     function _moveVotingPowerFromPreviousDelegate(
         Delegation memory previousDelegation_,
         uint256 checkpointTimestamp_
@@ -662,15 +603,6 @@ contract VeHemiVoteDelegation is ReentrancyGuardTransient, VeHemDelegationStorag
         });
     }
 
-    /**
-     * @notice Write a new checkpoint to the user's checkpoint array
-     * @dev This function either overwrites the last checkpoint if it has the same timestamp,
-     * or pushes a new checkpoint to the array. This ensures efficient storage usage.
-     * @param userDelegationCheckpoints_ The array of checkpoints for the user
-     * @param accountCheckpointsLength_ The current length of the checkpoints array
-     * @param newCheckpoint_ The new checkpoint to write
-     * @param lastCheckpoint_ The last checkpoint in the array
-     */
     function _writeCheckpoint(
         DelegateCheckpoint[] storage userDelegationCheckpoints_,
         uint256 accountCheckpointsLength_,

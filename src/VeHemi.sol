@@ -8,7 +8,7 @@ import {IERC721} from "@openzeppelin/contracts/token/ERC721/IERC721.sol";
 import {IRewardDistributor} from "./interfaces/IRewardDistributor.sol";
 import {IVeHemiVoteDelegation} from "./interfaces/IVeHemiVoteDelegation.sol";
 import {ERC721EnumerableUpgradeable, ERC721Upgradeable} from "@openzeppelin/contracts-upgradeable/token/ERC721/extensions/ERC721EnumerableUpgradeable.sol";
-import {ReentrancyGuardTransient} from "@openzeppelin/contracts/utils/ReentrancyGuardTransient.sol";
+import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {VeHemiStorageV1} from "./storage/VeHemiStorageV1.sol";
 
 /**
@@ -18,19 +18,18 @@ import {VeHemiStorageV1} from "./storage/VeHemiStorageV1.sol";
 contract VeHemi is
     ERC721EnumerableUpgradeable,
     OwnableUpgradeable,
-    ReentrancyGuardTransient,
+    ReentrancyGuard,
     VeHemiStorageV1
 {
     using SafeCast for uint256;
     using SafeCast for int128;
-    // --- Types ---
 
     // --- Constants ---
-    uint256 public constant YEAR = 365.25 days;
-    uint256 public constant MONTH = YEAR / 12;
-    uint256 public constant SIX_DAYS = MONTH / 5;
-    uint256 public constant MAX_TIME = 4 * YEAR; // 4 years
-    uint256 internal constant MULTIPLIER = 1 ether;
+    uint256 private constant YEAR = 365.25 days;
+    uint256 private constant MONTH = YEAR / 12;
+    uint256 private constant SIX_DAYS = MONTH / 5;
+    uint256 private constant MAX_TIME = 4 * YEAR; // 4 years
+    uint256 private constant MULTIPLIER = 1 ether;
     string public constant version = "1.0.0";
     uint8 public constant decimals = 18;
 
@@ -47,8 +46,6 @@ contract VeHemi is
     error BlockNotReached();
     error NotForfeitable();
     error NotForfeitAdmin();
-
-    // --- Events ---
 
     constructor(address hemi_) {
         if (hemi_ == address(0)) revert AddressIsNull();
@@ -146,6 +143,18 @@ contract VeHemi is
     }
 
     /**
+     * @notice Forfeit a lock by admin and withdraw HEMI
+     * @param tokenId_ The token ID to forfeit
+     */
+    function forfeit(uint256 tokenId_) external nonReentrant {
+        if (_msgSender() != forfeitAdmin) revert NotForfeitAdmin();
+        if (!forfeitable[tokenId_]) revert NotForfeitable();
+        if (locked[tokenId_].end < block.timestamp) revert LockExpired();
+        _delegateToSelf(tokenId_);
+        _withdraw(tokenId_);
+    }
+
+    /**
      * @notice Get the locked balance information for a specific token
      * @param tokenId_ The token ID to get locked balance for
      * @return The LockedBalance struct containing amount and end time
@@ -204,6 +213,15 @@ contract VeHemi is
     }
 
     /**
+     * @notice Check if a token is transferable based on its extraData
+     * @param tokenId_ The token ID
+     * @return True if the token is transferable (default), false if transfer is not allowed
+     */
+    function isTransferable(uint256 tokenId_) public view returns (bool) {
+        return (transferableAfter[tokenId_] < block.timestamp);
+    }
+
+    /**
      * @notice Get the total supply of locked HEMI at the current timestamp
      * @return The total amount of HEMI currently locked
      */
@@ -211,6 +229,10 @@ contract VeHemi is
         return _supplyAt(block.timestamp);
     }
 
+    /**
+     * @notice Get the total supply of NFTs
+     * @return The total amount of veHEMI NFTs
+     */
     function totalNftSupply() external view returns (uint256) {
         return super.totalSupply();
     }
@@ -266,6 +288,11 @@ contract VeHemi is
         emit RewardDistributorUpdated(_oldRewardDistributor, newRewardDistributor_);
     }
 
+    /**
+     * @notice Update the forfeit admin address
+     * @dev Only callable by the contract owner. Can be set to address(0) to disable forfeits.
+     * @param newForfeitAdmin_ The new forfeit admin address
+     */
     function updateForfeitAdmin(address newForfeitAdmin_) external onlyOwner {
         address _oldForfeitAdmin = forfeitAdmin;
         forfeitAdmin = newForfeitAdmin_;
@@ -292,41 +319,6 @@ contract VeHemi is
         _withdraw(tokenId_);
     }
 
-    function _withdraw(uint256 tokenId_) internal {
-        _updateReward(tokenId_);
-        LockedBalance memory _oldLocked = locked[tokenId_];
-        uint256 _amount = _oldLocked.amount.toUint256();
-
-        // Burn the NFT
-        _burn(tokenId_);
-        locked[tokenId_] = LockedBalance(0, 0);
-        uint256 _lockedBefore = totalLocked;
-        totalLocked = _lockedBefore - _amount;
-
-        // oldLocked can have either expired <= timestamp or zero end
-        // oldLocked has only 0 end
-        // Both can have >= 0 amount
-        _checkpoint(tokenId_, _oldLocked, LockedBalance(0, 0));
-
-        address _sender = _msgSender();
-        HEMI.transfer(_sender, _amount);
-        emit Withdraw(_sender, tokenId_, _amount, block.timestamp);
-    }
-
-    function forfeit(uint256 tokenId_) external nonReentrant {
-        if (_msgSender() != forfeitAdmin) revert NotForfeitAdmin();
-        if (!forfeitable[tokenId_]) revert NotForfeitable();
-        if (locked[tokenId_].end < block.timestamp) revert LockExpired();
-        _delegateToSelf(tokenId_);
-        _withdraw(tokenId_);
-    }
-
-    /**
-     * @notice Returns the staked balance for a given NFT at a specific timestamp
-     * @param tokenId_ The token ID
-     * @param timestamp_ The timestamp to check the balance at
-     * @return The staked balance at the given timestamp
-     */
     function _balanceOfNFTAt(
         uint256 tokenId_,
         uint256 timestamp_
@@ -367,14 +359,6 @@ contract VeHemi is
         return _min;
     }
 
-    /**
-     * @notice Binary search to get the global point index at or prior to a given timestamp
-     * @dev This function efficiently finds the most recent global checkpoint that is at or before
-     * the given timestamp using binary search for optimal performance.
-     * @param epoch_ The current global epoch
-     * @param timestamp_ The timestamp to search for
-     * @return The global point index at or before the timestamp
-     */
     function _getPastGlobalPointIndex(
         uint256 epoch_,
         uint256 timestamp_
@@ -401,14 +385,6 @@ contract VeHemi is
         return _lower;
     }
 
-    /**
-     * @notice Binary search to get the user point index for a token id at or prior to a given timestamp
-     * @dev If a user point does not exist prior to the timestamp, this will return 0.
-     * This function efficiently finds the most recent user checkpoint using binary search.
-     * @param tokenId_ The token ID to search for
-     * @param timestamp_ The timestamp to search for
-     * @return User point index at or before the timestamp
-     */
     function _getPastUserPointIndex(
         uint256 tokenId_,
         uint256 timestamp_
@@ -421,20 +397,20 @@ contract VeHemi is
         // Next check implicit zero balance
         if (userPointHistory[tokenId_][1].point.timestamp > timestamp_) return 0;
 
-        uint256 lower = 0;
-        uint256 upper = _userEpoch;
-        while (upper > lower) {
-            uint256 center = upper - (upper - lower) / 2; // ceil, avoiding overflow
-            Point memory _userPoint = userPointHistory[tokenId_][center].point;
+        uint256 _lower = 0;
+        uint256 _upper = _userEpoch;
+        while (_upper > _lower) {
+            uint256 _center = _upper - (_upper - _lower) / 2; // ceil, avoiding overflow
+            Point memory _userPoint = userPointHistory[tokenId_][_center].point;
             if (_userPoint.timestamp == timestamp_) {
-                return center;
+                return _center;
             } else if (_userPoint.timestamp < timestamp_) {
-                lower = center;
+                _lower = _center;
             } else {
-                upper = center - 1;
+                _upper = _center - 1;
             }
         }
-        return lower;
+        return _lower;
     }
 
     /**
@@ -629,13 +605,6 @@ contract VeHemi is
         emit Checkpoint(_epoch, tokenId_, oldLocked_, newLocked_);
     }
 
-    /**
-     * @notice Internal function to create a new lock
-     * @param amount_ The amount of HEMI to lock
-     * @param lockDuration_ The duration to lock HEMI for
-     * @param account_ The address to assign the lock NFT to
-     * @return _tokenId The ID of the created lock NFT
-     */
     function _createLock(
         uint256 amount_,
         uint256 lockDuration_,
@@ -676,13 +645,6 @@ contract VeHemi is
         return _tokenId;
     }
 
-    /**
-     * @notice Internal function to deposit for a lock (increase amount or extend duration)
-     * @param tokenId_ The token ID
-     * @param amount_ The amount to deposit
-     * @param unlockTime_ The new unlock time
-     * @param oldLocked_ The previous locked balance
-     */
     function _depositFor(
         uint256 tokenId_,
         uint256 amount_,
@@ -717,11 +679,6 @@ contract VeHemi is
         emit Deposit(from, tokenId_, amount_, _newLocked.end, block.timestamp);
     }
 
-    /**
-     * @notice Internal function to increase the amount locked for a token
-     * @param tokenId_ The token ID
-     * @param amount_ The additional amount to lock
-     */
     function _increaseAmountFor(uint256 tokenId_, uint256 amount_) internal {
         _updateReward(tokenId_);
         LockedBalance memory _oldLocked = locked[tokenId_];
@@ -733,15 +690,6 @@ contract VeHemi is
         _depositFor(tokenId_, amount_, 0, _oldLocked);
     }
 
-    /**
-     * @notice Check if a token is transferable based on its extraData
-     * @param tokenId_ The token ID
-     * @return True if the token is transferable (default), false if transfer is not allowed
-     */
-    function isTransferable(uint256 tokenId_) public view returns (bool) {
-        return (transferableAfter[tokenId_] < block.timestamp);
-    }
-
     function _delegateToSelf(uint256 tokenId_) internal {
         if (address(voteDelegation) != address(0)) {
             uint256 _delegatee = voteDelegation.delegation(tokenId_).delegatee;
@@ -751,14 +699,6 @@ contract VeHemi is
         }
     }
 
-    /**
-     * @notice Calculate the total supply of locked HEMI at a specific timestamp
-     * @dev This function calculates the total voting power (supply) at a given timestamp
-     * by finding the appropriate global checkpoint and calculating the decay from that point.
-     * It handles slope changes and ensures the bias never goes negative.
-     * @param timestamp_ The timestamp to calculate supply at
-     * @return The total supply of locked HEMI at the given timestamp
-     */
     function _supplyAt(uint256 timestamp_) internal view returns (uint256) {
         uint256 _epoch = _getPastGlobalPointIndex(epoch, timestamp_);
         // epoch 0 is an empty point
@@ -795,10 +735,6 @@ contract VeHemi is
         return bias.toUint256();
     }
 
-    /**
-     * @notice Internal function to update rewards for a token
-     * @param tokenId_ The token ID
-     */
     function _updateReward(uint256 tokenId_) internal {
         if (address(rewardDistributor) != address(0)) {
             // fail silently
@@ -806,9 +742,27 @@ contract VeHemi is
         }
     }
 
-    /**
-     * @notice Disabled: transferFrom is not allowed (NFT is non-transferable)
-     */
+    function _withdraw(uint256 tokenId_) internal {
+        _updateReward(tokenId_);
+        LockedBalance memory _oldLocked = locked[tokenId_];
+        uint256 _amount = _oldLocked.amount.toUint256();
+
+        // Burn the NFT
+        _burn(tokenId_);
+        locked[tokenId_] = LockedBalance(0, 0);
+        uint256 _lockedBefore = totalLocked;
+        totalLocked = _lockedBefore - _amount;
+
+        // oldLocked can have either expired <= timestamp or zero end
+        // oldLocked has only 0 end
+        // Both can have >= 0 amount
+        _checkpoint(tokenId_, _oldLocked, LockedBalance(0, 0));
+
+        address _sender = _msgSender();
+        HEMI.transfer(_sender, _amount);
+        emit Withdraw(_sender, tokenId_, _amount, block.timestamp);
+    }
+
     function transferFrom(
         address from_,
         address to_,
