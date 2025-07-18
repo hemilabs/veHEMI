@@ -92,6 +92,4 @@ interface IVeHemi is IERC721 {
         uint256 tokenId,
         uint256 timestamp
     ) external view returns (uint256, address);
-    function MAX_TIME() external view returns (uint256);
-    function SIX_DAYS() external view returns (uint256);
 }

@@ -26,7 +26,11 @@ contract TestVeHemiVoteDelegation is Test {
     MockERC20 public hemiToken;
 
     uint256 public constant LOCK_AMOUNT = 1e18;
-    uint256 public MAX_TIME;
+    uint256 private constant YEAR = 365.25 days;
+    uint256 private constant MONTH = YEAR / 12;
+    uint256 private constant SIX_DAYS = MONTH / 5;
+    uint256 private constant MAX_TIME = 4 * YEAR; // 4 years
+    uint256 private constant MULTIPLIER = 1 ether;
 
     function setUp() public {
         // Deploy mock HEMI token
@@ -39,7 +43,6 @@ contract TestVeHemiVoteDelegation is Test {
             abi.encodeWithSelector(VeHemi.initialize.selector, address(this), address(0))
         );
         veHemi = VeHemi(address(proxy));
-        MAX_TIME = veHemi.MAX_TIME();
 
         // Deploy VeHemiVoteDelegation
         hemiVoteDelegation = new VeHemiVoteDelegation(address(veHemi));

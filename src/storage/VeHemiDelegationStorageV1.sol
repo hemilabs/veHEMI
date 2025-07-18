@@ -3,7 +3,7 @@ pragma solidity ^0.8.29;
 
 import {IVeHemiVoteDelegation} from "../interfaces/IVeHemiVoteDelegation.sol";
 
-abstract contract VeHemDelegationStorageV1 is IVeHemiVoteDelegation {
+abstract contract VeHemiDelegationStorageV1 is IVeHemiVoteDelegation {
     mapping(uint256 delegator => IVeHemiVoteDelegation.Delegation delegate) public delegations;
     mapping(uint256 delegatee => IVeHemiVoteDelegation.DelegateCheckpoint[])
         public delegateCheckpoints;
