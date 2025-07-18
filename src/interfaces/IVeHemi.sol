@@ -77,4 +77,6 @@ interface IVeHemi is IERC721 {
     function userPointEpoch(uint256 tokenId) external view returns (uint256);
     function balanceOfNFT(uint256 tokenId) external view returns (uint256);
     function balanceOfNFTAt(uint256 tokenId, uint256 timestamp) external view returns (uint256);
+    function MAX_TIME() external view returns (uint256);
+    function SIX_DAYS() external view returns (uint256);
 }

@@ -11,7 +11,6 @@ import {MockERC20} from "./mocks/MockERC20.sol";
 import {IVeHemiVoteDelegation} from "../src/interfaces/IVeHemiVoteDelegation.sol";
 import "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import {SafeCast} from "../src/libraries/SafeCast.sol";
-import {console2} from "forge-std/console2.sol";
 
 contract TestVeHemiVoteDelegation is Test {
     using SafeCast for uint256;
@@ -27,8 +26,7 @@ contract TestVeHemiVoteDelegation is Test {
     MockERC20 public hemiToken;
 
     uint256 public constant LOCK_AMOUNT = 1e18;
-    uint256 public constant LOCK_DURATION = 365 days * 4;
-    uint256 public constant MAX_TIME = 365 days * 4;
+    uint256 public MAX_TIME;
 
     function setUp() public {
         // Deploy mock HEMI token
@@ -41,6 +39,7 @@ contract TestVeHemiVoteDelegation is Test {
             abi.encodeWithSelector(VeHemi.initialize.selector, address(this), address(0))
         );
         veHemi = VeHemi(address(proxy));
+        MAX_TIME = veHemi.MAX_TIME();
 
         // Deploy VeHemiVoteDelegation
         hemiVoteDelegation = new VeHemiVoteDelegation(address(veHemi));
@@ -57,10 +56,10 @@ contract TestVeHemiVoteDelegation is Test {
         hemiToken.mint(BOB, LOCK_AMOUNT);
 
         // Create locks for test accounts
-        _createLock(BILL, LOCK_AMOUNT, LOCK_DURATION);
-        _createLock(ALICE, LOCK_AMOUNT, LOCK_DURATION);
-        _createLock(WALTER, LOCK_AMOUNT, LOCK_DURATION);
-        _createLock(BOB, LOCK_AMOUNT, LOCK_DURATION);
+        _createLock(BILL, LOCK_AMOUNT, MAX_TIME);
+        _createLock(ALICE, LOCK_AMOUNT, MAX_TIME);
+        _createLock(WALTER, LOCK_AMOUNT, MAX_TIME);
+        _createLock(BOB, LOCK_AMOUNT, MAX_TIME);
     }
 
     function _createLock(
@@ -99,8 +98,8 @@ contract TestVeHemiVoteDelegation is Test {
 
     // Test basic delegation functionality
     function testBasicDelegation() public {
-        (uint256 billTokenId, uint256 billSlope) = _createLock(BILL, LOCK_AMOUNT, LOCK_DURATION);
-        (uint256 aliceTokenId, uint256 aliceSlope) = _createLock(ALICE, LOCK_AMOUNT, LOCK_DURATION);
+        (uint256 billTokenId, uint256 billSlope) = _createLock(BILL, LOCK_AMOUNT, MAX_TIME);
+        (uint256 aliceTokenId, uint256 aliceSlope) = _createLock(ALICE, LOCK_AMOUNT, MAX_TIME);
 
         uint256 billInitialVotes = hemiVoteDelegation.getVotes(billTokenId);
         uint256 aliceInitialVotes = hemiVoteDelegation.getVotes(aliceTokenId);
@@ -129,8 +128,8 @@ contract TestVeHemiVoteDelegation is Test {
     }
 
     function testRemoveDelegation() public {
-        (uint256 billTokenId, ) = _createLock(BILL, LOCK_AMOUNT, LOCK_DURATION);
-        (uint256 aliceTokenId, uint256 aliceSlope) = _createLock(ALICE, LOCK_AMOUNT, LOCK_DURATION);
+        (uint256 billTokenId, ) = _createLock(BILL, LOCK_AMOUNT, MAX_TIME);
+        (uint256 aliceTokenId, uint256 aliceSlope) = _createLock(ALICE, LOCK_AMOUNT, MAX_TIME);
 
         uint256 aliceInitialVotes = hemiVoteDelegation.getVotes(aliceTokenId);
 
@@ -185,7 +184,7 @@ contract TestVeHemiVoteDelegation is Test {
 
     // Test delegation to self (should set delegatee to 0)
     function testDelegationToSelf() public {
-        (uint256 billTokenId, ) = _createLock(BILL, LOCK_AMOUNT, LOCK_DURATION);
+        (uint256 billTokenId, ) = _createLock(BILL, LOCK_AMOUNT, MAX_TIME);
 
         _delegateAndWarp(BILL, billTokenId, billTokenId);
 
@@ -198,8 +197,8 @@ contract TestVeHemiVoteDelegation is Test {
 
     // Test delegation to same delegatee (should be no-op)
     function testDelegationToSameDelegatee() public {
-        (uint256 billTokenId, ) = _createLock(BILL, LOCK_AMOUNT, LOCK_DURATION);
-        (uint256 aliceTokenId, ) = _createLock(ALICE, LOCK_AMOUNT, LOCK_DURATION);
+        (uint256 billTokenId, ) = _createLock(BILL, LOCK_AMOUNT, MAX_TIME);
+        (uint256 aliceTokenId, ) = _createLock(ALICE, LOCK_AMOUNT, MAX_TIME);
 
         uint256 aliceVotesBefore = hemiVoteDelegation.getVotes(aliceTokenId);
         uint256 billVotesBefore = hemiVoteDelegation.getVotes(billTokenId);
