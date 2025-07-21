@@ -4,9 +4,7 @@ pragma solidity ^0.8.29;
 import "forge-std/Test.sol";
 import "../src/VeHemi.sol";
 import "../src/interfaces/IVeHemi.sol";
-import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
-import "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
 import "../src/interfaces/IVeHemiVoteDelegation.sol";
 import "./mocks/MockERC20.sol";
 import "./mocks/MockHemiVoteDelegation.sol";
@@ -44,7 +42,7 @@ contract VeHemiTest is Test {
         // Deploy proxy
         ERC1967Proxy proxy = new ERC1967Proxy(
             address(logic),
-            abi.encodeWithSelector(VeHemi.initialize.selector, address(this), address(0))
+            abi.encodeWithSelector(VeHemi.initialize.selector, address(this))
         );
         veHemi = VeHemi(address(proxy));
 
@@ -215,9 +213,9 @@ contract VeHemiTest is Test {
         // User epoch should increase
         uint256 userEpochAfter_ = veHemi.userPointEpoch(tokenId_);
         assertEq(userEpochAfter_, 1, "User epoch not incremented");
-        vm.warp(block.timestamp + 50 weeks); // Simulate time passing
+        vm.warp(block.timestamp + 58 * 6 days); // Simulate time passing
         veHemi.checkpoint();
-        assertEq(veHemi.epoch(), 59, "Global epoch should be 52 after checkpoint");
+        assertEq(veHemi.epoch(), 59, "Global epoch should be 59 after checkpoint");
         IVeHemi.LockedBalance memory newLocked_ = IVeHemi.LockedBalance(
             oldLocked_.amount + int128(int256(extraAmount_)),
             uint64(oldLocked_.end)
@@ -246,7 +244,6 @@ contract VeHemiTest is Test {
         uint256 extraAmount_ = 5 ether;
 
         vm.warp(block.timestamp + 8 days);
-        vm.roll(block.number + 1);
         vm.prank(user);
         veHemi.increaseAmount(tokenId_, extraAmount_);
         uint256 expectedGlobalEpoch = block.timestamp / SIX_DAYS - initialSixDaysCount;
@@ -295,11 +292,16 @@ contract VeHemiTest is Test {
     function testBalanceOfNFT() public {
         uint256 amount = 100 ether;
         uint256 lockDuration = 4 weeks;
-        (uint256 tokenId, , ) = createLock(user, amount, lockDuration);
+        (uint256 tokenId, uint256 slope, ) = createLock(user, amount, lockDuration);
 
         // Should return the full amount right after creation
         uint256 bal = veHemi.balanceOfNFT(tokenId);
         assertGt(bal, 0, "balanceOfNFT should be > 0 after lock");
+        assertEq(
+            bal,
+            slope * (veHemi.getLockedBalance(tokenId).end - block.timestamp),
+            "balanceOfNFT is not accurate"
+        );
         assertLe(bal, amount, "balanceOfNFT should not exceed locked amount");
 
         // Fast forward to after expiry
@@ -309,21 +311,31 @@ contract VeHemiTest is Test {
         assertEq(veHemi.totalSupply(), 0, "totalSupply should be 0 after lock expires");
     }
 
-    function testBalanceOfNFTAt() public {
+    function test_BalanceOfNFTAt() public {
         uint256 amount = 100 ether;
         uint256 lockDuration = 4 weeks;
         uint256 start = block.timestamp;
-        (uint256 tokenId, , ) = createLock(user, amount, lockDuration);
+        (uint256 tokenId, uint256 slope, ) = createLock(user, amount, lockDuration);
 
         // At creation time
         uint256 balAtStart = veHemi.balanceOfNFTAt(tokenId, start);
         assertGt(balAtStart, 0, "balanceOfNFTAt should be > 0 at start");
+        assertEq(
+            balAtStart,
+            slope * (veHemi.getLockedBalance(tokenId).end - start),
+            "balanceOfNFT is not accurate"
+        );
         assertLe(balAtStart, amount, "balanceOfNFTAt should not exceed locked amount");
 
         // Halfway through lock
         uint256 half = start + lockDuration / 2;
         uint256 balAtHalf = veHemi.balanceOfNFTAt(tokenId, half);
         assertGt(balAtHalf, 0, "balanceOfNFTAt should be > 0 halfway");
+        assertEq(
+            balAtHalf,
+            slope * (veHemi.getLockedBalance(tokenId).end - half),
+            "balanceOfNFT is not accurate"
+        );
         assertLt(balAtHalf, balAtStart, "balanceOfNFTAt should decrease over time");
 
         // After expiry
@@ -357,6 +369,48 @@ contract VeHemiTest is Test {
         assertEq(address(veHemi.rewardDistributor()), address(0));
     }
 
+    function testSameBlock() public {
+        (uint256 tokenId, , ) = createLock(alice, 1 ether, MAX_TIME / 2);
+
+        assertEq(veHemi.userPointEpoch(tokenId), 1);
+        assertApproxEqRel(
+            veHemi.balanceOfNFT(tokenId),
+            0.5 ether,
+            0.0015e18,
+            "balance should be ~= 1/2 locked"
+        );
+
+        vm.prank(alice);
+        veHemi.transferFrom(alice, bob, tokenId);
+
+        vm.prank(bob);
+        veHemi.increaseAmount(tokenId, 1 ether);
+
+        assertApproxEqRel(veHemi.totalSupply(), 1 ether, 0.0015e18);
+        assertEq(veHemi.getLockedBalance(tokenId).amount, 2 ether, "locked amount is not correct");
+        assertApproxEqRel(
+            veHemi.balanceOfNFT(tokenId),
+            1 ether,
+            0.0015e18,
+            "balance should be ~= locked"
+        );
+
+        vm.prank(bob);
+        veHemi.increaseUnlockTime(tokenId, MAX_TIME);
+        vm.prank(bob);
+        veHemi.transferFrom(bob, alice, tokenId);
+
+        assertApproxEqRel(veHemi.totalSupply(), 2 ether, 0.0015e18, "supply should be ~= locked");
+        assertEq(veHemi.getLockedBalance(tokenId).amount, 2 ether, "locked amount is not correct");
+        assertApproxEqRel(
+            veHemi.balanceOfNFT(tokenId),
+            2 ether,
+            0.0015e18,
+            "balance should be ~= locked"
+        );
+        assertEq(veHemi.userPointEpoch(tokenId), 1, "epoch should not change");
+    }
+
     function testTotalSupply() public {
         // Initially should be 0
         assertEq(veHemi.totalSupply(), 0, "Initial total supply should be 0");
@@ -364,11 +418,11 @@ contract VeHemiTest is Test {
         uint256 lockDuration = MAX_TIME;
 
         (uint256 tokenId1, uint256 user1Slope, ) = createLock(user, 1 ether, lockDuration);
-        uint256 expectedBalance = user1Slope *
+        uint256 expectedBalance1 = user1Slope *
             (veHemi.getLockedBalance(tokenId1).end - block.timestamp);
 
         uint256 balanceOfTokenId1 = veHemi.balanceOfNFT(tokenId1);
-        assertEq(balanceOfTokenId1, expectedBalance, "user1 nft balance is not correct");
+        assertEq(balanceOfTokenId1, expectedBalance1, "user1 nft balance is not correct");
         assertEq(
             veHemi.totalSupply(),
             balanceOfTokenId1,
@@ -388,14 +442,16 @@ contract VeHemiTest is Test {
             "Total supply should be sum of all locks"
         );
 
-        vm.warp(block.timestamp + 1 * 365 days);
+        vm.warp(block.timestamp + 365 days);
 
+        expectedBalance1 = user1Slope * (veHemi.getLockedBalance(tokenId1).end - block.timestamp);
         expectedBalance2 = user2Slope * (veHemi.getLockedBalance(tokenId2).end - block.timestamp);
         balanceOfTokenId2 = veHemi.balanceOfNFT(tokenId2);
         balanceOfTokenId1 = veHemi.balanceOfNFT(tokenId1);
-        assertEq(balanceOfTokenId2, expectedBalance2, "user2 nft balance is not correct");
+        assertEq(balanceOfTokenId1, expectedBalance1, "user2 nft balance is not correct");
         assertGt(balanceOfTokenId1, 0, "Total supply should equal locked amount");
-
+        assertEq(balanceOfTokenId2, expectedBalance2, "user2 nft balance is not correct");
+        assertGt(balanceOfTokenId2, 0, "Total supply should equal locked amount");
         assertEq(
             veHemi.totalSupply(),
             balanceOfTokenId1 + balanceOfTokenId2,
@@ -667,7 +723,7 @@ contract VeHemiTest is Test {
         vm.stopPrank();
 
         uint256 epochAfterModification = veHemi.userPointEpoch(tokenId);
-        assertEq(epochAfterModification, 1, "Epoch should be 2 after modification");
+        assertEq(epochAfterModification, 1, "Epoch should be 1 after modification");
 
         // Fast forward time to make token transferable
         vm.warp(block.timestamp + 1 days);
@@ -677,7 +733,7 @@ contract VeHemiTest is Test {
         veHemi.transferFrom(user, alice, tokenId);
 
         uint256 epochAfterTransfer = veHemi.userPointEpoch(tokenId);
-        assertEq(epochAfterTransfer, 2, "Epoch should be 3 after transfer");
+        assertEq(epochAfterTransfer, 2, "Epoch should be 2 after transfer");
 
         // Check that the transfer point has the correct owner and updated amount
         IVeHemi.UserPoint memory transferPoint = veHemi.getUserPoint(tokenId, epochAfterTransfer);
@@ -703,11 +759,16 @@ contract VeHemiTest is Test {
 
     // --- Balance and Supply Fuzz Tests ---
 
-    function testFuzz_BalanceOfNFT_TimeDecay(uint256 amount, uint256 timeAdvance) public {
+    function testFuzz_BalanceOfNFT_TimeDecay(
+        uint256 amount,
+        uint256 duration,
+        uint256 timeAdvance
+    ) public {
         amount = bound(amount, 1 ether, MAX_AMOUNT);
-        timeAdvance = bound(timeAdvance, 0, MAX_TIME);
+        duration = bound(duration, SIX_DAYS, MAX_TIME);
+        timeAdvance = bound(timeAdvance, 0, duration);
 
-        (uint256 tokenId, uint256 slope, uint256 end) = createLock(user, amount, MAX_TIME);
+        (uint256 tokenId, uint256 slope, uint256 end) = createLock(user, amount, duration);
 
         uint256 balanceAtStart = veHemi.balanceOfNFT(tokenId);
         assertGt(balanceAtStart, 0);
