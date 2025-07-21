@@ -1,13 +1,11 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.29;
 
-import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {IVeHemi} from "../interfaces/IVeHemi.sol";
 import {IRewardDistributor} from "../interfaces/IRewardDistributor.sol";
 import {IVeHemiVoteDelegation} from "../interfaces/IVeHemiVoteDelegation.sol";
 
 abstract contract VeHemiStorageV1 is IVeHemi {
-    IERC20 public immutable HEMI;
     // --- State ---
     uint256 public totalLocked;
     uint256 public epoch;

@@ -24,6 +24,8 @@ contract VeHemi is
     using SafeCast for uint256;
     using SafeCast for int128;
 
+    IERC20 public immutable HEMI;
+
     // --- Constants ---
     uint256 private constant YEAR = 365.25 days;
     uint256 private constant MONTH = YEAR / 12;
@@ -208,7 +210,7 @@ contract VeHemi is
         uint256 _unlockTime = ((block.timestamp + lockDuration_) / SIX_DAYS) * SIX_DAYS; // unlock time is rounded down to SIX_DAYS
         if (_unlockTime > block.timestamp + MAX_TIME) revert LockDurationTooLong();
         if (_unlockTime <= _oldLocked.end) revert NewLockDurationNotGreater();
-        _updateReward(tokenId_);
+
         _depositFor(tokenId_, 0, uint64(_unlockTime), _oldLocked);
     }
 
@@ -620,7 +622,6 @@ contract VeHemi is
 
         _tokenId = nextTokenId++;
         _mint(account_, _tokenId);
-        _updateReward(_tokenId);
 
         _depositFor(_tokenId, amount_, uint64(unlockTime), locked[_tokenId]);
 
@@ -651,6 +652,8 @@ contract VeHemi is
         uint64 unlockTime_,
         LockedBalance memory oldLocked_
     ) internal {
+        _updateReward(tokenId_);
+
         uint256 _lockedBefore = totalLocked;
         totalLocked = _lockedBefore + amount_;
 
@@ -680,7 +683,6 @@ contract VeHemi is
     }
 
     function _increaseAmountFor(uint256 tokenId_, uint256 amount_) internal {
-        _updateReward(tokenId_);
         LockedBalance memory _oldLocked = locked[tokenId_];
 
         if (amount_ == 0) revert AmountIsZero();
@@ -772,6 +774,7 @@ contract VeHemi is
             if (!isTransferable(tokenId_)) {
                 revert("NFT is non-transferable");
             }
+            _updateReward(tokenId_);
             _delegateToSelf(tokenId_);
         }
         super.transferFrom(from_, to_, tokenId_);
