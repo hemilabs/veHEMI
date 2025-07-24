@@ -419,7 +419,6 @@ contract VeHemiVoteDelegation is ReentrancyGuard, VeHemiDelegationStorageV1 {
         address account_
     ) internal view returns (uint256) {
         uint256 _selfVotes;
-        if (veHemi.getLockedBalance(tokenId_).end <= timestamp_) return 0;
         (uint256 _balance, address _owner) = veHemi.balanceAndOwnerOfNFTAt(tokenId_, timestamp_);
         if (_owner != account_) return 0;
 

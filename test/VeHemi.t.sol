@@ -117,10 +117,6 @@ contract VeHemiTest is Test {
         vm.prank(user);
         veHemi.withdraw(tokenId);
 
-        // NFT should be burned
-        vm.expectRevert();
-        veHemi.ownerOf(tokenId);
-
         assertEq(
             hemi.balanceOf(user),
             userBalanceBefore + amount,
@@ -131,6 +127,33 @@ contract VeHemiTest is Test {
         IVeHemi.LockedBalance memory lockedBalance = veHemi.getLockedBalance(tokenId);
         assertEq(uint256(uint128(lockedBalance.amount)), 0, "Lock not cleared");
         assertEq(lockedBalance.end, 0, "Lock end not cleared");
+    }
+
+    // User should not be able to withdraw and extend lock after expiry and withdraw
+    function testWithdrawAfterExpiry() public {
+        uint256 amount = 100 ether;
+        uint256 lockDuration = 2 weeks;
+        (uint256 tokenId, , ) = createLock(user, amount, lockDuration);
+
+        vm.warp(block.timestamp + lockDuration + 1);
+
+        vm.startPrank(user);
+
+        vm.expectRevert(VeHemi.LockExpired.selector);
+        veHemi.increaseUnlockTime(tokenId, 4 weeks);
+
+        vm.expectRevert(VeHemi.LockExpired.selector);
+        veHemi.increaseAmount(tokenId, 2 weeks);
+
+        veHemi.withdraw(tokenId);
+
+        vm.expectRevert(VeHemi.LockExpired.selector);
+        veHemi.increaseUnlockTime(tokenId, 4 weeks);
+
+        vm.expectRevert(VeHemi.LockExpired.selector);
+        veHemi.increaseAmount(tokenId, 2 weeks);
+
+        vm.stopPrank();
     }
 
     function testNonTransferableNFT() public {
@@ -883,10 +906,6 @@ contract VeHemiTest is Test {
         vm.prank(forfeitAdmin);
         veHemi.forfeit(tokenId);
 
-        // NFT should be burned
-        vm.expectRevert();
-        veHemi.ownerOf(tokenId);
-
         // Lock should be cleared
         IVeHemi.LockedBalance memory lockedBalance = veHemi.getLockedBalance(tokenId);
         assertEq(uint256(uint128(lockedBalance.amount)), 0, "Lock not cleared");
@@ -894,6 +913,16 @@ contract VeHemiTest is Test {
 
         // Total locked should be reduced
         assertEq(veHemi.totalLocked(), 0, "Total locked should be reduced");
+
+        vm.startPrank(teamMember);
+
+        vm.expectRevert(VeHemi.LockExpired.selector);
+        veHemi.increaseUnlockTime(tokenId, 4 weeks);
+
+        vm.expectRevert(VeHemi.LockExpired.selector);
+        veHemi.increaseAmount(tokenId, 2 weeks);
+
+        vm.stopPrank();
     }
 
     function testForfeitLockRevertsIfNotAdmin() public {
@@ -1042,31 +1071,6 @@ contract VeHemiTest is Test {
         );
     }
 
-    function testForfeitLockClearsDelegation() public {
-        uint256 amount = 100 ether;
-        address teamMember = address(0x1234);
-        address forfeitAdmin = address(0x5678);
-
-        // Set up forfeit admin
-        vm.prank(address(this));
-        veHemi.updateForfeitAdmin(forfeitAdmin);
-
-        // Create forfeitable lock for team member
-        vm.prank(user);
-        uint256 tokenId = veHemi.createLockFor(amount, 2 * 365 days, teamMember, false, true);
-
-        vm.prank(teamMember);
-        mockDelegation.delegate(tokenId, tokenId);
-
-        // Forfeit the lock
-        vm.prank(forfeitAdmin);
-        veHemi.forfeit(tokenId);
-
-        // NFT should be burned and delegation should be cleared
-        vm.expectRevert();
-        veHemi.ownerOf(tokenId);
-    }
-
     function testForfeitLockEmitsCorrectEvents() public {
         uint256 amount = 100 ether;
         address teamMember = address(0x1234);
@@ -1212,10 +1216,6 @@ contract VeHemiTest is Test {
         vm.prank(forfeitAdmin);
         veHemi.forfeit(tokenId);
 
-        // NFT should be burned
-        vm.expectRevert();
-        veHemi.ownerOf(tokenId);
-
         // Total locked should be reduced
         assertEq(veHemi.totalLocked(), 0, "Total locked should be reduced");
     }
@@ -1242,10 +1242,6 @@ contract VeHemiTest is Test {
         // Forfeit the lock
         vm.prank(forfeitAdmin);
         veHemi.forfeit(tokenId);
-
-        // NFT should be burned
-        vm.expectRevert();
-        veHemi.ownerOf(tokenId);
 
         // Lock should be cleared
         IVeHemi.LockedBalance memory lockedBalance = veHemi.getLockedBalance(tokenId);

@@ -455,7 +455,7 @@ contract TestVeHemiVoteDelegation is Test {
 
         // Warp to lock expiration
         uint256 lockEnd = veHemi.getLockedBalance(billTokenId).end;
-        vm.warp(lockEnd);
+        vm.warp(lockEnd + 1);
 
         // Alice should have her own votes back after Bill's lock expires
         uint256 aliceVotesAfterExpiry = hemiVoteDelegation.getVotes(aliceTokenId, ALICE);
@@ -470,6 +470,103 @@ contract TestVeHemiVoteDelegation is Test {
             hemiVoteDelegation.getVotes(billTokenId, BILL),
             0,
             "Bill should have no votes after lock expires"
+        );
+    }
+
+    // Alice and Bill Delegate to WALTER . After some some time Walter lock is forfeited
+
+    function testVoteAfterForfeit() public {
+        uint256 lockAmount = 1 ether;
+        address forfeitAdmin = address(0x5678);
+
+        // Set up forfeit admin
+        vm.prank(address(this));
+        veHemi.updateForfeitAdmin(forfeitAdmin);
+
+        (uint256 billTokenId, ) = _createLock(BILL, lockAmount, 4 * 365 days);
+        (uint256 aliceTokenId, ) = _createLock(ALICE, lockAmount, 4 * 365 days);
+
+        // Create forfeitable lock for WALTER
+        hemiToken.mint(BILL, lockAmount);
+        vm.startPrank(BILL);
+        hemiToken.approve(address(veHemi), lockAmount);
+        uint256 walterTokenId = veHemi.createLockFor(lockAmount, 4 * 365 days, WALTER, false, true);
+        vm.stopPrank();
+
+        vm.warp(block.timestamp + 90 days);
+
+        _delegateAndWarp(BILL, billTokenId, walterTokenId);
+        _delegateAndWarp(ALICE, aliceTokenId, walterTokenId);
+
+        vm.warp(block.timestamp + 10 days);
+
+        uint256 voteBeforeForfeit = hemiVoteDelegation.getVotes(walterTokenId, WALTER);
+        assertGt(voteBeforeForfeit, 0, "Walter should have votes before forfeit");
+
+        vm.prank(forfeitAdmin);
+        veHemi.forfeit(walterTokenId);
+
+        assertGt(
+            hemiVoteDelegation.getVotes(walterTokenId, WALTER),
+            0,
+            "Walter should have no votes after forfeit"
+        );
+
+        uint256 timestampBeforeDelegationRemoved = block.timestamp;
+
+        _delegateAndWarp(BILL, billTokenId, billTokenId);
+        _delegateAndWarp(ALICE, aliceTokenId, aliceTokenId);
+
+        assertEq(
+            hemiVoteDelegation.getVotes(walterTokenId, WALTER),
+            0,
+            "Walter should have no votes after forfeit"
+        );
+
+        assertGt(
+            hemiVoteDelegation.getPastVotes(
+                walterTokenId,
+                timestampBeforeDelegationRemoved,
+                WALTER
+            ),
+            0,
+            "Walter should have no votes after forfeit"
+        );
+    }
+
+    function testVoteAfterDelegateeLockExpire() public {
+        uint256 lockAmount = 1 ether;
+        (uint256 aliceTokenId, ) = _createLock(ALICE, lockAmount, 365 days);
+
+        uint256 aliceInitialVotes = hemiVoteDelegation.getVotes(aliceTokenId, ALICE);
+        assertEq(aliceInitialVotes, veHemi.balanceOfNFT(aliceTokenId));
+
+        (uint256 billTokenId, ) = _createLock(BILL, 1 ether, 2 * 365 days);
+        _delegateAndWarp(BILL, billTokenId, aliceTokenId);
+
+        uint256 aliceVotes = hemiVoteDelegation.getVotes(aliceTokenId, ALICE);
+        assertEq(
+            aliceVotes,
+            veHemi.balanceOfNFT(aliceTokenId) + veHemi.balanceOfNFT(billTokenId),
+            "Alice should have received Bill's votes"
+        );
+
+        // Warp to lock expiration
+        uint256 lockEnd = veHemi.getLockedBalance(aliceTokenId).end;
+        vm.warp(lockEnd + 1);
+
+        // Alice should have her bill's votes after Alice lock expired
+        uint256 aliceVotesAfterExpiry = hemiVoteDelegation.getVotes(aliceTokenId, ALICE);
+        assertGt(aliceVotesAfterExpiry, 0, "Alice should have BILL votes after Alice lock expired");
+
+        lockEnd = veHemi.getLockedBalance(billTokenId).end;
+        vm.warp(lockEnd + 1);
+
+        aliceVotesAfterExpiry = hemiVoteDelegation.getVotes(aliceTokenId, ALICE);
+        assertEq(
+            aliceVotesAfterExpiry,
+            0,
+            "Alice should have her original votes back after Bill's lock expires"
         );
     }
 

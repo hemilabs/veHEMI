@@ -686,8 +686,8 @@ contract VeHemi is
         LockedBalance memory _oldLocked = locked[tokenId_];
 
         if (amount_ == 0) revert AmountIsZero();
-        if (_oldLocked.amount <= 0) revert NoExistingLock();
         if (_oldLocked.end <= block.timestamp) revert LockExpired();
+        if (_oldLocked.amount <= 0) revert NoExistingLock();
 
         _depositFor(tokenId_, amount_, 0, _oldLocked);
     }
@@ -749,8 +749,6 @@ contract VeHemi is
         LockedBalance memory _oldLocked = locked[tokenId_];
         uint256 _amount = _oldLocked.amount.toUint256();
 
-        // Burn the NFT
-        _burn(tokenId_);
         locked[tokenId_] = LockedBalance(0, 0);
         uint256 _lockedBefore = totalLocked;
         totalLocked = _lockedBefore - _amount;
