@@ -2,7 +2,6 @@ import { HardhatUserConfig } from "hardhat/config";
 import "@nomicfoundation/hardhat-toolbox";
 import "dotenv/config";
 import "hardhat-deploy";
-import "hardhat-deploy-ethers";
 
 const accounts: [string] | undefined = process.env.DEPLOYER_PRIVATE_KEY
     ? [process.env.DEPLOYER_PRIVATE_KEY!]
@@ -14,7 +13,6 @@ const config: HardhatUserConfig = {
         localhost: {
             accounts,
             saveDeployments: true,
-            chainId: 43111, // Hemi local fork
             autoImpersonate: true
         },
         hemi: {
@@ -53,8 +51,7 @@ const config: HardhatUserConfig = {
         cache: "cache_hardhat"
     },
     namedAccounts: {
-        deployer: process.env.DEPLOYER || 0,
-        owner: process.env.OWNER!
+        deployer: process.env.DEPLOYER || 0
     }
 };
 

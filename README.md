@@ -90,6 +90,47 @@ bool isTransferable = veHemi.isTransferable(tokenId);
 veHemi.transferFrom(from, to, tokenId);
 ```
 
+## Installation
+
+This repo uses both `foundry` and `hardhat` frameworks, it uses npm to manages all dependencies (foundry libs included), meaning the foundry test will only work after running:
+
+```sh
+npm i
+```
+
+## Tests
+
+```sh
+forge t
+```
+
+## Deployment
+
+### Preparation
+
+Before any deployment/upgrade it's recommended to run scripts against local fork chain:
+
+Make sure that the `.env` file has correct params and then run:
+
+```sh
+./scripts/start-forked-node.sh
+./scripts/test-next-deployment-on-fork.sh
+```
+
+### Deployment
+
+Make sure that the `.env` file has correct params and then run:
+
+```sh
+npx hardhat deploy --network hemi
+```
+
+### Verification
+
+```sh
+npx hardhat etherscan-verify --network hemi
+```
+
 ## License
 
 MIT License
