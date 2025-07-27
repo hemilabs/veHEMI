@@ -670,17 +670,29 @@ contract VeHemi is
         if (amount_ != 0) {
             HEMI.transferFrom(from, address(this), amount_);
         }
-
+        _reDelegate(tokenId_);
         emit Deposit(from, tokenId_, amount_, _newLocked.end, block.timestamp);
     }
 
-    function _delegateToSelf(uint256 tokenId_) internal {
-        if (address(voteDelegation) != address(0)) {
-            uint256 _delegatee = voteDelegation.delegation(tokenId_).delegatee;
-            if (_delegatee != 0) {
-                try voteDelegation.delegate(tokenId_, tokenId_) {} catch {}
-            }
+    function _reDelegate(uint256 delegator_) internal {
+        uint256 _delegatee = _getDelegatee(delegator_);
+        if (_delegatee != 0) {
+            try voteDelegation.delegate(delegator_, _delegatee) {} catch {}
         }
+    }
+
+    function _delegateToSelf(uint256 tokenId_) internal {
+        uint256 _delegatee = _getDelegatee(tokenId_);
+        if (_delegatee != 0) {
+            try voteDelegation.delegate(tokenId_, tokenId_) {} catch {}
+        }
+    }
+
+    function _getDelegatee(uint256 tokenId_) internal view returns (uint256) {
+        if (address(voteDelegation) != address(0)) {
+            return voteDelegation.delegation(tokenId_).delegatee;
+        }
+        return 0;
     }
 
     function _supplyAt(uint256 timestamp_) internal view returns (uint256) {

@@ -45,6 +45,8 @@ contract TestVeHemiVoteDelegation is Test {
         // Deploy VeHemiVoteDelegation
         hemiVoteDelegation = new VeHemiVoteDelegation(address(veHemi));
 
+        veHemi.updateVoteDelegation(hemiVoteDelegation);
+
         // Setup initial state
         _setupInitialState();
     }
@@ -115,6 +117,99 @@ contract TestVeHemiVoteDelegation is Test {
             aliceVotesAfter,
             expectedAliceVotes,
             "Voting power should not decay more than 5% in one day"
+        );
+    }
+
+    function testReDelegation() public {
+        (uint256 billTokenId, ) = _createLock(BILL, LOCK_AMOUNT, MAX_TIME);
+        (uint256 aliceTokenId, ) = _createLock(ALICE, LOCK_AMOUNT, MAX_TIME);
+
+        _delegateAndWarp(BILL, billTokenId, aliceTokenId);
+
+        //delegate to self
+        _delegateAndWarp(ALICE, aliceTokenId, aliceTokenId);
+        uint256 aliceVotesAfter = hemiVoteDelegation.getVotes(aliceTokenId, ALICE);
+
+        uint256 billBalance = veHemi.balanceOfNFT(billTokenId);
+        uint256 aliceBalance = veHemi.balanceOfNFT(aliceTokenId);
+
+        assertEq(
+            aliceVotesAfter,
+            aliceBalance + billBalance,
+            "Alice vote should be the same after re-delegation"
+        );
+    }
+
+    function testReDelegationWhenAmountIncreased() public {
+        (uint256 billTokenId, ) = _createLock(BILL, LOCK_AMOUNT, MAX_TIME);
+        (uint256 aliceTokenId, ) = _createLock(ALICE, LOCK_AMOUNT, MAX_TIME);
+        _delegateAndWarp(BILL, billTokenId, aliceTokenId);
+
+        // remove delegation and assign to self
+        _delegateAndWarp(BILL, billTokenId, billTokenId);
+
+        uint256 billVoteBefore = hemiVoteDelegation.getVotes(billTokenId, BILL);
+
+        // more amount added to alice lock
+        hemiToken.mint(ALICE, LOCK_AMOUNT);
+        vm.startPrank(ALICE);
+        hemiToken.approve(address(veHemi), LOCK_AMOUNT);
+        // add amount to bill lock
+        veHemi.increaseAmount(billTokenId, LOCK_AMOUNT);
+        vm.stopPrank();
+
+        uint256 delegationStarts = ((block.timestamp / 1 days) * 1 days) + 1 days;
+        vm.warp(delegationStarts);
+
+        assertGt(
+            hemiVoteDelegation.getVotes(billTokenId, BILL),
+            billVoteBefore,
+            "Alice should have received Bill's votes"
+        );
+    }
+
+    function testReDelegationWhenAmountIncreasedByDelegator() public {
+        (uint256 billTokenId, ) = _createLock(BILL, LOCK_AMOUNT, MAX_TIME);
+        (uint256 aliceTokenId, ) = _createLock(ALICE, LOCK_AMOUNT, MAX_TIME);
+        _delegateAndWarp(BILL, billTokenId, aliceTokenId);
+
+        uint256 aliceVoteBefore = hemiVoteDelegation.getVotes(aliceTokenId, ALICE);
+
+        // more amount added to BILL lock
+        hemiToken.mint(BILL, LOCK_AMOUNT);
+        vm.startPrank(BILL);
+        hemiToken.approve(address(veHemi), LOCK_AMOUNT);
+        // add amount to bill lock
+        veHemi.increaseAmount(billTokenId, LOCK_AMOUNT);
+        vm.stopPrank();
+
+        uint256 delegationStarts = ((block.timestamp / 1 days) * 1 days) + 1 days;
+        vm.warp(delegationStarts);
+
+        assertGt(
+            hemiVoteDelegation.getVotes(aliceTokenId, ALICE),
+            aliceVoteBefore,
+            "Alice should have received Bill's votes"
+        );
+    }
+
+    function testReDelegationWhenLockExtendedByDelegator() public {
+        (uint256 billTokenId, ) = _createLock(BILL, LOCK_AMOUNT, 1 * YEAR);
+        (uint256 aliceTokenId, ) = _createLock(ALICE, LOCK_AMOUNT, 1 * YEAR);
+        _delegateAndWarp(BILL, billTokenId, aliceTokenId);
+
+        uint256 aliceVoteBefore = hemiVoteDelegation.getVotes(aliceTokenId, ALICE);
+
+        vm.prank(BILL);
+        veHemi.increaseUnlockTime(billTokenId, 2 * YEAR);
+
+        uint256 delegationStarts = ((block.timestamp / 1 days) * 1 days) + 1 days;
+        vm.warp(delegationStarts);
+
+        assertGt(
+            hemiVoteDelegation.getVotes(aliceTokenId, ALICE),
+            aliceVoteBefore,
+            "Alice should have received Bill's votes"
         );
     }
 
