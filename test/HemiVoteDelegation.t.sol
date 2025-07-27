@@ -578,6 +578,33 @@ contract TestVeHemiVoteDelegation is Test {
         vm.prank(address(this));
         veHemi.updateForfeitAdmin(forfeitAdmin);
 
+        // Create forfeitable lock for WALTER
+        hemiToken.mint(BILL, lockAmount);
+        vm.startPrank(BILL);
+        hemiToken.approve(address(veHemi), lockAmount);
+        uint256 walterTokenId = veHemi.createLockFor(lockAmount, 4 * 365 days, WALTER, false, true);
+        vm.stopPrank();
+
+        vm.warp(block.timestamp + 90 days);
+
+        vm.prank(forfeitAdmin);
+        veHemi.forfeit(walterTokenId);
+
+        assertEq(
+            hemiVoteDelegation.getVotes(walterTokenId, WALTER),
+            0,
+            "Walter should have no votes after forfeit"
+        );
+    }
+
+    function testDelegatedVotesAfterForfeit() public {
+        uint256 lockAmount = 1 ether;
+        address forfeitAdmin = address(0x5678);
+
+        // Set up forfeit admin
+        vm.prank(address(this));
+        veHemi.updateForfeitAdmin(forfeitAdmin);
+
         (uint256 billTokenId, ) = _createLock(BILL, lockAmount, 4 * 365 days);
         (uint256 aliceTokenId, ) = _createLock(ALICE, lockAmount, 4 * 365 days);
 
@@ -593,39 +620,16 @@ contract TestVeHemiVoteDelegation is Test {
         _delegateAndWarp(BILL, billTokenId, walterTokenId);
         _delegateAndWarp(ALICE, aliceTokenId, walterTokenId);
 
-        vm.warp(block.timestamp + 10 days);
-
-        uint256 voteBeforeForfeit = hemiVoteDelegation.getVotes(walterTokenId, WALTER);
-        assertGt(voteBeforeForfeit, 0, "Walter should have votes before forfeit");
-
         vm.prank(forfeitAdmin);
         veHemi.forfeit(walterTokenId);
 
-        assertGt(
-            hemiVoteDelegation.getVotes(walterTokenId, WALTER),
-            0,
-            "Walter should have no votes after forfeit"
-        );
-
-        uint256 timestampBeforeDelegationRemoved = block.timestamp;
-
-        _delegateAndWarp(BILL, billTokenId, billTokenId);
-        _delegateAndWarp(ALICE, aliceTokenId, aliceTokenId);
+        uint256 aliceBalance = veHemi.balanceOfNFT(aliceTokenId);
+        uint256 billBalance = veHemi.balanceOfNFT(billTokenId);
 
         assertEq(
             hemiVoteDelegation.getVotes(walterTokenId, WALTER),
-            0,
-            "Walter should have no votes after forfeit"
-        );
-
-        assertGt(
-            hemiVoteDelegation.getPastVotes(
-                walterTokenId,
-                timestampBeforeDelegationRemoved,
-                WALTER
-            ),
-            0,
-            "Walter should have no votes after forfeit"
+            aliceBalance + billBalance,
+            "Walter should have just delegated votes"
         );
     }
 
