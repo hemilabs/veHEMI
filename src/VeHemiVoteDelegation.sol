@@ -33,9 +33,6 @@ contract VeHemiVoteDelegation is ReentrancyGuardUpgradeable, VeHemiDelegationSto
     bytes32 private constant DELEGATION_TYPEHASH =
         keccak256("Delegation(uint256 delegator,uint256 delegatee,uint256 nonce,uint256 expiry)");
 
-    string public constant name = "veHEMIDelegation";
-    string public constant version = "1.0.0";
-
     /// @notice The veHemi contract that manages locked balances
     IVeHemi public immutable veHemi;
 
@@ -105,8 +102,8 @@ contract VeHemiVoteDelegation is ReentrancyGuardUpgradeable, VeHemiDelegationSto
         bytes32 domainSeparator = keccak256(
             abi.encode(
                 DOMAIN_TYPEHASH,
-                keccak256(bytes(name)),
-                keccak256(bytes(version)),
+                keccak256(bytes("veHEMIDelegation")),
+                keccak256(bytes("1.0.0")),
                 block.chainid,
                 address(this)
             )
@@ -379,8 +376,6 @@ contract VeHemiVoteDelegation is ReentrancyGuardUpgradeable, VeHemiDelegationSto
 
         if (delegations[delegator_].firstDelegationTimestamp == 0 && delegator_ == delegatee_)
             return;
-
-        if (delegations[delegator_].delegatee == delegatee_) return;
 
         Delegation memory _previousDelegation = delegations[delegator_];
 

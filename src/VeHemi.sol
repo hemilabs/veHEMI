@@ -28,8 +28,7 @@ contract VeHemi is
 
     // --- Constants ---
     uint256 private constant YEAR = 365.25 days;
-    uint256 private constant MONTH = YEAR / 12;
-    uint256 private constant SIX_DAYS = MONTH / 5;
+    uint256 private constant SIX_DAYS = YEAR / (12 * 5); // 1 year = 12 month, 1 month = 30 day
     uint256 private constant MAX_TIME = 4 * YEAR; // 4 years
     uint256 private constant MULTIPLIER = 1 ether;
     string public constant version = "1.0.0";
@@ -48,6 +47,7 @@ contract VeHemi is
     error BlockNotReached();
     error NotForfeitable();
     error NotForfeitAdmin();
+    error OwnerIsZero();
 
     constructor(address hemi_) {
         if (hemi_ == address(0)) revert AddressIsNull();
@@ -61,7 +61,7 @@ contract VeHemi is
      * @param owner_ The address of the contract owner
      */
     function initialize(address owner_) external initializer {
-        require(owner_ != address(0), "Owner is zero");
+        if (owner_ == address(0)) revert OwnerIsZero();
         __ERC721_init("veHemi", "veHemi");
         __Ownable_init_unchained(owner_);
         globalPointHistory[0].blockNumber = uint64(block.number);
