@@ -191,8 +191,7 @@ contract VeHemiTest is Test {
             "tokenOfOwnerByIndex should return both tokenIds"
         );
 
-        // Check totalSupply increases
-        uint256 total = veHemi.totalNftSupply();
+        uint256 total = veHemi.totalSupply();
         assertEq(total, 2, "Total supply should be 2");
 
         // Check ownerOf returns correct owner
@@ -331,7 +330,7 @@ contract VeHemiTest is Test {
         vm.warp(block.timestamp + lockDuration + 1);
         bal = veHemi.balanceOfNFT(tokenId);
         assertEq(bal, 0, "balanceOfNFT should be 0 after lock expires");
-        assertEq(veHemi.totalSupply(), 0, "totalSupply should be 0 after lock expires");
+        assertEq(veHemi.totalVeHemiSupply(), 0, "totalVeHemiSupply should be 0 after lock expires");
     }
 
     function test_BalanceOfNFTAt() public {
@@ -409,7 +408,7 @@ contract VeHemiTest is Test {
         vm.prank(bob);
         veHemi.increaseAmount(tokenId, 1 ether);
 
-        assertApproxEqRel(veHemi.totalSupply(), 1 ether, 0.0015e18);
+        assertApproxEqRel(veHemi.totalVeHemiSupply(), 1 ether, 0.0015e18);
         assertEq(veHemi.getLockedBalance(tokenId).amount, 2 ether, "locked amount is not correct");
         assertApproxEqRel(
             veHemi.balanceOfNFT(tokenId),
@@ -423,7 +422,12 @@ contract VeHemiTest is Test {
         vm.prank(bob);
         veHemi.transferFrom(bob, alice, tokenId);
 
-        assertApproxEqRel(veHemi.totalSupply(), 2 ether, 0.0015e18, "supply should be ~= locked");
+        assertApproxEqRel(
+            veHemi.totalVeHemiSupply(),
+            2 ether,
+            0.0015e18,
+            "supply should be ~= locked"
+        );
         assertEq(veHemi.getLockedBalance(tokenId).amount, 2 ether, "locked amount is not correct");
         assertApproxEqRel(
             veHemi.balanceOfNFT(tokenId),
@@ -434,9 +438,9 @@ contract VeHemiTest is Test {
         assertEq(veHemi.userPointEpoch(tokenId), 1, "epoch should not change");
     }
 
-    function testTotalSupply() public {
+    function testTotalVeHemiSupply() public {
         // Initially should be 0
-        assertEq(veHemi.totalSupply(), 0, "Initial total supply should be 0");
+        assertEq(veHemi.totalVeHemiSupply(), 0, "Initial total supply should be 0");
         uint256 amountIn = 1 ether;
         uint256 lockDuration = MAX_TIME;
 
@@ -447,7 +451,7 @@ contract VeHemiTest is Test {
         uint256 balanceOfTokenId1 = veHemi.balanceOfNFT(tokenId1);
         assertEq(balanceOfTokenId1, expectedBalance1, "user1 nft balance is not correct");
         assertEq(
-            veHemi.totalSupply(),
+            veHemi.totalVeHemiSupply(),
             balanceOfTokenId1,
             "Total supply should equal locked amount"
         );
@@ -460,7 +464,7 @@ contract VeHemiTest is Test {
         assertEq(balanceOfTokenId2, expectedBalance2, "user2 nft balance is not correct");
 
         assertEq(
-            veHemi.totalSupply(),
+            veHemi.totalVeHemiSupply(),
             balanceOfTokenId1 + balanceOfTokenId2,
             "Total supply should be sum of all locks"
         );
@@ -476,7 +480,7 @@ contract VeHemiTest is Test {
         assertEq(balanceOfTokenId2, expectedBalance2, "user2 nft balance is not correct");
         assertGt(balanceOfTokenId2, 0, "Total supply should equal locked amount");
         assertEq(
-            veHemi.totalSupply(),
+            veHemi.totalVeHemiSupply(),
             balanceOfTokenId1 + balanceOfTokenId2,
             "Total supply should be sum of all locks"
         );
@@ -486,7 +490,7 @@ contract VeHemiTest is Test {
         uint256 startTime = block.timestamp;
 
         // Initially should be 0
-        assertEq(veHemi.totalSupplyAt(startTime), 0, "Initial total supply should be 0");
+        assertEq(veHemi.totalVeHemiSupplyAt(startTime), 0, "Initial total supply should be 0");
 
         // Create a lock
         (uint256 tokenId, uint256 slope, ) = createLock(user, 1 ether, MAX_TIME);
@@ -495,7 +499,7 @@ contract VeHemiTest is Test {
 
         // At creation time
         assertEq(
-            veHemi.totalSupplyAt(startTime),
+            veHemi.totalVeHemiSupplyAt(startTime),
             expectedBalance,
             "Total supply at creation should be locked amount"
         );
@@ -504,47 +508,55 @@ contract VeHemiTest is Test {
         uint256 futureTime = startTime + (2 * 365 days);
         expectedBalance = slope * (veHemi.getLockedBalance(tokenId).end - futureTime);
         assertEq(
-            veHemi.totalSupplyAt(futureTime),
+            veHemi.totalVeHemiSupplyAt(futureTime),
             expectedBalance,
             "Total supply should remain same before expiry"
         );
 
         // After expiry
         uint256 afterExpiry = startTime + MAX_TIME + 1;
-        assertEq(veHemi.totalSupplyAt(afterExpiry), 0, "Total supply should be 0 after expiry");
+        assertEq(
+            veHemi.totalVeHemiSupplyAt(afterExpiry),
+            0,
+            "Total supply should be 0 after expiry"
+        );
     }
 
     function testPastSupplyAt() public {
         uint256 startTime = block.timestamp;
 
         // Initially should be 0
-        assertEq(veHemi.totalSupplyAt(startTime), 0, "Initial total supply should be 0");
+        assertEq(veHemi.totalVeHemiSupplyAt(startTime), 0, "Initial total supply should be 0");
 
         // Create a lock
         createLock(user, 1 ether, MAX_TIME);
 
         vm.warp(block.timestamp + 100 days);
         uint256 t1 = block.timestamp;
-        uint256 supplyAtT1 = veHemi.totalSupply();
+        uint256 supplyAtT1 = veHemi.totalVeHemiSupply();
         vm.warp(block.timestamp + 200 days);
 
         createLock(user, 1 ether, MAX_TIME);
         vm.warp(block.timestamp + 10);
 
         // At creation time
-        assertEq(veHemi.totalSupplyAt(t1), supplyAtT1, "Total at past is not correct");
+        assertEq(veHemi.totalVeHemiSupplyAt(t1), supplyAtT1, "Total at past is not correct");
     }
 
     function testPastSupplyAtBlock() public {
         uint256 blockNumber = block.number;
 
         // Initially should be 0
-        assertEq(veHemi.totalSupplyAtBlock(blockNumber - 1), 0, "Initial total supply should be 0");
+        assertEq(
+            veHemi.totalVeHemiSupplyAtBlock(blockNumber - 1),
+            0,
+            "Initial total supply should be 0"
+        );
 
         // Create a lock
         createLock(user, 1 ether, MAX_TIME);
         uint256 b1 = block.number;
-        uint256 supplyAtT1 = veHemi.totalSupply();
+        uint256 supplyAtT1 = veHemi.totalVeHemiSupply();
 
         vm.warp(block.timestamp + 200 days);
         vm.roll(block.number + (200 days / 10));
@@ -553,7 +565,7 @@ contract VeHemiTest is Test {
         vm.warp(block.timestamp + 10);
         vm.roll(block.number + 1);
 
-        assertEq(veHemi.totalSupplyAtBlock(b1), supplyAtT1, "Total at past is not correct");
+        assertEq(veHemi.totalVeHemiSupplyAtBlock(b1), supplyAtT1, "Total at past is not correct");
     }
 
     // --- Transfer Control Tests ---
@@ -813,7 +825,7 @@ contract VeHemiTest is Test {
         }
     }
 
-    function testFuzz_TotalSupply_Consistency(uint256 amount1, uint256 amount2) public {
+    function testFuzz_TotalVeHemiSupply_Consistency(uint256 amount1, uint256 amount2) public {
         amount1 = bound(amount1, 1 ether, MAX_AMOUNT / 2);
         amount2 = bound(amount2, 1 ether, MAX_AMOUNT / 2);
 
@@ -821,18 +833,18 @@ contract VeHemiTest is Test {
 
         (uint256 tokenId2, , ) = createLock(alice, amount2, MAX_TIME);
 
-        uint256 totalSupply = veHemi.totalSupply();
+        uint256 totalVeHemiSupply = veHemi.totalVeHemiSupply();
         uint256 balance1 = veHemi.balanceOfNFT(tokenId1);
         uint256 balance2 = veHemi.balanceOfNFT(tokenId2);
 
         assertEq(
-            totalSupply,
+            totalVeHemiSupply,
             balance1 + balance2,
             "Total supply should be equal to the sum of the balances"
         );
     }
 
-    function testFuzz_TotalSupplyAt_TimeConsistency(
+    function testFuzz_TotalVeHemiSupplyAt_TimeConsistency(
         uint256 amount,
         uint256 futureTime1,
         uint256 futureTime2,
@@ -852,32 +864,34 @@ contract VeHemiTest is Test {
 
         vm.warp(lockCreatedAt + futureTime1);
 
-        uint256 totalSupplyAtFutureTime1 = veHemi.totalSupply();
+        uint256 totalVeHemiSupplyAtFutureTime1 = veHemi.totalVeHemiSupply();
         uint256 b1 = veHemi.balanceOfNFT(tokenId1);
         uint256 b2 = veHemi.balanceOfNFT(tokenId2);
         assertEq(
-            totalSupplyAtFutureTime1,
+            totalVeHemiSupplyAtFutureTime1,
             b1 + b2,
             "total supply should be the sum of the balances"
         );
 
         vm.warp(lockCreatedAt + futureTime2);
 
-        uint256 totalSupplyAtFutureTime1_1 = veHemi.totalSupplyAt(lockCreatedAt + futureTime1);
+        uint256 totalVeHemiSupplyAtFutureTime1_1 = veHemi.totalVeHemiSupplyAt(
+            lockCreatedAt + futureTime1
+        );
 
         uint256 b1_1 = veHemi.balanceOfNFTAt(tokenId1, lockCreatedAt + futureTime1);
         uint256 b2_1 = veHemi.balanceOfNFTAt(tokenId2, lockCreatedAt + futureTime1);
 
         assertEq(
-            totalSupplyAtFutureTime1,
-            totalSupplyAtFutureTime1_1,
+            totalVeHemiSupplyAtFutureTime1,
+            totalVeHemiSupplyAtFutureTime1_1,
             "total supply should be the same"
         );
 
         assertEq(b1, b1_1, "balance of token 1 should be the same");
         assertEq(b2, b2_1, "balance of token 2 should be the same");
         assertEq(
-            totalSupplyAtFutureTime1_1,
+            totalVeHemiSupplyAtFutureTime1_1,
             b1_1 + b2_1,
             "total supply should be the sum of the balances"
         );
@@ -1024,7 +1038,7 @@ contract VeHemiTest is Test {
         );
     }
 
-    function testForfeitLockUpdatesTotalSupply() public {
+    function testForfeitLockUpdatesTotalVeHemiSupply() public {
         uint256 amount1 = 100 ether;
         uint256 amount2 = 50 ether;
         address teamMember1 = address(0x1111);
@@ -1043,18 +1057,18 @@ contract VeHemiTest is Test {
         uint256 tokenId2 = veHemi.createLockFor(amount2, 2 * 365 days, teamMember2, false, true);
 
         // Check initial total supply
-        uint256 initialTotalSupply = veHemi.totalSupply();
-        assertGt(initialTotalSupply, 0, "Total supply should be greater than 0");
+        uint256 initialTotalVeHemiSupply = veHemi.totalVeHemiSupply();
+        assertGt(initialTotalVeHemiSupply, 0, "Total supply should be greater than 0");
 
         // Forfeit first lock
         vm.prank(forfeitAdmin);
         veHemi.forfeit(tokenId1);
 
         // Check total supply is reduced
-        uint256 totalSupplyAfterFirstForfeit = veHemi.totalSupply();
+        uint256 totalVeHemiSupplyAfterFirstForfeit = veHemi.totalVeHemiSupply();
         assertLt(
-            totalSupplyAfterFirstForfeit,
-            initialTotalSupply,
+            totalVeHemiSupplyAfterFirstForfeit,
+            initialTotalVeHemiSupply,
             "Total supply should be reduced"
         );
 
@@ -1063,10 +1077,10 @@ contract VeHemiTest is Test {
         veHemi.forfeit(tokenId2);
 
         // Check total supply is further reduced
-        uint256 totalSupplyAfterSecondForfeit = veHemi.totalSupply();
+        uint256 totalVeHemiSupplyAfterSecondForfeit = veHemi.totalVeHemiSupply();
         assertLt(
-            totalSupplyAfterSecondForfeit,
-            totalSupplyAfterFirstForfeit,
+            totalVeHemiSupplyAfterSecondForfeit,
+            totalVeHemiSupplyAfterFirstForfeit,
             "Total supply should be further reduced"
         );
     }

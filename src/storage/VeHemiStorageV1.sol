@@ -14,7 +14,7 @@ abstract contract VeHemiStorageV1 is IVeHemi {
     IVeHemiVoteDelegation public voteDelegation;
     IRewardDistributor public rewardDistributor; // 0x0 is valid
     address public forfeitAdmin;
-    mapping(uint256 => Point) internal pointHistory; // epoch -> Point
+    mapping(uint256 => Point) internal globalPointHistory; // epoch -> Point
     mapping(uint256 => UserPoint[1000000000]) internal userPointHistory; // tokenId -> UserPoint[userEpoch]
     mapping(uint256 => uint256) public userPointEpoch; // tokenId -> epoch
     mapping(uint256 => int128) public slopeChanges; // time -> signed slope change

@@ -64,9 +64,8 @@ contract VeHemi is
         require(owner_ != address(0), "Owner is zero");
         __ERC721_init("veHemi", "veHemi");
         __Ownable_init_unchained(owner_);
-        pointHistory[0].blockNumber = uint64(block.number);
-        pointHistory[0].timestamp = uint64(block.timestamp);
-        pointHistory[0].amount = 0;
+        globalPointHistory[0].blockNumber = uint64(block.number);
+        globalPointHistory[0].timestamp = uint64(block.timestamp);
         nextTokenId = 1;
     }
 
@@ -184,7 +183,7 @@ contract VeHemi is
      * @return The Point struct for the global point at the given epoch
      */
     function getGlobalPoint(uint256 epoch_) external view returns (Point memory) {
-        return pointHistory[epoch_];
+        return globalPointHistory[epoch_];
     }
 
     /**
@@ -224,44 +223,36 @@ contract VeHemi is
     }
 
     /**
-     * @notice Get the total supply of locked HEMI at the current timestamp
-     * @return The total amount of HEMI currently locked
+     * @notice Get the total supply of  veHEMI at the current timestamp
+     * @return The total amount of veHEMI currently locked
      */
-    function totalSupply() public view override returns (uint256) {
+    function totalVeHemiSupply() public view returns (uint256) {
         return _supplyAt(block.timestamp);
     }
 
     /**
-     * @notice Get the total supply of NFTs
-     * @return The total amount of veHEMI NFTs
-     */
-    function totalNftSupply() external view returns (uint256) {
-        return super.totalSupply();
-    }
-
-    /**
-     * @notice Get the total supply of locked HEMI at a specific timestamp
+     * @notice Get the total supply of  veHEMI at a specific timestamp
      * @param _timestamp The timestamp to check total supply at
-     * @return The total amount of HEMI locked at the given timestamp
+     * @return The total amount of veHEMI  at the given timestamp
      */
-    function totalSupplyAt(uint256 _timestamp) external view returns (uint256) {
+    function totalVeHemiSupplyAt(uint256 _timestamp) external view returns (uint256) {
         return _supplyAt(_timestamp);
     }
 
     /**
-     * @notice Get the total supply of locked HEMI at a specific block number
+     * @notice Get the total veHEMI at a specific block number
      * @dev This function is not yet implemented
      * @param blockNumber_ The block number to check total supply at
-     * @return The total amount of HEMI locked at the given block
+     * @return The total amount of veHemi at the given block
      */
-    function totalSupplyAtBlock(uint256 blockNumber_) external view returns (uint256) {
+    function totalVeHemiSupplyAtBlock(uint256 blockNumber_) external view returns (uint256) {
         if (blockNumber_ >= block.number) revert BlockNotReached();
         uint256 _epoch = epoch;
         uint256 _targetEpoch = _findBlockEpoch(blockNumber_, _epoch);
-        Point memory _point = pointHistory[_targetEpoch];
+        Point memory _point = globalPointHistory[_targetEpoch];
         uint256 dt;
         if (_targetEpoch < _epoch) {
-            Point memory _nextPoint = pointHistory[_targetEpoch + 1];
+            Point memory _nextPoint = globalPointHistory[_targetEpoch + 1];
             if (_point.blockNumber != _nextPoint.blockNumber) {
                 dt =
                     ((blockNumber_ - _point.blockNumber) *
@@ -352,7 +343,7 @@ contract VeHemi is
                 break;
             }
             uint256 _mid = (_min + _max + 1) / 2;
-            if (pointHistory[_mid].blockNumber <= blockNumber_) {
+            if (globalPointHistory[_mid].blockNumber <= blockNumber_) {
                 _min = _mid;
             } else {
                 _max = _mid - 1;
@@ -367,15 +358,15 @@ contract VeHemi is
     ) internal view returns (uint256) {
         if (epoch_ == 0) return 0;
         // First check most recent balance
-        if (pointHistory[epoch_].timestamp <= timestamp_) return (epoch_);
+        if (globalPointHistory[epoch_].timestamp <= timestamp_) return (epoch_);
         // Next check implicit zero balance
-        if (pointHistory[1].timestamp > timestamp_) return 0;
+        if (globalPointHistory[1].timestamp > timestamp_) return 0;
 
         uint256 _lower = 0;
         uint256 _upper = epoch_;
         while (_upper > _lower) {
             uint256 _center = _upper - (_upper - _lower) / 2; // ceil, avoiding overflow
-            Point memory _globalPoint = pointHistory[_center];
+            Point memory _globalPoint = globalPointHistory[_center];
             if (_globalPoint.timestamp == timestamp_) {
                 return _center;
             } else if (_globalPoint.timestamp < timestamp_) {
@@ -472,10 +463,7 @@ contract VeHemi is
             fixedBias: 0
         });
         if (_epoch > 0) {
-            _lastPoint = pointHistory[_epoch];
-        } else {
-            // contract may have some initial balance before first checkpoint
-            _lastPoint.amount = uint128(HEMI.balanceOf(address(this)));
+            _lastPoint = globalPointHistory[_epoch];
         }
         uint256 _lastCheckpoint = _lastPoint.timestamp;
         Point memory _initialLastPoint = Point({
@@ -526,10 +514,9 @@ contract VeHemi is
                 _epoch += 1;
                 if (t_i == block.timestamp) {
                     _lastPoint.blockNumber = uint64(block.number);
-                    _lastPoint.amount = uint128(HEMI.balanceOf(address(this)));
                     break;
                 } else {
-                    pointHistory[_epoch] = _lastPoint;
+                    globalPointHistory[_epoch] = _lastPoint;
                 }
             }
         }
@@ -553,13 +540,13 @@ contract VeHemi is
         // Missing global checkpoints in prior SIX_DAYS. In this case, _epoch = epoch + x, where x > 1
         // No missing global checkpoints, but timestamp != block.timestamp. Create new checkpoint.
         // No missing global checkpoints, but timestamp == block.timestamp. Overwrite last checkpoint.
-        if (_epoch != 1 && pointHistory[_epoch - 1].timestamp == block.timestamp) {
+        if (_epoch != 1 && globalPointHistory[_epoch - 1].timestamp == block.timestamp) {
             // _epoch = epoch + 1, so we do not increment epoch
-            pointHistory[_epoch - 1] = _lastPoint;
+            globalPointHistory[_epoch - 1] = _lastPoint;
         } else {
             // more than one global point may have been written, so we update epoch
             epoch = _epoch;
-            pointHistory[_epoch] = _lastPoint;
+            globalPointHistory[_epoch] = _lastPoint;
         }
 
         if (tokenId_ != 0) {
@@ -705,7 +692,7 @@ contract VeHemi is
         uint256 _epoch = _getPastGlobalPointIndex(epoch, timestamp_);
         // epoch 0 is an empty point
         if (_epoch == 0) return 0;
-        Point memory _point = pointHistory[_epoch];
+        Point memory _point = globalPointHistory[_epoch];
         return _supplyAt(_point, timestamp_);
     }
 
