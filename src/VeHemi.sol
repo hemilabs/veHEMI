@@ -8,7 +8,7 @@ import {IERC721} from "@openzeppelin/contracts/token/ERC721/IERC721.sol";
 import {IRewardDistributor} from "./interfaces/IRewardDistributor.sol";
 import {IVeHemiVoteDelegation} from "./interfaces/IVeHemiVoteDelegation.sol";
 import {ERC721EnumerableUpgradeable, ERC721Upgradeable} from "@openzeppelin/contracts-upgradeable/token/ERC721/extensions/ERC721EnumerableUpgradeable.sol";
-import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import {ReentrancyGuardUpgradeable} from "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol";
 import {VeHemiStorageV1} from "./storage/VeHemiStorageV1.sol";
 
 /**
@@ -18,7 +18,7 @@ import {VeHemiStorageV1} from "./storage/VeHemiStorageV1.sol";
 contract VeHemi is
     ERC721EnumerableUpgradeable,
     OwnableUpgradeable,
-    ReentrancyGuard,
+    ReentrancyGuardUpgradeable,
     VeHemiStorageV1
 {
     using SafeCast for uint256;

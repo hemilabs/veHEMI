@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.29;
 
-import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import {ReentrancyGuardUpgradeable} from "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
+import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 import {IVeHemi} from "./interfaces/IVeHemi.sol";
 import {VeHemiDelegationStorageV1} from "./storage/VeHemiDelegationStorageV1.sol";
 import {SafeCast} from "./libraries/SafeCast.sol";
@@ -14,7 +15,7 @@ import {SafeCast} from "./libraries/SafeCast.sol";
  * (next day boundary) and expire when the delegator's lock expires.
  * @dev Based on veFXS and veCRV delegation mechanism with adaptations for veHemi
  */
-contract VeHemiVoteDelegation is ReentrancyGuard, VeHemiDelegationStorageV1 {
+contract VeHemiVoteDelegation is ReentrancyGuardUpgradeable, VeHemiDelegationStorageV1 {
     using SafeCast for uint256;
     using SafeCast for int128;
 
@@ -117,7 +118,7 @@ contract VeHemiVoteDelegation is ReentrancyGuard, VeHemiDelegationStorageV1 {
 
         bytes32 digest = keccak256(abi.encodePacked("\x19\x01", domainSeparator, structHash));
 
-        address _signer = ecrecover(digest, v, r, s);
+        address _signer = ECDSA.recover(digest, v, r, s);
         if (_signer == address(0)) revert InvalidSignature();
         if (veHemi.ownerOf(delegator_) != _signer) revert NotOwner();
         if (nonce != nonces[_signer]++) revert InvalidNonce();
