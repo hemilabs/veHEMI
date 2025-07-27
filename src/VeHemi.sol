@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.29;
+pragma solidity 0.8.29;
 
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import {OwnableUpgradeable} from "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
+import {Ownable2StepUpgradeable} from "@openzeppelin/contracts-upgradeable/access/Ownable2StepUpgradeable.sol";
 import {SafeCast} from "./libraries/SafeCast.sol";
 import {IERC721} from "@openzeppelin/contracts/token/ERC721/IERC721.sol";
 import {IRewardDistributor} from "./interfaces/IRewardDistributor.sol";
@@ -17,7 +17,7 @@ import {VeHemiStorageV1} from "./storage/VeHemiStorageV1.sol";
  */
 contract VeHemi is
     ERC721EnumerableUpgradeable,
-    OwnableUpgradeable,
+    Ownable2StepUpgradeable,
     ReentrancyGuardUpgradeable,
     VeHemiStorageV1
 {
@@ -192,7 +192,13 @@ contract VeHemi is
      * @param amount_ The additional amount to lock
      */
     function increaseAmount(uint256 tokenId_, uint256 amount_) external nonReentrant {
-        _increaseAmountFor(tokenId_, amount_);
+        LockedBalance memory _oldLocked = locked[tokenId_];
+
+        if (amount_ == 0) revert AmountIsZero();
+        if (_oldLocked.end <= block.timestamp) revert LockExpired();
+        if (_oldLocked.amount <= 0) revert NoExistingLock();
+
+        _depositFor(tokenId_, amount_, 0, _oldLocked);
     }
 
     /**
@@ -232,16 +238,15 @@ contract VeHemi is
 
     /**
      * @notice Get the total supply of  veHEMI at a specific timestamp
-     * @param _timestamp The timestamp to check total supply at
+     * @param timestamp_ The timestamp to check total supply at
      * @return The total amount of veHEMI  at the given timestamp
      */
-    function totalVeHemiSupplyAt(uint256 _timestamp) external view returns (uint256) {
-        return _supplyAt(_timestamp);
+    function totalVeHemiSupplyAt(uint256 timestamp_) external view returns (uint256) {
+        return _supplyAt(timestamp_);
     }
 
     /**
      * @notice Get the total veHEMI at a specific block number
-     * @dev This function is not yet implemented
      * @param blockNumber_ The block number to check total supply at
      * @return The total amount of veHemi at the given block
      */
@@ -616,7 +621,7 @@ contract VeHemi is
         if (!transferable_) {
             transferableAfter[_tokenId] = unlockTime;
         }
-        if (forfeitable_) forfeitable[_tokenId] = forfeitable_;
+        if (forfeitable_) forfeitable[_tokenId] = true;
 
         emit Lock(
             _msgSender(),
@@ -667,16 +672,6 @@ contract VeHemi is
         }
 
         emit Deposit(from, tokenId_, amount_, _newLocked.end, block.timestamp);
-    }
-
-    function _increaseAmountFor(uint256 tokenId_, uint256 amount_) internal {
-        LockedBalance memory _oldLocked = locked[tokenId_];
-
-        if (amount_ == 0) revert AmountIsZero();
-        if (_oldLocked.end <= block.timestamp) revert LockExpired();
-        if (_oldLocked.amount <= 0) revert NoExistingLock();
-
-        _depositFor(tokenId_, amount_, 0, _oldLocked);
     }
 
     function _delegateToSelf(uint256 tokenId_) internal {

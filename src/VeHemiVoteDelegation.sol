@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.29;
+pragma solidity 0.8.29;
 
 import {ReentrancyGuardUpgradeable} from "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
@@ -123,7 +123,7 @@ contract VeHemiVoteDelegation is ReentrancyGuardUpgradeable, VeHemiDelegationSto
         if (veHemi.ownerOf(delegator_) != _signer) revert NotOwner();
         if (nonce != nonces[_signer]++) revert InvalidNonce();
         if (block.timestamp > expiry) revert SignatureExpired();
-        return _delegate(delegator_, delegatee_);
+        _delegate(delegator_, delegatee_);
     }
 
     /**
