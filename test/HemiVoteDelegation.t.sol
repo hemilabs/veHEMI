@@ -45,6 +45,8 @@ contract TestVeHemiVoteDelegation is Test {
         // Deploy VeHemiVoteDelegation
         hemiVoteDelegation = new VeHemiVoteDelegation(address(veHemi));
 
+        veHemi.updateVoteDelegation(hemiVoteDelegation);
+
         // Setup initial state
         _setupInitialState();
     }
@@ -105,7 +107,11 @@ contract TestVeHemiVoteDelegation is Test {
 
         // Alice should have her own votes plus Bill's votes (with some decay)
         uint256 aliceVotesAfter = hemiVoteDelegation.getVotes(aliceTokenId, ALICE);
-        assertGt(aliceVotesAfter, aliceInitialVotes, "Alice should have received Bill's votes");
+        assertEq(
+            aliceVotesAfter,
+            veHemi.balanceOfNFT(aliceTokenId) + veHemi.balanceOfNFT(billTokenId),
+            "Alice should have received Bill's votes"
+        );
 
         uint256 totalVotesBefore = billInitialVotes + aliceInitialVotes;
         assertLe(aliceVotesAfter, totalVotesBefore, "Total voting power should not increase");
@@ -115,6 +121,99 @@ contract TestVeHemiVoteDelegation is Test {
             aliceVotesAfter,
             expectedAliceVotes,
             "Voting power should not decay more than 5% in one day"
+        );
+    }
+
+    function testReDelegation() public {
+        (uint256 billTokenId, ) = _createLock(BILL, LOCK_AMOUNT, MAX_TIME);
+        (uint256 aliceTokenId, ) = _createLock(ALICE, LOCK_AMOUNT, MAX_TIME);
+
+        _delegateAndWarp(BILL, billTokenId, aliceTokenId);
+
+        //delegate to self
+        _delegateAndWarp(ALICE, aliceTokenId, aliceTokenId);
+        uint256 aliceVotesAfter = hemiVoteDelegation.getVotes(aliceTokenId, ALICE);
+
+        uint256 billBalance = veHemi.balanceOfNFT(billTokenId);
+        uint256 aliceBalance = veHemi.balanceOfNFT(aliceTokenId);
+
+        assertEq(
+            aliceVotesAfter,
+            aliceBalance + billBalance,
+            "Alice vote should be the same after re-delegation"
+        );
+    }
+
+    function testReDelegationWhenAmountIncreased() public {
+        (uint256 billTokenId, ) = _createLock(BILL, LOCK_AMOUNT, MAX_TIME);
+        (uint256 aliceTokenId, ) = _createLock(ALICE, LOCK_AMOUNT, MAX_TIME);
+        _delegateAndWarp(BILL, billTokenId, aliceTokenId);
+
+        // remove delegation and assign to self
+        _delegateAndWarp(BILL, billTokenId, billTokenId);
+
+        uint256 billVoteBefore = hemiVoteDelegation.getVotes(billTokenId, BILL);
+
+        // more amount added to alice lock
+        hemiToken.mint(ALICE, LOCK_AMOUNT);
+        vm.startPrank(ALICE);
+        hemiToken.approve(address(veHemi), LOCK_AMOUNT);
+        // add amount to bill lock
+        veHemi.increaseAmount(billTokenId, LOCK_AMOUNT);
+        vm.stopPrank();
+
+        uint256 delegationStarts = ((block.timestamp / 1 days) * 1 days) + 1 days;
+        vm.warp(delegationStarts);
+
+        assertGt(
+            hemiVoteDelegation.getVotes(billTokenId, BILL),
+            billVoteBefore,
+            "Alice should have received Bill's votes"
+        );
+    }
+
+    function testReDelegationWhenAmountIncreasedByDelegator() public {
+        (uint256 billTokenId, ) = _createLock(BILL, LOCK_AMOUNT, MAX_TIME);
+        (uint256 aliceTokenId, ) = _createLock(ALICE, LOCK_AMOUNT, MAX_TIME);
+        _delegateAndWarp(BILL, billTokenId, aliceTokenId);
+
+        uint256 aliceVoteBefore = hemiVoteDelegation.getVotes(aliceTokenId, ALICE);
+
+        // more amount added to BILL lock
+        hemiToken.mint(BILL, LOCK_AMOUNT);
+        vm.startPrank(BILL);
+        hemiToken.approve(address(veHemi), LOCK_AMOUNT);
+        // add amount to bill lock
+        veHemi.increaseAmount(billTokenId, LOCK_AMOUNT);
+        vm.stopPrank();
+
+        uint256 delegationStarts = ((block.timestamp / 1 days) * 1 days) + 1 days;
+        vm.warp(delegationStarts);
+
+        assertGt(
+            hemiVoteDelegation.getVotes(aliceTokenId, ALICE),
+            aliceVoteBefore,
+            "Alice should have received Bill's votes"
+        );
+    }
+
+    function testReDelegationWhenLockExtendedByDelegator() public {
+        (uint256 billTokenId, ) = _createLock(BILL, LOCK_AMOUNT, 1 * YEAR);
+        (uint256 aliceTokenId, ) = _createLock(ALICE, LOCK_AMOUNT, 1 * YEAR);
+        _delegateAndWarp(BILL, billTokenId, aliceTokenId);
+
+        uint256 aliceVoteBefore = hemiVoteDelegation.getVotes(aliceTokenId, ALICE);
+
+        vm.prank(BILL);
+        veHemi.increaseUnlockTime(billTokenId, 2 * YEAR);
+
+        uint256 delegationStarts = ((block.timestamp / 1 days) * 1 days) + 1 days;
+        vm.warp(delegationStarts);
+
+        assertGt(
+            hemiVoteDelegation.getVotes(aliceTokenId, ALICE),
+            aliceVoteBefore,
+            "Alice should have received Bill's votes"
         );
     }
 
@@ -455,7 +554,7 @@ contract TestVeHemiVoteDelegation is Test {
 
         // Warp to lock expiration
         uint256 lockEnd = veHemi.getLockedBalance(billTokenId).end;
-        vm.warp(lockEnd);
+        vm.warp(lockEnd + 1);
 
         // Alice should have her own votes back after Bill's lock expires
         uint256 aliceVotesAfterExpiry = hemiVoteDelegation.getVotes(aliceTokenId, ALICE);
@@ -473,6 +572,110 @@ contract TestVeHemiVoteDelegation is Test {
         );
     }
 
+    // Alice and Bill Delegate to WALTER . After some some time Walter lock is forfeited
+
+    function testVoteAfterForfeit() public {
+        uint256 lockAmount = 1 ether;
+        address forfeitAdmin = address(0x5678);
+
+        // Set up forfeit admin
+        vm.prank(address(this));
+        veHemi.updateForfeitAdmin(forfeitAdmin);
+
+        // Create forfeitable lock for WALTER
+        hemiToken.mint(BILL, lockAmount);
+        vm.startPrank(BILL);
+        hemiToken.approve(address(veHemi), lockAmount);
+        uint256 walterTokenId = veHemi.createLockFor(lockAmount, 4 * 365 days, WALTER, false, true);
+        vm.stopPrank();
+
+        vm.warp(block.timestamp + 90 days);
+
+        vm.prank(forfeitAdmin);
+        veHemi.forfeit(walterTokenId);
+
+        assertEq(
+            hemiVoteDelegation.getVotes(walterTokenId, WALTER),
+            0,
+            "Walter should have no votes after forfeit"
+        );
+    }
+
+    function testDelegatedVotesAfterForfeit() public {
+        uint256 lockAmount = 1 ether;
+        address forfeitAdmin = address(0x5678);
+
+        // Set up forfeit admin
+        vm.prank(address(this));
+        veHemi.updateForfeitAdmin(forfeitAdmin);
+
+        (uint256 billTokenId, ) = _createLock(BILL, lockAmount, 4 * 365 days);
+        (uint256 aliceTokenId, ) = _createLock(ALICE, lockAmount, 4 * 365 days);
+
+        // Create forfeitable lock for WALTER
+        hemiToken.mint(BILL, lockAmount);
+        vm.startPrank(BILL);
+        hemiToken.approve(address(veHemi), lockAmount);
+        uint256 walterTokenId = veHemi.createLockFor(lockAmount, 4 * 365 days, WALTER, false, true);
+        vm.stopPrank();
+
+        vm.warp(block.timestamp + 90 days);
+
+        _delegateAndWarp(BILL, billTokenId, walterTokenId);
+        _delegateAndWarp(ALICE, aliceTokenId, walterTokenId);
+
+        vm.prank(forfeitAdmin);
+        veHemi.forfeit(walterTokenId);
+
+        uint256 aliceBalance = veHemi.balanceOfNFT(aliceTokenId);
+        uint256 billBalance = veHemi.balanceOfNFT(billTokenId);
+
+        assertEq(
+            hemiVoteDelegation.getVotes(walterTokenId, WALTER),
+            aliceBalance + billBalance,
+            "Walter should have just delegated votes"
+        );
+    }
+
+    function testVoteAfterDelegateeLockExpire() public {
+        uint256 lockAmount = 1 ether;
+        (uint256 aliceTokenId, ) = _createLock(ALICE, lockAmount, 365 days);
+
+        uint256 aliceInitialVotes = hemiVoteDelegation.getVotes(aliceTokenId, ALICE);
+        assertEq(aliceInitialVotes, veHemi.balanceOfNFT(aliceTokenId));
+
+        (uint256 billTokenId, ) = _createLock(BILL, 1 ether, 2 * 365 days);
+        _delegateAndWarp(BILL, billTokenId, aliceTokenId);
+
+        uint256 aliceVotes = hemiVoteDelegation.getVotes(aliceTokenId, ALICE);
+        assertEq(
+            aliceVotes,
+            veHemi.balanceOfNFT(aliceTokenId) + veHemi.balanceOfNFT(billTokenId),
+            "Alice should have received Bill's votes"
+        );
+
+        // Warp to lock expiration
+        uint256 lockEnd = veHemi.getLockedBalance(aliceTokenId).end;
+        vm.warp(lockEnd + 1);
+
+        // Alice should have her bill's votes after Alice lock expired
+
+        assertEq(
+            hemiVoteDelegation.getVotes(aliceTokenId, ALICE),
+            veHemi.balanceOfNFT(billTokenId),
+            "Alice should have BILL votes after Alice lock expired"
+        );
+
+        lockEnd = veHemi.getLockedBalance(billTokenId).end;
+        vm.warp(lockEnd + 1);
+
+        assertEq(
+            hemiVoteDelegation.getVotes(aliceTokenId, ALICE),
+            0,
+            "Alice should have her original votes back after Bill's lock expires"
+        );
+    }
+
     // Test getPastVotes functionality
     function testGetPastVotes() public {
         uint256 billTokenId = 1;
@@ -484,8 +687,6 @@ contract TestVeHemiVoteDelegation is Test {
         vm.startPrank(BILL);
         hemiVoteDelegation.delegate(billTokenId, aliceTokenId);
         vm.stopPrank();
-
-        uint256 delegationStarts = ((block.timestamp / 1 days) * 1 days) + 1 days;
 
         // Check votes at different timestamps
         assertEq(
@@ -499,6 +700,7 @@ contract TestVeHemiVoteDelegation is Test {
             "Should have her own votes at current time"
         );
 
+        uint256 delegationStarts = ((block.timestamp / 1 days) * 1 days) + 1 days;
         vm.warp(delegationStarts);
 
         // After delegation, Bill should have no votes and Alice should have combined votes (with decay)
@@ -510,20 +712,10 @@ contract TestVeHemiVoteDelegation is Test {
         );
 
         assertEq(billPastVotes, 0, "Bill should have no votes after delegation");
-        assertGt(
+        assertEq(
             alicePastVotes,
-            aliceInitialVotes,
+            veHemi.balanceOfNFT(aliceTokenId) + veHemi.balanceOfNFT(billTokenId),
             "Alice should have received Bill's votes after delegation"
-        );
-
-        // Total voting power should be preserved (with minor decay due to time)
-        uint256 totalVotesAfter = billPastVotes + alicePastVotes;
-        uint256 totalVotesBefore = billInitialVotes + aliceInitialVotes;
-        assertLe(totalVotesAfter, totalVotesBefore, "Total voting power should not increase");
-        assertGt(
-            totalVotesAfter,
-            (totalVotesBefore * 95) / 100,
-            "Voting power should not decay more than 5% in one day"
         );
     }
 
@@ -548,7 +740,11 @@ contract TestVeHemiVoteDelegation is Test {
         vm.warp(delegationStarts);
 
         uint256 aliceVotes = hemiVoteDelegation.getVotes(aliceTokenId, ALICE);
-        assertGt(aliceVotes, 0, "Alice should have delegated votes");
+        assertEq(
+            aliceVotes,
+            veHemi.balanceOfNFT(aliceTokenId) + veHemi.balanceOfNFT(billTokenId),
+            "Alice should have delegated votes"
+        );
 
         // Check that checkpoints are working correctly
         uint256 pastVotes = hemiVoteDelegation.getPastVotes(aliceTokenId, delegationStarts, ALICE);
@@ -580,17 +776,25 @@ contract TestVeHemiVoteDelegation is Test {
         vm.warp(delegationStarts);
 
         uint256 totalVotes = hemiVoteDelegation.getVotes(delegateTokenId, BOB);
-        assertGt(totalVotes, delegateInitialVotes, "Should have combined delegated votes");
+        uint256 expectedVotes = veHemi.balanceOfNFT(delegateTokenId) +
+            veHemi.balanceOfNFT(billTokenId) +
+            veHemi.balanceOfNFT(aliceTokenId) +
+            veHemi.balanceOfNFT(walterTokenId);
+        assertEq(totalVotes, expectedVotes, "Should have combined delegated votes");
 
         // Let one lock expire
         uint256 billLockEnd = veHemi.getLockedBalance(billTokenId).end;
         vm.warp(billLockEnd + 1);
 
         uint256 votesAfterOneExpiry = hemiVoteDelegation.getVotes(delegateTokenId, BOB);
-        assertLt(votesAfterOneExpiry, totalVotes, "Should have fewer votes after one lock expires");
-        assertGt(
+        expectedVotes =
+            veHemi.balanceOfNFT(delegateTokenId) +
+            veHemi.balanceOfNFT(aliceTokenId) +
+            veHemi.balanceOfNFT(walterTokenId);
+
+        assertEq(
             votesAfterOneExpiry,
-            delegateInitialVotes,
+            expectedVotes,
             "Should still have votes from remaining locks"
         );
 
@@ -638,8 +842,12 @@ contract TestVeHemiVoteDelegation is Test {
         );
         uint256 aliceVotes = hemiVoteDelegation.getVotes(aliceTokenId, ALICE);
         uint256 walterVotes = hemiVoteDelegation.getVotes(walterTokenId, WALTER);
-        assertGt(aliceVotes, aliceInitialVotes, "Alice delegatee should have delegated");
-        assertLt(walterVotes, walterInitialVotes, "Walter should not have");
+        assertEq(
+            aliceVotes,
+            veHemi.balanceOfNFT(aliceTokenId) + veHemi.balanceOfNFT(billTokenId),
+            "Alice delegatee should have delegated"
+        );
+        assertEq(walterVotes, veHemi.balanceOfNFT(walterTokenId), "Walter should not have");
     }
 
     // Test delegation with complex scenarios
@@ -916,7 +1124,11 @@ contract TestVeHemiVoteDelegation is Test {
         uint256 bobVotes = hemiVoteDelegation.getVotes(bobTokenId, BOB);
 
         assertEq(aliceVotes, 0, "Alice should have no votes after delegation");
-        assertGt(bobVotes, 0, "Bob should have received Alice's votes");
+        assertEq(
+            bobVotes,
+            veHemi.balanceOfNFT(bobTokenId) + veHemi.balanceOfNFT(aliceTokenId),
+            "Bob should have received Alice's votes"
+        );
     }
 
     // Test delegateBySig with invalid signature

@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.29;
+pragma solidity 0.8.29;
 
-import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import {ReentrancyGuardUpgradeable} from "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
+import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 import {IVeHemi} from "./interfaces/IVeHemi.sol";
 import {VeHemiDelegationStorageV1} from "./storage/VeHemiDelegationStorageV1.sol";
 import {SafeCast} from "./libraries/SafeCast.sol";
@@ -14,7 +15,7 @@ import {SafeCast} from "./libraries/SafeCast.sol";
  * (next day boundary) and expire when the delegator's lock expires.
  * @dev Based on veFXS and veCRV delegation mechanism with adaptations for veHemi
  */
-contract VeHemiVoteDelegation is ReentrancyGuard, VeHemiDelegationStorageV1 {
+contract VeHemiVoteDelegation is ReentrancyGuardUpgradeable, VeHemiDelegationStorageV1 {
     using SafeCast for uint256;
     using SafeCast for int128;
 
@@ -31,9 +32,6 @@ contract VeHemiVoteDelegation is ReentrancyGuard, VeHemiDelegationStorageV1 {
     /// @notice The EIP-712 typehash for the delegation struct used by the contract
     bytes32 private constant DELEGATION_TYPEHASH =
         keccak256("Delegation(uint256 delegator,uint256 delegatee,uint256 nonce,uint256 expiry)");
-
-    string public constant name = "veHEMIDelegation";
-    string public constant version = "1.0.0";
 
     /// @notice The veHemi contract that manages locked balances
     IVeHemi public immutable veHemi;
@@ -104,8 +102,8 @@ contract VeHemiVoteDelegation is ReentrancyGuard, VeHemiDelegationStorageV1 {
         bytes32 domainSeparator = keccak256(
             abi.encode(
                 DOMAIN_TYPEHASH,
-                keccak256(bytes(name)),
-                keccak256(bytes(version)),
+                keccak256(bytes("veHEMIDelegation")),
+                keccak256(bytes("1.0.0")),
                 block.chainid,
                 address(this)
             )
@@ -117,12 +115,12 @@ contract VeHemiVoteDelegation is ReentrancyGuard, VeHemiDelegationStorageV1 {
 
         bytes32 digest = keccak256(abi.encodePacked("\x19\x01", domainSeparator, structHash));
 
-        address _signer = ecrecover(digest, v, r, s);
+        address _signer = ECDSA.recover(digest, v, r, s);
         if (_signer == address(0)) revert InvalidSignature();
         if (veHemi.ownerOf(delegator_) != _signer) revert NotOwner();
         if (nonce != nonces[_signer]++) revert InvalidNonce();
         if (block.timestamp > expiry) revert SignatureExpired();
-        return _delegate(delegator_, delegatee_);
+        _delegate(delegator_, delegatee_);
     }
 
     /**
@@ -379,8 +377,6 @@ contract VeHemiVoteDelegation is ReentrancyGuard, VeHemiDelegationStorageV1 {
         if (delegations[delegator_].firstDelegationTimestamp == 0 && delegator_ == delegatee_)
             return;
 
-        if (delegations[delegator_].delegatee == delegatee_) return;
-
         Delegation memory _previousDelegation = delegations[delegator_];
 
         uint256 _checkpointTimestamp = ((block.timestamp / ONE_DAY) * ONE_DAY) + ONE_DAY;
@@ -419,7 +415,6 @@ contract VeHemiVoteDelegation is ReentrancyGuard, VeHemiDelegationStorageV1 {
         address account_
     ) internal view returns (uint256) {
         uint256 _selfVotes;
-        if (veHemi.getLockedBalance(tokenId_).end <= timestamp_) return 0;
         (uint256 _balance, address _owner) = veHemi.balanceAndOwnerOfNFTAt(tokenId_, timestamp_);
         if (_owner != account_) return 0;
 

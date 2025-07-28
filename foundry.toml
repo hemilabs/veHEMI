@@ -8,6 +8,11 @@ optimizer_runs = 200
 via_ir = false
 block_timestamp = 1_738_368_000 # Feb 1, 2025 at 00:00 GMT
 
+# Dependencies with specific versions for reproducible builds
+[dependencies]
+openzeppelin-contracts = "5.4.0"
+openzeppelin-contracts-upgradeable = "5.4.0"
+
 # Linting and formatting
 [profile.default.fuzz]
 runs = 1000
