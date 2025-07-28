@@ -39,6 +39,10 @@ contract VeHemiTest is Test {
 
         // Deploy logic contract
         VeHemi logic = new VeHemi(address(hemi));
+
+        // Deploy and set mock delegation contract
+        mockDelegation = new MockHemiVoteDelegation();
+
         // Deploy proxy
         ERC1967Proxy proxy = new ERC1967Proxy(
             address(logic),
@@ -46,8 +50,6 @@ contract VeHemiTest is Test {
         );
         veHemi = VeHemi(address(proxy));
 
-        // Deploy and set mock delegation contract
-        mockDelegation = new MockHemiVoteDelegation();
         vm.prank(address(this));
         veHemi.updateVoteDelegation(IVeHemiVoteDelegation(address(mockDelegation)));
 
@@ -147,7 +149,7 @@ contract VeHemiTest is Test {
 
         veHemi.withdraw(tokenId);
 
-        vm.expectRevert(VeHemi.LockExpired.selector);
+        vm.expectRevert(VeHemi.NotOwner.selector);
         veHemi.increaseUnlockTime(tokenId, 4 weeks);
 
         vm.expectRevert(VeHemi.LockExpired.selector);
@@ -568,7 +570,7 @@ contract VeHemiTest is Test {
         assertEq(veHemi.totalVeHemiSupplyAtBlock(b1), supplyAtT1, "Total at past is not correct");
     }
 
-    // --- Transfer Control Tests ---
+    //     // --- Transfer Control Tests ---
 
     function testTransferNotAllowedFlag() public {
         uint256 amount = 100 ether;
@@ -897,7 +899,7 @@ contract VeHemiTest is Test {
         );
     }
 
-    // --- Forfeitable Lock Tests ---
+    //     // --- Forfeitable Lock Tests ---
 
     function testForfeitLockByAdmin() public {
         uint256 amount = 100 ether;
@@ -930,7 +932,7 @@ contract VeHemiTest is Test {
 
         vm.startPrank(teamMember);
 
-        vm.expectRevert(VeHemi.LockExpired.selector);
+        vm.expectRevert(VeHemi.NotOwner.selector);
         veHemi.increaseUnlockTime(tokenId, 4 weeks);
 
         vm.expectRevert(VeHemi.LockExpired.selector);

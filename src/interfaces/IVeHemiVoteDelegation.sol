@@ -3,8 +3,7 @@ pragma solidity ^0.8.29;
 
 interface IVeHemiVoteDelegation {
     struct Delegation {
-        uint256 delegatee;
-        uint48 firstDelegationTimestamp;
+        address delegatee;
         uint48 end;
         uint96 bias;
         uint96 amount;
@@ -36,15 +35,11 @@ interface IVeHemiVoteDelegation {
         uint256 end;
     }
 
-    function delegate(uint256 delegator_, uint256 delegatee_) external;
+    function delegate(uint256 delegator_, address delegatee_) external;
 
     function delegation(uint256 tokenId_) external view returns (Delegation memory);
 
-    function getVotes(uint256 tokenId_, address account_) external view returns (uint256);
+    function getVotes(address account_) external view returns (uint256);
 
-    function getPastVotes(
-        uint256 tokenId_,
-        uint256 timestamp_,
-        address account_
-    ) external view returns (uint256);
+    function getPastVotes(address account_, uint256 timestamp_) external view returns (uint256);
 }

@@ -5,6 +5,7 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {Ownable2StepUpgradeable} from "@openzeppelin/contracts-upgradeable/access/Ownable2StepUpgradeable.sol";
 import {SafeCast} from "./libraries/SafeCast.sol";
 import {IERC721} from "@openzeppelin/contracts/token/ERC721/IERC721.sol";
+import {IERC721Enumerable} from "@openzeppelin/contracts/token/ERC721/extensions/IERC721Enumerable.sol";
 import {IRewardDistributor} from "./interfaces/IRewardDistributor.sol";
 import {IVeHemiVoteDelegation} from "./interfaces/IVeHemiVoteDelegation.sol";
 import {ERC721EnumerableUpgradeable, ERC721Upgradeable} from "@openzeppelin/contracts-upgradeable/token/ERC721/extensions/ERC721EnumerableUpgradeable.sol";
@@ -57,7 +58,7 @@ contract VeHemi is
     }
 
     /**
-     * @notice Initializes the contract with the owner and reward distributor addresses
+     * @notice Initializes the contract with the owner address
      * @param owner_ The address of the contract owner
      */
     function initialize(address owner_) external initializer {
@@ -151,7 +152,7 @@ contract VeHemi is
         if (_msgSender() != forfeitAdmin) revert NotForfeitAdmin();
         if (!forfeitable[tokenId_]) revert NotForfeitable();
         if (locked[tokenId_].end < block.timestamp) revert LockExpired();
-        _delegateToSelf(tokenId_);
+        voteDelegation.delegate(tokenId_, address(0));
         _withdraw(tokenId_);
     }
 
@@ -302,6 +303,7 @@ contract VeHemi is
      * @param newVoteDelegation_ The new vote delegation contract address
      */
     function updateVoteDelegation(IVeHemiVoteDelegation newVoteDelegation_) external onlyOwner {
+        if (address(newVoteDelegation_) == address(0)) revert AddressIsNull();
         IVeHemiVoteDelegation _oldVoteDelegation = voteDelegation;
         voteDelegation = newVoteDelegation_;
         emit VoteDelegationUpdated(_oldVoteDelegation, newVoteDelegation_);
@@ -616,6 +618,7 @@ contract VeHemi is
         _mint(account_, _tokenId);
 
         _depositFor(_tokenId, amount_, uint64(unlockTime), locked[_tokenId]);
+        voteDelegation.delegate(_tokenId, account_);
 
         provider[_tokenId] = _msgSender();
         if (!transferable_) {
@@ -675,24 +678,10 @@ contract VeHemi is
     }
 
     function _reDelegate(uint256 delegator_) internal {
-        uint256 _delegatee = _getDelegatee(delegator_);
-        if (_delegatee != 0) {
+        address _delegatee = voteDelegation.delegation(delegator_).delegatee;
+        if (_delegatee != address(0)) {
             try voteDelegation.delegate(delegator_, _delegatee) {} catch {}
         }
-    }
-
-    function _delegateToSelf(uint256 tokenId_) internal {
-        uint256 _delegatee = _getDelegatee(tokenId_);
-        if (_delegatee != 0) {
-            try voteDelegation.delegate(tokenId_, tokenId_) {} catch {}
-        }
-    }
-
-    function _getDelegatee(uint256 tokenId_) internal view returns (uint256) {
-        if (address(voteDelegation) != address(0)) {
-            return voteDelegation.delegation(tokenId_).delegatee;
-        }
-        return 0;
     }
 
     function _supplyAt(uint256 timestamp_) internal view returns (uint256) {
@@ -742,11 +731,11 @@ contract VeHemi is
         _updateReward(tokenId_);
         LockedBalance memory _oldLocked = locked[tokenId_];
         uint256 _amount = _oldLocked.amount.toUint256();
-
+        _burn(tokenId_);
         locked[tokenId_] = LockedBalance(0, 0);
         uint256 _lockedBefore = totalLocked;
         totalLocked = _lockedBefore - _amount;
-
+        // TODO: Burn nft
         // oldLocked can have either expired <= timestamp or zero end
         // oldLocked has only 0 end
         // Both can have >= 0 amount
@@ -767,7 +756,7 @@ contract VeHemi is
                 revert("NFT is non-transferable");
             }
             _updateReward(tokenId_);
-            _delegateToSelf(tokenId_);
+            voteDelegation.delegate(tokenId_, to_);
         }
         super.transferFrom(from_, to_, tokenId_);
         if (from_ != address(0)) {

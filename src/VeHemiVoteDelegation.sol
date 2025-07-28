@@ -31,7 +31,7 @@ contract VeHemiVoteDelegation is ReentrancyGuardUpgradeable, VeHemiDelegationSto
         keccak256("EIP712Domain(string name,uint256 chainId,address verifyingContract)");
     /// @notice The EIP-712 typehash for the delegation struct used by the contract
     bytes32 private constant DELEGATION_TYPEHASH =
-        keccak256("Delegation(uint256 delegator,uint256 delegatee,uint256 nonce,uint256 expiry)");
+        keccak256("Delegation(uint256 delegator,address delegatee,uint256 nonce,uint256 expiry)");
 
     /// @notice The veHemi contract that manages locked balances
     IVeHemi public immutable veHemi;
@@ -63,7 +63,10 @@ contract VeHemiVoteDelegation is ReentrancyGuardUpgradeable, VeHemiDelegationSto
     constructor(address veHemi_) {
         if (veHemi_ == address(0)) revert InvalidVeHemi();
         veHemi = IVeHemi(veHemi_);
+        _disableInitializers();
     }
+
+    function initialize(address owner_) external initializer {}
 
     /**
      * @notice Delegate voting power from one token to another
@@ -71,11 +74,11 @@ contract VeHemiVoteDelegation is ReentrancyGuardUpgradeable, VeHemiDelegationSto
      * their voting power and the delegatee gains it. Delegations expire when the delegator's
      * lock expires. Delegating to self (same tokenId) is equivalent to no delegation.
      * @param delegator_ The token ID to delegate from (must be owned by msg.sender)
-     * @param delegatee_ The token ID to delegate to (0 for no delegation, same as delegator_ for self-delegation)
+     * @param delegatee_ The wallet address to delegate to (0 for no delegation, same as delegator_ for self-delegation)
      */
     function delegate(
         uint256 delegator_,
-        uint256 delegatee_
+        address delegatee_
     ) external onlyAuthorized(delegator_) nonReentrant {
         _delegate(delegator_, delegatee_);
     }
@@ -83,7 +86,7 @@ contract VeHemiVoteDelegation is ReentrancyGuardUpgradeable, VeHemiDelegationSto
     /**
      * @dev Delegates votes from signatory to `delegatee`
      * @param delegator_ The token ID to delegate from (must be owned by msg.sender)
-     * @param delegatee_ The token ID to delegate to (0 for no delegation, same as delegator_ for self-delegation)
+     * @param delegatee_ delegatee address
      * @param nonce The contract state required to match the signature
      * @param expiry The time at which to expire the signature
      * @param v The recovery byte of the signature
@@ -92,7 +95,7 @@ contract VeHemiVoteDelegation is ReentrancyGuardUpgradeable, VeHemiDelegationSto
      */
     function delegateBySig(
         uint256 delegator_,
-        uint256 delegatee_,
+        address delegatee_,
         uint256 nonce,
         uint256 expiry,
         uint8 v,
@@ -125,13 +128,13 @@ contract VeHemiVoteDelegation is ReentrancyGuardUpgradeable, VeHemiDelegationSto
 
     /**
      * @notice Get the delegation checkpoints for a token
-     * @param tokenId_ The token ID to get checkpoints for
+     * @param delegatee_ The delegatee_ to get checkpoints for
      * @return The array of delegation checkpoints
      */
     function getDelegationCheckpoints(
-        uint256 tokenId_
+        address delegatee_
     ) external view returns (DelegateCheckpoint[] memory) {
-        return delegateCheckpoints[tokenId_];
+        return delegateCheckpoints[delegatee_];
     }
 
     /**
@@ -145,41 +148,37 @@ contract VeHemiVoteDelegation is ReentrancyGuardUpgradeable, VeHemiDelegationSto
 
     /**
      * @notice Get the current voting power for a token
-     * @param tokenId_ The token ID to check
      * @param account_ The account to check voting power for
      * @return The current voting power (includes both self votes and delegated votes)
      */
-    function getVotes(uint256 tokenId_, address account_) external view returns (uint256) {
-        return _getPastVotes(tokenId_, block.timestamp, account_);
+    function getVotes(address account_) external view returns (uint256) {
+        return _getPastVotes(account_, block.timestamp);
     }
 
     /**
      * @notice Get the voting power for a token at a specific timestamp
-     * @param tokenId_ The token ID to check
-     * @param timestamp_ The timestamp to check voting power at (must not be in the future)
      * @param account_ The account to check voting power for
-     * @return The voting power at the given timestamp
+     * @param timestamp_ The timestamp to check voting power at (must not be in the future)
+     * @return _totalVotes The voting power at the given timestamp
      */
     function getPastVotes(
-        uint256 tokenId_,
-        uint256 timestamp_,
-        address account_
-    ) external view returns (uint256) {
-        if (timestamp_ > block.timestamp) revert TimestampInFuture();
-        return _getPastVotes(tokenId_, timestamp_, account_);
+        address account_,
+        uint256 timestamp_
+    ) external view returns (uint256 _totalVotes) {
+        _totalVotes = _getPastVotes(account_, timestamp_);
     }
 
     /**
      * @notice Calculate all expired delegations for an account since the last checkpoint
      * @dev Can be used in tandem with writeNewCheckpointForExpirations() to write a new checkpoint
      * @dev Long time periods between checkpoints can increase gas costs for delegate() and castVote()
-     * @param tokenId_ tokenId of delegate
+     * @param delegatee_ delegatee_
      * @return _calculatedCheckpoint A new DelegateCheckpoint to write based on expirations since previous checkpoint
      */
     function calculateExpiredDelegations(
-        uint256 tokenId_
+        address delegatee_
     ) public view returns (DelegateCheckpoint memory _calculatedCheckpoint) {
-        DelegateCheckpoint[] storage delegationCheckpoints = delegateCheckpoints[tokenId_];
+        DelegateCheckpoint[] storage delegationCheckpoints = delegateCheckpoints[delegatee_];
 
         uint256 _checkpointsLength = delegationCheckpoints.length;
 
@@ -201,7 +200,7 @@ contract VeHemiVoteDelegation is ReentrancyGuardUpgradeable, VeHemiDelegationSto
             uint256 totalExpiredSlope_,
             uint256 totalExpiredAmount_
         ) = _calculateExpirations({
-                tokenId_: tokenId_,
+                delegatee_: delegatee_,
                 start_: _lastCheckpoint.timestamp,
                 end_: _checkpointTimestamp,
                 checkpoint_: _lastCheckpoint
@@ -225,19 +224,19 @@ contract VeHemiVoteDelegation is ReentrancyGuardUpgradeable, VeHemiDelegationSto
     /**
      * @notice Write a new checkpoint if any weight has expired since the previous checkpoint
      * @dev Long time periods between checkpoints can increase gas costs for delegate() and castVote()
-     * @param tokenId_ tokenId of delegatee
+     * @param delegatee_ delegatee
      */
-    function writeNewCheckpointForExpiredDelegations(uint256 tokenId_) external nonReentrant {
-        DelegateCheckpoint memory _newCheckpoint = calculateExpiredDelegations(tokenId_);
+    function writeNewCheckpointForExpiredDelegations(address delegatee_) external nonReentrant {
+        DelegateCheckpoint memory _newCheckpoint = calculateExpiredDelegations(delegatee_);
 
         if (_newCheckpoint.timestamp == 0) revert NoExpirations();
 
-        delegateCheckpoints[tokenId_].push(_newCheckpoint);
+        delegateCheckpoints[delegatee_].push(_newCheckpoint);
     }
 
     function _calculateCheckpoint(
         DelegateCheckpoint memory previousCheckpoint_,
-        uint256 tokenId_,
+        address delegatee_,
         bool isDeltaPositive_,
         uint256 deltaBias_,
         uint256 deltaSlope_,
@@ -286,7 +285,7 @@ contract VeHemiVoteDelegation is ReentrancyGuardUpgradeable, VeHemiDelegationSto
                     uint256 totalExpiredSlope,
                     uint256 totalExpiredAmount
                 ) = _calculateExpirations(
-                        tokenId_,
+                        delegatee_,
                         _newCheckpoint.timestamp,
                         checkpointTimestamp_,
                         previousCheckpoint_
@@ -301,7 +300,7 @@ contract VeHemiVoteDelegation is ReentrancyGuardUpgradeable, VeHemiDelegationSto
     }
 
     function _calculateExpirations(
-        uint256 tokenId_,
+        address delegatee_,
         uint256 start_,
         uint256 end_,
         DelegateCheckpoint memory checkpoint_
@@ -319,7 +318,7 @@ contract VeHemiVoteDelegation is ReentrancyGuardUpgradeable, VeHemiDelegationSto
                 // Total values will always be less than or equal to a checkpoint's values
                 uint256 currentSixDayWindow = SIX_DAYS + (start_ / SIX_DAYS) * SIX_DAYS;
                 mapping(uint256 => Expiration) storage delegateExpirations = expiredDelegations[
-                    tokenId_
+                    delegatee_
                 ];
                 // Sum values from currentSixDayWindow until end
                 while (currentSixDayWindow <= end_) {
@@ -370,12 +369,8 @@ contract VeHemiVoteDelegation is ReentrancyGuardUpgradeable, VeHemiDelegationSto
         closestCheckpoint_ = high == 0 ? closestCheckpoint_ : checkpoints_[high - 1];
     }
 
-    function _delegate(uint256 delegator_, uint256 delegatee_) internal {
-        if (delegatee_ == 0) revert InvalidDelegatee();
-        if (veHemi.ownerOf(delegatee_) == address(0)) revert NonExistentToken();
-
-        if (delegations[delegator_].firstDelegationTimestamp == 0 && delegator_ == delegatee_)
-            return;
+    function _delegate(uint256 delegator_, address delegatee_) internal {
+        if (msg.sender != address(veHemi) && delegatee_ == address(0)) revert InvalidDelegatee();
 
         Delegation memory _previousDelegation = delegations[delegator_];
 
@@ -399,9 +394,6 @@ contract VeHemiVoteDelegation is ReentrancyGuardUpgradeable, VeHemiDelegationSto
 
         delegations[delegator_] = Delegation({
             delegatee: delegatee_,
-            firstDelegationTimestamp: _previousDelegation.firstDelegationTimestamp == 0
-                ? uint48(_checkpointTimestamp)
-                : _previousDelegation.firstDelegationTimestamp,
             end: uint48(_normalizedVeLockInfo.end),
             bias: uint96(_normalizedVeLockInfo.bias),
             amount: uint96(_normalizedVeLockInfo.amount),
@@ -410,20 +402,12 @@ contract VeHemiVoteDelegation is ReentrancyGuardUpgradeable, VeHemiDelegationSto
     }
 
     function _getPastVotes(
-        uint256 tokenId_,
-        uint256 timestamp_,
-        address account_
-    ) internal view returns (uint256) {
-        uint256 _selfVotes;
-        (uint256 _balance, address _owner) = veHemi.balanceAndOwnerOfNFTAt(tokenId_, timestamp_);
-        if (_owner != account_) return 0;
+        address account_,
+        uint256 timestamp_
+    ) internal view returns (uint256 _totalVotes) {
+        if (timestamp_ > block.timestamp) revert TimestampInFuture();
 
-        uint256 _firstDelegation = delegations[tokenId_].firstDelegationTimestamp;
-        if (_firstDelegation == 0 || timestamp_ < _firstDelegation) {
-            _selfVotes = _balance;
-        }
-        uint256 _delegateVotes = _getDelegateVotesAt(tokenId_, timestamp_);
-        return _selfVotes + _delegateVotes;
+        return _getDelegateVotesAt(account_, timestamp_);
     }
 
     function _getNormalizedLockedInfo(
@@ -447,12 +431,12 @@ contract VeHemiVoteDelegation is ReentrancyGuardUpgradeable, VeHemiDelegationSto
     }
 
     function _getDelegateVotesAt(
-        uint256 tokenId_,
+        address delegatee_,
         uint256 timestamp_
     ) internal view returns (uint256 _delegatedWeight) {
         // Check if delegate token has any delegations
         DelegateCheckpoint memory _checkpoint = _checkpointBinarySearch({
-            checkpoints_: delegateCheckpoints[tokenId_],
+            checkpoints_: delegateCheckpoints[delegatee_],
             timestamp_: timestamp_
         });
 
@@ -464,7 +448,7 @@ contract VeHemiVoteDelegation is ReentrancyGuardUpgradeable, VeHemiDelegationSto
         // It's possible that some delegated veHemi has expired.
         // Add up all expirations during this time period, SIX_DAYS by SIX_DAYS.
         (uint256 totalExpiredBias, uint256 totalExpiredSlope, ) = _calculateExpirations({
-            tokenId_: tokenId_,
+            delegatee_: delegatee_,
             start_: _checkpoint.timestamp,
             end_: timestamp_,
             checkpoint_: _checkpoint
@@ -483,7 +467,7 @@ contract VeHemiVoteDelegation is ReentrancyGuardUpgradeable, VeHemiDelegationSto
         Delegation memory previousDelegation_,
         uint256 checkpointTimestamp_
     ) private {
-        if (previousDelegation_.delegatee == 0) return;
+        if (previousDelegation_.delegatee == address(0)) return;
         // Remove voting power from previous delegate, if they exist
 
         // Get the last Checkpoint for previous delegate
@@ -517,7 +501,7 @@ contract VeHemiVoteDelegation is ReentrancyGuardUpgradeable, VeHemiDelegationSto
             // Calculate new checkpoint
             DelegateCheckpoint memory newCheckpoint = _calculateCheckpoint({
                 previousCheckpoint_: _lastCheckpoint,
-                tokenId_: previousDelegation_.delegatee,
+                delegatee_: previousDelegation_.delegatee,
                 isDeltaPositive_: false,
                 deltaBias_: previousDelegation_.bias,
                 deltaSlope_: previousDelegation_.slope,
@@ -545,7 +529,7 @@ contract VeHemiVoteDelegation is ReentrancyGuardUpgradeable, VeHemiDelegationSto
      * @param checkpointTimestamp_ The timestamp for the checkpoint
      */
     function _moveVotingPowerToNewDelegate(
-        uint256 newDelegatee_,
+        address newDelegatee_,
         NormalizedVeHemiLockInfo memory delegatorVeLockInfo_,
         uint256 checkpointTimestamp_
     ) private {
@@ -579,7 +563,7 @@ contract VeHemiVoteDelegation is ReentrancyGuardUpgradeable, VeHemiDelegationSto
         // Calculate new checkpoint
         DelegateCheckpoint memory _newCheckpoint = _calculateCheckpoint({
             previousCheckpoint_: _lastCheckpoint,
-            tokenId_: newDelegatee_,
+            delegatee_: newDelegatee_,
             isDeltaPositive_: true,
             deltaBias_: delegatorVeLockInfo_.bias,
             deltaSlope_: delegatorVeLockInfo_.slope,
