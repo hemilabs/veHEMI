@@ -3,13 +3,12 @@ pragma solidity 0.8.29;
 
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {Ownable2StepUpgradeable} from "@openzeppelin/contracts-upgradeable/access/Ownable2StepUpgradeable.sol";
-import {SafeCast} from "./libraries/SafeCast.sol";
+import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
 import {IERC721} from "@openzeppelin/contracts/token/ERC721/IERC721.sol";
-import {IERC721Enumerable} from "@openzeppelin/contracts/token/ERC721/extensions/IERC721Enumerable.sol";
 import {IRewardDistributor} from "./interfaces/IRewardDistributor.sol";
 import {IVeHemiVoteDelegation} from "./interfaces/IVeHemiVoteDelegation.sol";
 import {ERC721EnumerableUpgradeable, ERC721Upgradeable} from "@openzeppelin/contracts-upgradeable/token/ERC721/extensions/ERC721EnumerableUpgradeable.sol";
-import {ReentrancyGuardUpgradeable} from "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol";
+import {ReentrancyGuardTransientUpgradeable} from "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardTransientUpgradeable.sol";
 import {VeHemiStorageV1} from "./storage/VeHemiStorageV1.sol";
 
 /**
@@ -19,10 +18,11 @@ import {VeHemiStorageV1} from "./storage/VeHemiStorageV1.sol";
 contract VeHemi is
     ERC721EnumerableUpgradeable,
     Ownable2StepUpgradeable,
-    ReentrancyGuardUpgradeable,
+    ReentrancyGuardTransientUpgradeable,
     VeHemiStorageV1
 {
     using SafeCast for uint256;
+    using SafeCast for int256;
     using SafeCast for int128;
 
     IERC20 public immutable HEMI;
@@ -33,7 +33,6 @@ contract VeHemi is
     uint256 private constant MAX_TIME = 4 * YEAR; // 4 years
     uint256 private constant MULTIPLIER = 1 ether;
     string public constant version = "1.0.0";
-    uint8 public constant decimals = 18;
 
     // --- Errors ---
     error AmountIsZero();
@@ -49,6 +48,7 @@ contract VeHemi is
     error NotForfeitable();
     error NotForfeitAdmin();
     error OwnerIsZero();
+    error NotTransferable();
 
     constructor(address hemi_) {
         if (hemi_ == address(0)) revert AddressIsNull();
@@ -65,8 +65,8 @@ contract VeHemi is
         if (owner_ == address(0)) revert OwnerIsZero();
         __ERC721_init("veHemi", "veHemi");
         __Ownable_init_unchained(owner_);
-        globalPointHistory[0].blockNumber = uint64(block.number);
-        globalPointHistory[0].timestamp = uint64(block.timestamp);
+        globalPointHistory[0].blockNumber = block.number.toUint64();
+        globalPointHistory[0].timestamp = block.timestamp.toUint64();
         nextTokenId = 1;
     }
 
@@ -154,6 +154,7 @@ contract VeHemi is
         if (locked[tokenId_].end < block.timestamp) revert LockExpired();
         voteDelegation.delegate(tokenId_, address(0));
         _withdraw(tokenId_);
+        delete forfeitable[tokenId_];
     }
 
     /**
@@ -208,8 +209,7 @@ contract VeHemi is
      * @param lockDuration_ The new lock duration (from now)
      */
     function increaseUnlockTime(uint256 tokenId_, uint256 lockDuration_) external nonReentrant {
-        address _sender = _msgSender();
-        if (_ownerOf(tokenId_) != _sender) revert NotOwner();
+        if (_ownerOf(tokenId_) != _msgSender()) revert NotOwner();
         LockedBalance memory _oldLocked = locked[tokenId_];
         if (_oldLocked.end <= block.timestamp) revert LockExpired();
         if (_oldLocked.amount <= 0) revert NoExistingLock();
@@ -217,7 +217,7 @@ contract VeHemi is
         if (_unlockTime > block.timestamp + MAX_TIME) revert LockDurationTooLong();
         if (_unlockTime <= _oldLocked.end) revert NewLockDurationNotGreater();
 
-        _depositFor(tokenId_, 0, uint64(_unlockTime), _oldLocked);
+        _depositFor(tokenId_, 0, _unlockTime.toUint64(), _oldLocked);
     }
 
     /**
@@ -329,7 +329,7 @@ contract VeHemi is
         UserPoint memory _lastUserPoint = userPointHistory[tokenId_][_epoch];
         _lastUserPoint.point.bias -=
             _lastUserPoint.point.slope *
-            (timestamp_ - _lastUserPoint.point.timestamp).toInt128();
+            (timestamp_ - _lastUserPoint.point.timestamp).toInt256().toInt128();
         if (_lastUserPoint.point.bias < 0) {
             _lastUserPoint.point.bias = 0;
         }
@@ -338,14 +338,14 @@ contract VeHemi is
 
     function _findBlockEpoch(
         uint256 blockNumber_,
-        uint256 max_epoch_
+        uint256 maxEpoch_
     ) internal view returns (uint256) {
-        // # Binary search
-        uint256 _min = 0;
-        uint256 _max = max_epoch_;
+        // Binary search
+        uint256 _min;
+        uint256 _max = maxEpoch_;
 
-        for (uint256 i = 0; i < 128; i++) {
-            // # Will be always enough for 128-bit numbers
+        for (uint256 i; i < 128; i++) {
+            // Will be always enough for 128-bit numbers
             if (_min >= _max) {
                 break;
             }
@@ -369,7 +369,7 @@ contract VeHemi is
         // Next check implicit zero balance
         if (globalPointHistory[1].timestamp > timestamp_) return 0;
 
-        uint256 _lower = 0;
+        uint256 _lower;
         uint256 _upper = epoch_;
         while (_upper > _lower) {
             uint256 _center = _upper - (_upper - _lower) / 2; // ceil, avoiding overflow
@@ -397,7 +397,7 @@ contract VeHemi is
         // Next check implicit zero balance
         if (userPointHistory[tokenId_][1].point.timestamp > timestamp_) return 0;
 
-        uint256 _lower = 0;
+        uint256 _lower;
         uint256 _upper = _userEpoch;
         while (_upper > _lower) {
             uint256 _center = _upper - (_upper - _lower) / 2; // ceil, avoiding overflow
@@ -427,25 +427,25 @@ contract VeHemi is
         Point memory _oldUserPoint;
         Point memory _newUserPoint;
         uint256 _epoch = epoch;
-        int128 _oldDslope = 0;
-        int128 _newDslope = 0;
+        int128 _oldDslope;
+        int128 _newDslope;
 
         // Update user point history for this lock (tokenId)
         if (tokenId_ != 0) {
             // Old lock
             if (oldLocked_.end > block.timestamp && oldLocked_.amount > 0) {
-                _oldUserPoint.slope = oldLocked_.amount / MAX_TIME.toInt128();
+                _oldUserPoint.slope = oldLocked_.amount / MAX_TIME.toInt256().toInt128();
                 _oldUserPoint.bias =
                     _oldUserPoint.slope *
-                    (oldLocked_.end - block.timestamp).toInt128();
+                    (oldLocked_.end - block.timestamp).toInt256().toInt128();
             }
 
             // New lock
             if (newLocked_.end > block.timestamp && newLocked_.amount > 0) {
-                _newUserPoint.slope = newLocked_.amount / MAX_TIME.toInt128();
+                _newUserPoint.slope = newLocked_.amount / MAX_TIME.toInt256().toInt128();
                 _newUserPoint.bias =
                     _newUserPoint.slope *
-                    (newLocked_.end - block.timestamp).toInt128();
+                    (newLocked_.end - block.timestamp).toInt256().toInt128();
             }
 
             // Read values of scheduled changes in the slope
@@ -464,11 +464,12 @@ contract VeHemi is
         Point memory _lastPoint = Point({
             bias: 0,
             slope: 0,
-            timestamp: uint64(block.timestamp),
-            blockNumber: uint64(block.number),
+            timestamp: block.timestamp.toUint64(),
+            blockNumber: block.number.toUint64(),
             amount: 0,
             fixedBias: 0
         });
+
         if (_epoch > 0) {
             _lastPoint = globalPointHistory[_epoch];
         }
@@ -501,7 +502,7 @@ contract VeHemi is
                 } else {
                     d_slope = slopeChanges[t_i];
                 }
-                _lastPoint.bias -= _lastPoint.slope * (t_i - _lastCheckpoint).toInt128();
+                _lastPoint.bias -= _lastPoint.slope * (t_i - _lastCheckpoint).toInt256().toInt128();
                 _lastPoint.slope += d_slope;
                 if (_lastPoint.bias < 0) {
                     // This can happen
@@ -512,15 +513,13 @@ contract VeHemi is
                     _lastPoint.slope = 0;
                 }
                 _lastCheckpoint = t_i;
-                _lastPoint.timestamp = uint64(t_i);
-                _lastPoint.blockNumber = uint64(
-                    _initialLastPoint.blockNumber +
-                        (_blockSlope * (t_i - _initialLastPoint.timestamp)) /
-                        MULTIPLIER
-                );
+                _lastPoint.timestamp = t_i.toUint64();
+                _lastPoint.blockNumber = (_initialLastPoint.blockNumber +
+                    (_blockSlope * (t_i - _initialLastPoint.timestamp)) /
+                    MULTIPLIER).toUint64();
                 _epoch += 1;
                 if (t_i == block.timestamp) {
-                    _lastPoint.blockNumber = uint64(block.number);
+                    _lastPoint.blockNumber = block.number.toUint64();
                     break;
                 } else {
                     globalPointHistory[_epoch] = _lastPoint;
@@ -580,23 +579,20 @@ contract VeHemi is
             // If timestamp of last user point is the same, overwrite the last user point
             // Else record the new user point into history
             // Exclude epoch 0
-            _newUserPoint.timestamp = uint64(block.timestamp);
-            _newUserPoint.blockNumber = uint64(block.number);
-            _newUserPoint.amount = uint128(locked[tokenId_].amount.toUint256());
+            _newUserPoint.timestamp = block.timestamp.toUint64();
+            _newUserPoint.blockNumber = block.number.toUint64();
+            _newUserPoint.amount = locked[tokenId_].amount.toUint256().toUint128();
             uint256 _userEpoch = userPointEpoch[tokenId_];
             if (
-                _userEpoch != 0 &&
-                userPointHistory[tokenId_][_userEpoch].point.timestamp == block.timestamp
+                _userEpoch == 0 ||
+                userPointHistory[tokenId_][_userEpoch].point.timestamp != block.timestamp
             ) {
-                // Update existing point
-                userPointHistory[tokenId_][_userEpoch].point = _newUserPoint;
-                userPointHistory[tokenId_][_userEpoch].owner = _ownerOf(tokenId_);
-            } else {
                 // Create new point at next epoch
                 userPointEpoch[tokenId_] = ++_userEpoch;
-                userPointHistory[tokenId_][_userEpoch].point = _newUserPoint;
-                userPointHistory[tokenId_][_userEpoch].owner = _ownerOf(tokenId_);
             }
+
+            userPointHistory[tokenId_][_userEpoch].point = _newUserPoint;
+            userPointHistory[tokenId_][_userEpoch].owner = _ownerOf(tokenId_);
         }
         emit Checkpoint(_epoch, tokenId_, oldLocked_, newLocked_);
     }
@@ -617,17 +613,19 @@ contract VeHemi is
         _tokenId = nextTokenId++;
         _mint(account_, _tokenId);
 
-        _depositFor(_tokenId, amount_, uint64(unlockTime), locked[_tokenId]);
+        _depositFor(_tokenId, amount_, unlockTime.toUint64(), locked[_tokenId]);
         voteDelegation.delegate(_tokenId, account_);
 
-        provider[_tokenId] = _msgSender();
+        address _sender = _msgSender();
+
+        provider[_tokenId] = _sender;
         if (!transferable_) {
             transferableAfter[_tokenId] = unlockTime;
         }
         if (forfeitable_) forfeitable[_tokenId] = true;
 
         emit Lock(
-            _msgSender(),
+            _sender,
             account_,
             _tokenId,
             amount_,
@@ -649,15 +647,14 @@ contract VeHemi is
     ) internal {
         _updateReward(tokenId_);
 
-        uint256 _lockedBefore = totalLocked;
-        totalLocked = _lockedBefore + amount_;
+        totalLocked += amount_;
 
         // Set newLocked to _oldLocked without mangling memory
         LockedBalance memory _newLocked;
         (_newLocked.amount, _newLocked.end) = (oldLocked_.amount, oldLocked_.end);
 
         // Adding to existing lock, or if a lock is expired - creating a new one
-        _newLocked.amount += amount_.toInt128();
+        _newLocked.amount += amount_.toInt256().toInt128();
         if (unlockTime_ != 0) {
             _newLocked.end = unlockTime_;
         }
@@ -680,7 +677,7 @@ contract VeHemi is
     function _reDelegate(uint256 delegator_) internal {
         address _delegatee = voteDelegation.delegation(delegator_).delegatee;
         if (_delegatee != address(0)) {
-            try voteDelegation.delegate(delegator_, _delegatee) {} catch {}
+            voteDelegation.delegate(delegator_, _delegatee);
         }
     }
 
@@ -706,7 +703,7 @@ contract VeHemi is
             } else {
                 dSlope = slopeChanges[t_i];
             }
-            bias -= slope * (t_i - ts).toInt128();
+            bias -= slope * (t_i - ts).toInt256().toInt128();
             if (t_i == timestamp_) {
                 break;
             }
@@ -732,10 +729,8 @@ contract VeHemi is
         LockedBalance memory _oldLocked = locked[tokenId_];
         uint256 _amount = _oldLocked.amount.toUint256();
         _burn(tokenId_);
-        locked[tokenId_] = LockedBalance(0, 0);
-        uint256 _lockedBefore = totalLocked;
-        totalLocked = _lockedBefore - _amount;
-        // TODO: Burn nft
+        delete locked[tokenId_];
+        totalLocked -= _amount;
         // oldLocked can have either expired <= timestamp or zero end
         // oldLocked has only 0 end
         // Both can have >= 0 amount
@@ -743,6 +738,7 @@ contract VeHemi is
 
         address _sender = _msgSender();
         HEMI.transfer(_sender, _amount);
+
         emit Withdraw(_sender, tokenId_, _amount, block.timestamp);
     }
 
@@ -752,15 +748,16 @@ contract VeHemi is
         uint256 tokenId_
     ) public override(ERC721Upgradeable, IERC721) {
         if (from_ != address(0)) {
-            if (!isTransferable(tokenId_)) {
-                revert("NFT is non-transferable");
-            }
+            if (!isTransferable(tokenId_)) revert NotTransferable();
             _updateReward(tokenId_);
             voteDelegation.delegate(tokenId_, to_);
         }
+
         super.transferFrom(from_, to_, tokenId_);
+
         if (from_ != address(0)) {
-            _checkpoint(tokenId_, locked[tokenId_], locked[tokenId_]);
+            LockedBalance memory _locked = locked[tokenId_];
+            _checkpoint(tokenId_, _locked, _locked);
         }
     }
 }

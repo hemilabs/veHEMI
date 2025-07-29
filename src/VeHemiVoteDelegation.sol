@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.29;
 
-import {ReentrancyGuardUpgradeable} from "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol";
+import {ReentrancyGuardTransientUpgradeable} from "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardTransientUpgradeable.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 import {IVeHemi} from "./interfaces/IVeHemi.sol";
 import {VeHemiDelegationStorageV1} from "./storage/VeHemiDelegationStorageV1.sol";
-import {SafeCast} from "./libraries/SafeCast.sol";
+import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
 
 /**
  * @title VeHemiVoteDelegation
@@ -15,9 +15,10 @@ import {SafeCast} from "./libraries/SafeCast.sol";
  * (next day boundary) and expire when the delegator's lock expires.
  * @dev Based on veFXS and veCRV delegation mechanism with adaptations for veHemi
  */
-contract VeHemiVoteDelegation is ReentrancyGuardUpgradeable, VeHemiDelegationStorageV1 {
+contract VeHemiVoteDelegation is ReentrancyGuardTransientUpgradeable, VeHemiDelegationStorageV1 {
     using SafeCast for uint256;
     using SafeCast for int128;
+    using SafeCast for int256;
 
     // --- Constants ---
     uint256 private constant YEAR = 365.25 days;
@@ -66,7 +67,7 @@ contract VeHemiVoteDelegation is ReentrancyGuardUpgradeable, VeHemiDelegationSto
         _disableInitializers();
     }
 
-    function initialize(address owner_) external initializer {}
+    function initialize() external initializer {}
 
     /**
      * @notice Delegate voting power from one token to another
@@ -212,10 +213,10 @@ contract VeHemiVoteDelegation is ReentrancyGuardUpgradeable, VeHemiDelegationSto
         /// NOTE: Checkpoint values will always be larger than or equal to expired values
         unchecked {
             _calculatedCheckpoint = DelegateCheckpoint({
-                timestamp: uint64(_checkpointTimestamp),
-                normalizedBias: uint128(_lastCheckpoint.normalizedBias - totalExpiredBias_),
-                normalizedSlope: uint64(_lastCheckpoint.normalizedSlope - totalExpiredSlope_),
-                totalAmount: uint128(_lastCheckpoint.totalAmount - totalExpiredAmount_),
+                timestamp: _checkpointTimestamp.toUint64(),
+                normalizedBias: (_lastCheckpoint.normalizedBias - totalExpiredBias_).toUint128(),
+                normalizedSlope: (_lastCheckpoint.normalizedSlope - totalExpiredSlope_).toUint64(),
+                totalAmount: (_lastCheckpoint.totalAmount - totalExpiredAmount_).toUint128(),
                 fixedBias: 0
             });
         }
@@ -249,10 +250,10 @@ contract VeHemiVoteDelegation is ReentrancyGuardUpgradeable, VeHemiDelegationSto
             return
                 DelegateCheckpoint({
                     // can be unsafely cast because values will never exceed uint128 max
-                    timestamp: uint64(checkpointTimestamp_),
-                    normalizedBias: uint128(deltaBias_),
-                    normalizedSlope: uint64(deltaSlope_),
-                    totalAmount: uint128(deltaAmount_),
+                    timestamp: checkpointTimestamp_.toUint64(),
+                    normalizedBias: deltaBias_.toUint128(),
+                    normalizedSlope: deltaSlope_.toUint64(),
+                    totalAmount: deltaAmount_.toUint128(),
                     fixedBias: 0
                 });
         }
@@ -266,24 +267,24 @@ contract VeHemiVoteDelegation is ReentrancyGuardUpgradeable, VeHemiDelegationSto
         unchecked {
             // Add or subtract the delta to the previous checkpoint
             if (isDeltaPositive_) {
-                _newCheckpoint.normalizedBias += uint128(deltaBias_);
-                _newCheckpoint.normalizedSlope += uint64(deltaSlope_);
-                _newCheckpoint.totalAmount += uint128(deltaAmount_);
+                _newCheckpoint.normalizedBias += deltaBias_.toUint128();
+                _newCheckpoint.normalizedSlope += deltaSlope_.toUint64();
+                _newCheckpoint.totalAmount += deltaAmount_.toUint128();
             } else {
                 // only subtract the weight from this tokenID if it has not already expired in a previous checkpoint
                 if (previousDelegationEnd_ > previousCheckpoint_.timestamp) {
-                    _newCheckpoint.normalizedBias -= uint128(deltaBias_);
-                    _newCheckpoint.normalizedSlope -= uint64(deltaSlope_);
-                    _newCheckpoint.totalAmount -= uint128(deltaAmount_);
+                    _newCheckpoint.normalizedBias -= deltaBias_.toUint128();
+                    _newCheckpoint.normalizedSlope -= deltaSlope_.toUint64();
+                    _newCheckpoint.totalAmount -= deltaAmount_.toUint128();
                 }
             }
 
             // If there have been expirations, incorporate the adjustments by subtracting them from the checkpoint
             if (_newCheckpoint.timestamp != checkpointTimestamp_) {
                 (
-                    uint256 totalExpiredBias,
-                    uint256 totalExpiredSlope,
-                    uint256 totalExpiredAmount
+                    uint128 totalExpiredBias,
+                    uint64 totalExpiredSlope,
+                    uint128 totalExpiredAmount
                 ) = _calculateExpirations(
                         delegatee_,
                         _newCheckpoint.timestamp,
@@ -291,10 +292,10 @@ contract VeHemiVoteDelegation is ReentrancyGuardUpgradeable, VeHemiDelegationSto
                         previousCheckpoint_
                     );
 
-                _newCheckpoint.timestamp = uint64(checkpointTimestamp_);
-                _newCheckpoint.normalizedBias -= uint128(totalExpiredBias);
-                _newCheckpoint.normalizedSlope -= uint64(totalExpiredSlope);
-                _newCheckpoint.totalAmount -= uint128(totalExpiredAmount);
+                _newCheckpoint.timestamp = checkpointTimestamp_.toUint64();
+                _newCheckpoint.normalizedBias -= totalExpiredBias;
+                _newCheckpoint.normalizedSlope -= totalExpiredSlope;
+                _newCheckpoint.totalAmount -= totalExpiredAmount;
             }
         }
     }
@@ -307,7 +308,7 @@ contract VeHemiVoteDelegation is ReentrancyGuardUpgradeable, VeHemiDelegationSto
     )
         private
         view
-        returns (uint256 totalExpiredBias, uint256 totalExpiredSlope, uint256 totalExpiredAmount)
+        returns (uint128 totalExpiredBias, uint64 totalExpiredSlope, uint128 totalExpiredAmount)
     {
         unchecked {
             if (end_ > start_ + MAX_LOCK_DURATION) {
@@ -394,10 +395,10 @@ contract VeHemiVoteDelegation is ReentrancyGuardUpgradeable, VeHemiDelegationSto
 
         delegations[delegator_] = Delegation({
             delegatee: delegatee_,
-            end: uint48(_normalizedVeLockInfo.end),
-            bias: uint96(_normalizedVeLockInfo.bias),
-            amount: uint96(_normalizedVeLockInfo.amount),
-            slope: uint64(_normalizedVeLockInfo.slope)
+            end: _normalizedVeLockInfo.end.toUint48(),
+            bias: _normalizedVeLockInfo.bias.toUint96(),
+            amount: _normalizedVeLockInfo.amount.toUint96(),
+            slope: _normalizedVeLockInfo.slope.toUint64()
         });
     }
 
@@ -414,8 +415,7 @@ contract VeHemiVoteDelegation is ReentrancyGuardUpgradeable, VeHemiDelegationSto
         uint256 delegator_,
         uint256 checkPointTimestamp_
     ) internal view returns (NormalizedVeHemiLockInfo memory _normalizedVeHemiLockInfo) {
-        IVeHemi.LockedBalance memory _lockedBalance = veHemi.getLockedBalance(delegator_);
-        uint256 _end = _lockedBalance.end;
+        uint256 _end = veHemi.getLockedBalance(delegator_).end;
         if (_end <= checkPointTimestamp_) revert CanNotDelegateExpiredLocks();
 
         uint256 _epoch = veHemi.userPointEpoch(delegator_);
@@ -424,7 +424,7 @@ contract VeHemiVoteDelegation is ReentrancyGuardUpgradeable, VeHemiDelegationSto
 
         _normalizedVeHemiLockInfo.slope = _userPoint.point.slope.toUint256();
         _normalizedVeHemiLockInfo.bias =
-            SafeCast.toUint256(_userPoint.point.bias) +
+            _userPoint.point.bias.toUint256() +
             (_normalizedVeHemiLockInfo.slope * _userPoint.point.timestamp);
         _normalizedVeHemiLockInfo.amount = _userPoint.point.amount;
         _normalizedVeHemiLockInfo.end = _end;
@@ -488,9 +488,9 @@ contract VeHemiVoteDelegation is ReentrancyGuardUpgradeable, VeHemiDelegationSto
             // All expiration fields will never exceed their size so subtraction doesnt need to be checked
             // and they can be unsafely cast
             unchecked {
-                expiration.bias -= uint96(previousDelegation_.bias);
-                expiration.slope -= uint64(previousDelegation_.slope);
-                expiration.amount -= uint96(previousDelegation_.amount);
+                expiration.bias -= previousDelegation_.bias;
+                expiration.slope -= previousDelegation_.slope;
+                expiration.amount -= previousDelegation_.amount;
             }
 
             // Effects
@@ -553,9 +553,9 @@ contract VeHemiVoteDelegation is ReentrancyGuardUpgradeable, VeHemiDelegationSto
         // NOTE: All expiration fields will never exceed their size so addition doesnt need to be checked
         // and can be unsafely cast
         unchecked {
-            _expiration.bias += uint96(delegatorVeLockInfo_.bias);
-            _expiration.slope += uint64(delegatorVeLockInfo_.slope);
-            _expiration.amount += uint96(delegatorVeLockInfo_.amount);
+            _expiration.bias += delegatorVeLockInfo_.bias.toUint96();
+            _expiration.slope += delegatorVeLockInfo_.slope.toUint64();
+            _expiration.amount += delegatorVeLockInfo_.amount.toUint96();
         }
         // Effects
         expiredDelegations[newDelegatee_][delegatorVeLockInfo_.end] = _expiration;

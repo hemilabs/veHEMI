@@ -164,10 +164,10 @@ contract VeHemiTest is Test {
         vm.startPrank(user);
         uint256 tokenId = veHemi.createLockFor(amount, 1 weeks, alice, false, false);
 
-        vm.expectRevert("NFT is non-transferable");
+        vm.expectRevert(VeHemi.NotTransferable.selector);
         veHemi.transferFrom(user, address(0xABCD), tokenId);
 
-        vm.expectRevert("NFT is non-transferable");
+        vm.expectRevert(VeHemi.NotTransferable.selector);
         veHemi.safeTransferFrom(user, address(0xABCD), tokenId);
         vm.stopPrank();
     }
