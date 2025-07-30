@@ -33,6 +33,7 @@ contract VeHemi is
     uint256 private constant MAX_TIME = 4 * YEAR; // 4 years
     uint256 private constant MULTIPLIER = 1 ether;
     string public constant version = "1.0.0";
+    uint8 public constant decimals = 18;
 
     // --- Errors ---
     error AmountIsZero();
