@@ -50,7 +50,7 @@ interface IVeHemi is IERC721Enumerable {
         uint256 lockTime,
         uint256 extraData,
         bool transferable,
-        bool forfeitable
+        bool isForfeitable
     );
     event Checkpoint(uint256 epoch, uint256 tokenId, LockedBalance oldLock, LockedBalance newLock);
 

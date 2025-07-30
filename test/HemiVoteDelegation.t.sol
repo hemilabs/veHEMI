@@ -72,7 +72,7 @@ contract TestVeHemiVoteDelegation is Test {
 
     function _delegateAndWarp(uint256 tokenId, address delegatee) internal {
         _delegate(tokenId, delegatee);
-        uint256 delegationStarts = ((block.timestamp / 1 days) * 1 days) + 1 days;
+        uint256 delegationStarts = ((vm.getBlockTimestamp() / 1 days) * 1 days) + 1 days;
         vm.warp(delegationStarts);
     }
 
@@ -81,7 +81,7 @@ contract TestVeHemiVoteDelegation is Test {
         // Given - Bill and Alice have locks
         (uint256 billTokenId, ) = _createLock(BILL, LOCK_AMOUNT, MAX_TIME);
         (uint256 aliceTokenId, ) = _createLock(ALICE, LOCK_AMOUNT, MAX_TIME);
-        uint256 delegationStarts = ((block.timestamp / 1 days) * 1 days) + 1 days;
+        uint256 delegationStarts = ((vm.getBlockTimestamp() / 1 days) * 1 days) + 1 days;
         vm.warp(delegationStarts);
 
         uint256 billInitialVotes = hemiVoteDelegation.getVotes(BILL);
@@ -182,7 +182,7 @@ contract TestVeHemiVoteDelegation is Test {
         veHemi.increaseAmount(billTokenId, LOCK_AMOUNT);
         vm.stopPrank();
 
-        uint256 delegationStarts = ((block.timestamp / 1 days) * 1 days) + 1 days;
+        uint256 delegationStarts = ((vm.getBlockTimestamp() / 1 days) * 1 days) + 1 days;
         vm.warp(delegationStarts);
 
         // Then - Bill should have increased voting power
@@ -211,7 +211,7 @@ contract TestVeHemiVoteDelegation is Test {
         veHemi.increaseAmount(billTokenId, LOCK_AMOUNT);
         vm.stopPrank();
 
-        uint256 delegationStarts = ((block.timestamp / 1 days) * 1 days) + 1 days;
+        uint256 delegationStarts = ((vm.getBlockTimestamp() / 1 days) * 1 days) + 1 days;
         vm.warp(delegationStarts);
 
         // Then - Alice should have increased voting power
@@ -234,7 +234,7 @@ contract TestVeHemiVoteDelegation is Test {
         vm.prank(BILL);
         veHemi.increaseUnlockTime(billTokenId, 2 * YEAR);
 
-        uint256 delegationStarts = ((block.timestamp / 1 days) * 1 days) + 1 days;
+        uint256 delegationStarts = ((vm.getBlockTimestamp() / 1 days) * 1 days) + 1 days;
         vm.warp(delegationStarts);
 
         // Then - Alice should have increased voting power
@@ -365,7 +365,7 @@ contract TestVeHemiVoteDelegation is Test {
         // Given - Bill and Alice have locks
         (uint256 billTokenId, ) = _createLock(BILL, LOCK_AMOUNT, MAX_TIME);
         (uint256 aliceTokenId, ) = _createLock(ALICE, LOCK_AMOUNT, MAX_TIME);
-        uint256 delegationStarts = ((block.timestamp / 1 days) * 1 days) + 1 days;
+        uint256 delegationStarts = ((vm.getBlockTimestamp() / 1 days) * 1 days) + 1 days;
         vm.warp(delegationStarts);
 
         uint256 aliceVotesBefore = hemiVoteDelegation.getVotes(ALICE);
@@ -378,7 +378,7 @@ contract TestVeHemiVoteDelegation is Test {
         vm.stopPrank();
 
         // Then - Should work without reverting and have correct voting power
-        delegationStarts = ((block.timestamp / 1 days) * 1 days) + 1 days;
+        delegationStarts = ((vm.getBlockTimestamp() / 1 days) * 1 days) + 1 days;
         vm.warp(delegationStarts);
 
         // Alice should have Bill's votes (with some decay due to time passing)
@@ -425,7 +425,7 @@ contract TestVeHemiVoteDelegation is Test {
         // Given - Bill and Alice have locks
         (uint256 billTokenId, ) = _createLock(BILL, LOCK_AMOUNT, MAX_TIME);
         _createLock(ALICE, LOCK_AMOUNT, MAX_TIME);
-        uint256 delegationStarts = ((block.timestamp / 1 days) * 1 days) + 1 days;
+        uint256 delegationStarts = ((vm.getBlockTimestamp() / 1 days) * 1 days) + 1 days;
         vm.warp(delegationStarts);
 
         uint256 initialBillVotes = hemiVoteDelegation.getVotes(BILL);
@@ -450,7 +450,7 @@ contract TestVeHemiVoteDelegation is Test {
         );
 
         // When - After delegation takes effect
-        delegationStarts = ((block.timestamp / 1 days) * 1 days) + 1 days;
+        delegationStarts = ((vm.getBlockTimestamp() / 1 days) * 1 days) + 1 days;
         vm.warp(delegationStarts);
 
         // Then - Alice should have combined votes (with some decay due to time)
@@ -482,7 +482,7 @@ contract TestVeHemiVoteDelegation is Test {
         (uint256 billTokenId, ) = _createLock(BILL, LOCK_AMOUNT, MAX_TIME);
         (uint256 aliceTokenId, ) = _createLock(ALICE, LOCK_AMOUNT, MAX_TIME);
         (uint256 walterTokenId, ) = _createLock(WALTER, LOCK_AMOUNT, MAX_TIME);
-        uint256 delegationStarts = ((block.timestamp / 1 days) * 1 days) + 1 days;
+        uint256 delegationStarts = ((vm.getBlockTimestamp() / 1 days) * 1 days) + 1 days;
         vm.warp(delegationStarts);
 
         uint256 aliceInitialVotes = hemiVoteDelegation.getVotes(ALICE);
@@ -516,7 +516,7 @@ contract TestVeHemiVoteDelegation is Test {
         );
 
         // When - After next epoch
-        delegationStarts = ((block.timestamp / 1 days) * 1 days) + 1 days;
+        delegationStarts = ((vm.getBlockTimestamp() / 1 days) * 1 days) + 1 days;
         vm.warp(delegationStarts + 1 days);
 
         // Then - Alice should have her original votes back, Walter should have Bill's votes
@@ -556,7 +556,7 @@ contract TestVeHemiVoteDelegation is Test {
         (uint256 billTokenId, ) = _createLock(BILL, LOCK_AMOUNT, MAX_TIME);
         (uint256 aliceTokenId, ) = _createLock(ALICE, LOCK_AMOUNT, MAX_TIME);
         (uint256 walterTokenId, ) = _createLock(WALTER, LOCK_AMOUNT, MAX_TIME);
-        uint256 delegationStarts = ((block.timestamp / 1 days) * 1 days) + 1 days;
+        uint256 delegationStarts = ((vm.getBlockTimestamp() / 1 days) * 1 days) + 1 days;
         vm.warp(delegationStarts);
 
         uint256 aliceInitialVotes = hemiVoteDelegation.getVotes(ALICE);
@@ -572,7 +572,7 @@ contract TestVeHemiVoteDelegation is Test {
         hemiVoteDelegation.delegate(walterTokenId, ALICE);
         vm.stopPrank();
 
-        delegationStarts = ((block.timestamp / 1 days) * 1 days) + 1 days;
+        delegationStarts = ((vm.getBlockTimestamp() / 1 days) * 1 days) + 1 days;
         vm.warp(delegationStarts);
 
         // Then - Alice should have combined delegated votes
@@ -608,7 +608,7 @@ contract TestVeHemiVoteDelegation is Test {
         // Given - Alice has a long lock, Bill has a shorter lock
         uint256 lockAmount = 1 ether;
         (uint256 aliceTokenId, ) = _createLock(ALICE, lockAmount, 4 * 365 days);
-        uint256 delegationStarts = ((block.timestamp / 1 days) * 1 days) + 1 days;
+        uint256 delegationStarts = ((vm.getBlockTimestamp() / 1 days) * 1 days) + 1 days;
         vm.warp(delegationStarts);
 
         uint256 aliceInitialVotes = hemiVoteDelegation.getVotes(ALICE);
@@ -648,7 +648,7 @@ contract TestVeHemiVoteDelegation is Test {
     // Alice and Bill Delegate to WALTER . After some some time Walter lock is forfeited
 
     function testVoteAfterForfeit() public {
-        // Given - Set up forfeit admin and create forfeitable lock for Walter
+        // Given - Set up forfeit admin and create isForfeitable lock for Walter
         uint256 lockAmount = 1 ether;
         address forfeitAdmin = address(0x5678);
 
@@ -656,20 +656,20 @@ contract TestVeHemiVoteDelegation is Test {
         vm.prank(address(this));
         veHemi.updateForfeitAdmin(forfeitAdmin);
 
-        // Create forfeitable lock for WALTER
+        // Create isForfeitable lock for WALTER
         hemiToken.mint(BILL, lockAmount);
         vm.startPrank(BILL);
         hemiToken.approve(address(veHemi), lockAmount);
         uint256 walterTokenId = veHemi.createLockFor(lockAmount, 4 * 365 days, WALTER, false, true);
         vm.stopPrank();
 
-        vm.warp(block.timestamp + 90 days);
+        vm.warp(vm.getBlockTimestamp() + 90 days);
 
         // When - Forfeit Walter's lock
         vm.prank(forfeitAdmin);
         veHemi.forfeit(walterTokenId);
 
-        uint256 delegationStarts = ((block.timestamp / 1 days) * 1 days) + 1 days;
+        uint256 delegationStarts = ((vm.getBlockTimestamp() / 1 days) * 1 days) + 1 days;
         vm.warp(delegationStarts);
 
         // Then - Walter should have no votes after forfeit
@@ -692,14 +692,14 @@ contract TestVeHemiVoteDelegation is Test {
         (uint256 billTokenId, ) = _createLock(BILL, lockAmount, 4 * 365 days);
         (uint256 aliceTokenId, ) = _createLock(ALICE, lockAmount, 4 * 365 days);
 
-        // Create forfeitable lock for WALTER
+        // Create isForfeitable lock for WALTER
         hemiToken.mint(BILL, lockAmount);
         vm.startPrank(BILL);
         hemiToken.approve(address(veHemi), lockAmount);
         uint256 walterTokenId = veHemi.createLockFor(lockAmount, 4 * 365 days, WALTER, false, true);
         vm.stopPrank();
 
-        vm.warp(block.timestamp + 90 days);
+        vm.warp(vm.getBlockTimestamp() + 90 days);
 
         // When - Bill and Alice delegate to Walter, then Walter's lock is forfeited
         _delegateAndWarp(billTokenId, WALTER);
@@ -708,7 +708,7 @@ contract TestVeHemiVoteDelegation is Test {
         vm.prank(forfeitAdmin);
         veHemi.forfeit(walterTokenId);
 
-        uint256 delegationStarts = ((block.timestamp / 1 days) * 1 days) + 1 days;
+        uint256 delegationStarts = ((vm.getBlockTimestamp() / 1 days) * 1 days) + 1 days;
         vm.warp(delegationStarts);
 
         // Then - Walter should have just delegated votes
@@ -726,7 +726,7 @@ contract TestVeHemiVoteDelegation is Test {
         // Given - Alice and Bill have locks, Bill delegates to Alice
         uint256 lockAmount = 1 ether;
         (uint256 aliceTokenId, ) = _createLock(ALICE, lockAmount, 365 days);
-        uint256 delegationStarts = ((block.timestamp / 1 days) * 1 days) + 1 days;
+        uint256 delegationStarts = ((vm.getBlockTimestamp() / 1 days) * 1 days) + 1 days;
         vm.warp(delegationStarts);
 
         uint256 aliceInitialVotes = hemiVoteDelegation.getVotes(ALICE);
@@ -771,7 +771,7 @@ contract TestVeHemiVoteDelegation is Test {
         // Given - Bill and Alice have locks
         (uint256 billTokenId, ) = _createLock(BILL, LOCK_AMOUNT, MAX_TIME);
         (uint256 aliceTokenId, ) = _createLock(ALICE, LOCK_AMOUNT, MAX_TIME);
-        uint256 delegationStarts = ((block.timestamp / 1 days) * 1 days) + 1 days;
+        uint256 delegationStarts = ((vm.getBlockTimestamp() / 1 days) * 1 days) + 1 days;
         vm.warp(delegationStarts);
 
         uint256 billInitialVotes = hemiVoteDelegation.getVotes(BILL);
@@ -784,22 +784,22 @@ contract TestVeHemiVoteDelegation is Test {
 
         // Then - Check votes at different timestamps
         assertEq(
-            hemiVoteDelegation.getPastVotes(BILL, block.timestamp),
+            hemiVoteDelegation.getPastVotes(BILL, vm.getBlockTimestamp()),
             billInitialVotes,
             "Should have votes at current time"
         );
         assertEq(
-            hemiVoteDelegation.getPastVotes(ALICE, block.timestamp),
+            hemiVoteDelegation.getPastVotes(ALICE, vm.getBlockTimestamp()),
             aliceInitialVotes,
             "Should have her own votes at current time"
         );
 
-        delegationStarts = ((block.timestamp / 1 days) * 1 days) + 1 days;
+        delegationStarts = ((vm.getBlockTimestamp() / 1 days) * 1 days) + 1 days;
         vm.warp(delegationStarts);
 
         // After delegation, Bill should have no votes and Alice should have combined votes (with decay)
-        uint256 billPastVotes = hemiVoteDelegation.getPastVotes(BILL, block.timestamp);
-        uint256 alicePastVotes = hemiVoteDelegation.getPastVotes(ALICE, block.timestamp);
+        uint256 billPastVotes = hemiVoteDelegation.getPastVotes(BILL, vm.getBlockTimestamp());
+        uint256 alicePastVotes = hemiVoteDelegation.getPastVotes(ALICE, vm.getBlockTimestamp());
 
         assertEq(billPastVotes, 0, "Bill should have no votes after delegation");
         assertEq(
@@ -816,7 +816,7 @@ contract TestVeHemiVoteDelegation is Test {
 
         // When/Then - Should revert with TimestampInFuture error
         vm.expectRevert(VeHemiVoteDelegation.TimestampInFuture.selector);
-        hemiVoteDelegation.getPastVotes(BILL, block.timestamp + 1);
+        hemiVoteDelegation.getPastVotes(BILL, vm.getBlockTimestamp() + 1);
     }
 
     // Test delegation checkpoint functionality
@@ -829,7 +829,7 @@ contract TestVeHemiVoteDelegation is Test {
         hemiVoteDelegation.delegate(billTokenId, ALICE);
         vm.stopPrank();
 
-        uint256 delegationStarts = ((block.timestamp / 1 days) * 1 days) + 1 days;
+        uint256 delegationStarts = ((vm.getBlockTimestamp() / 1 days) * 1 days) + 1 days;
         vm.warp(delegationStarts);
 
         uint256 aliceVotes = hemiVoteDelegation.getVotes(ALICE);
@@ -864,7 +864,7 @@ contract TestVeHemiVoteDelegation is Test {
         hemiVoteDelegation.delegate(walterTokenId, BOB);
         vm.stopPrank();
 
-        uint256 delegationStarts = ((block.timestamp / 1 days) * 1 days) + 1 days;
+        uint256 delegationStarts = ((vm.getBlockTimestamp() / 1 days) * 1 days) + 1 days;
         vm.warp(delegationStarts);
 
         uint256 totalVotes = hemiVoteDelegation.getVotes(BOB);
@@ -898,7 +898,7 @@ contract TestVeHemiVoteDelegation is Test {
 
         // Should have only the delegate's own votes after all delegations expire
         uint256 expectedDelegateVotes = delegateSlope *
-            (veHemi.getLockedBalance(delegateTokenId).end - block.timestamp);
+            (veHemi.getLockedBalance(delegateTokenId).end - vm.getBlockTimestamp());
 
         uint256 votesAfterAllExpiry = hemiVoteDelegation.getVotes(BOB);
         assertEq(
@@ -939,7 +939,7 @@ contract TestVeHemiVoteDelegation is Test {
         vm.stopPrank();
 
         // When - Warp to delegation start
-        uint256 delegationStarts = ((block.timestamp / 1 days) * 1 days) + 1 days;
+        uint256 delegationStarts = ((vm.getBlockTimestamp() / 1 days) * 1 days) + 1 days;
         vm.warp(delegationStarts);
 
         // Then - Should return empty checkpoint since no time has passed for expirations
@@ -986,7 +986,7 @@ contract TestVeHemiVoteDelegation is Test {
         vm.stopPrank();
 
         // When - Warp to delegation start
-        uint256 delegationStarts = ((block.timestamp / 1 days) * 1 days) + 1 days;
+        uint256 delegationStarts = ((vm.getBlockTimestamp() / 1 days) * 1 days) + 1 days;
         vm.warp(delegationStarts);
 
         // Then - Should revert with NoExpirations error
@@ -1005,7 +1005,7 @@ contract TestVeHemiVoteDelegation is Test {
         vm.stopPrank();
 
         // When - Warp to delegation start
-        uint256 delegationStarts = ((block.timestamp / 1 days) * 1 days) + 1 days;
+        uint256 delegationStarts = ((vm.getBlockTimestamp() / 1 days) * 1 days) + 1 days;
         vm.warp(delegationStarts);
 
         IVeHemiVoteDelegation.DelegateCheckpoint[]
@@ -1042,7 +1042,7 @@ contract TestVeHemiVoteDelegation is Test {
         vm.stopPrank();
 
         // When - Warp to after Bill's expiration and write checkpoint
-        vm.warp(block.timestamp + 9 days);
+        vm.warp(vm.getBlockTimestamp() + 9 days);
         IVeHemiVoteDelegation.DelegateCheckpoint[] memory delegationCheckpoints = hemiVoteDelegation
             .getDelegationCheckpoints(BOB);
         assertEq(delegationCheckpoints.length, 1, "Should have 1 checkpoint");
@@ -1060,7 +1060,7 @@ contract TestVeHemiVoteDelegation is Test {
         );
 
         // When - Warp to after Walter's expiration and write checkpoint
-        vm.warp(block.timestamp + 9 days);
+        vm.warp(vm.getBlockTimestamp() + 9 days);
         hemiVoteDelegation.writeNewCheckpointForExpiredDelegations(BOB);
         delegationCheckpoints = hemiVoteDelegation.getDelegationCheckpoints(BOB);
         assertEq(delegationCheckpoints.length, 3, "Should have 3 checkpoints");
@@ -1082,14 +1082,14 @@ contract TestVeHemiVoteDelegation is Test {
         (uint256 bobTokenId, ) = _createLock(BOB, LOCK_AMOUNT, 30 days);
 
         // When - Alice signs and delegates to Bob
-        uint256 currentTimestamp = block.timestamp;
+        uint256 currentTimestamp = vm.getBlockTimestamp();
         uint256 expiry = currentTimestamp + 3600; // 1 hour from now
         bytes32 digest = _getTypesDataHash(aliceTokenId, BOB, 0, expiry);
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(alicePrivateKey, digest);
         hemiVoteDelegation.delegateBySig(aliceTokenId, BOB, 0, expiry, v, r, s);
 
         // When - Warp to delegation start
-        uint256 delegationStarts = ((block.timestamp / 1 days) * 1 days) + 1 days;
+        uint256 delegationStarts = ((vm.getBlockTimestamp() / 1 days) * 1 days) + 1 days;
         vm.warp(delegationStarts);
 
         // Then - Alice should have no votes, Bob should have received Alice's votes
@@ -1109,7 +1109,7 @@ contract TestVeHemiVoteDelegation is Test {
         address alice = vm.addr(alicePrivateKey);
         (uint256 aliceTokenId, ) = _createLock(alice, LOCK_AMOUNT, 30 days);
         _createLock(BOB, LOCK_AMOUNT, 30 days);
-        uint256 expiry = block.timestamp + 3600;
+        uint256 expiry = vm.getBlockTimestamp() + 3600;
         bytes32 digest = _getTypesDataHash(aliceTokenId, BOB, 0, expiry);
         uint256 wrongPrivateKey = 0xB0B;
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(wrongPrivateKey, digest);
@@ -1124,7 +1124,7 @@ contract TestVeHemiVoteDelegation is Test {
         address alice = vm.addr(alicePrivateKey);
         (uint256 aliceTokenId, ) = _createLock(alice, LOCK_AMOUNT, 30 days);
         _createLock(BOB, LOCK_AMOUNT, 30 days);
-        uint256 expiry = block.timestamp + 3600;
+        uint256 expiry = vm.getBlockTimestamp() + 3600;
         bytes32 digest = _getTypesDataHash(aliceTokenId, BOB, 0, expiry);
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(alicePrivateKey, digest);
         // When - Warp past expiry
@@ -1140,7 +1140,7 @@ contract TestVeHemiVoteDelegation is Test {
         address alice = vm.addr(alicePrivateKey);
         (uint256 aliceTokenId, ) = _createLock(alice, LOCK_AMOUNT, 30 days);
         _createLock(BOB, LOCK_AMOUNT, 30 days);
-        uint256 expiry = block.timestamp + 3600;
+        uint256 expiry = vm.getBlockTimestamp() + 3600;
         bytes32 digest = _getTypesDataHash(aliceTokenId, BOB, 1, expiry);
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(alicePrivateKey, digest);
         // When/Then - Should revert with InvalidNonce

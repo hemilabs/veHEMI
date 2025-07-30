@@ -9,17 +9,19 @@ import {IRewardDistributor} from "./interfaces/IRewardDistributor.sol";
 import {IVeHemiVoteDelegation} from "./interfaces/IVeHemiVoteDelegation.sol";
 import {ERC721EnumerableUpgradeable, ERC721Upgradeable} from "@openzeppelin/contracts-upgradeable/token/ERC721/extensions/ERC721EnumerableUpgradeable.sol";
 import {ReentrancyGuardTransientUpgradeable} from "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardTransientUpgradeable.sol";
-import {VeHemiStorageV1} from "./storage/VeHemiStorageV1.sol";
+import {IVeHemi} from "./interfaces/IVeHemi.sol";
+import {IRewardDistributor} from "./interfaces/IRewardDistributor.sol";
+import {IVeHemiVoteDelegation} from "./interfaces/IVeHemiVoteDelegation.sol";
 
 /**
  * @title VeHemi
  * @notice Vesting and yield system based on Curve's veCRV and AERO voting escrow mechanism. Users lock HEMI for up to 4 years.
  */
 contract VeHemi is
+    IVeHemi,
     ERC721EnumerableUpgradeable,
     Ownable2StepUpgradeable,
-    ReentrancyGuardTransientUpgradeable,
-    VeHemiStorageV1
+    ReentrancyGuardTransientUpgradeable
 {
     using SafeCast for uint256;
     using SafeCast for int256;
@@ -34,6 +36,34 @@ contract VeHemi is
     uint256 private constant MULTIPLIER = 1 ether;
     string public constant version = "1.0.0";
     uint8 public constant decimals = 18;
+
+    // --- State ---
+    struct VeHemiStorage {
+        uint256 _totalLocked;
+        uint256 _epoch;
+        uint256 _nextTokenId;
+        IVeHemiVoteDelegation _voteDelegation;
+        IRewardDistributor _rewardDistributor; // 0x0 is valid
+        address _forfeitAdmin;
+        mapping(uint256 epoch => Point) _globalPointHistory;
+        mapping(uint256 tokenId => UserPoint[1000000000] userPointAtEpoch) _userPointHistory;
+        mapping(uint256 tokenId => LockedBalance) _locked;
+        mapping(uint256 tokenId => uint256 epoch) _userPointEpoch;
+        mapping(uint256 timestamp => int128 slopeChange) _slopeChanges;
+        mapping(uint256 tokenId => address) _provider;
+        mapping(uint256 tokenId => uint256 timestamp) _transferableAfter;
+        mapping(uint256 tokenId => bool) _isForfeitable;
+    }
+
+    // keccak256(abi.encode(uint256(keccak256("xyz.hemi.storage.VeHemi")) - 1)) & ~bytes32(uint256(0xff))
+    bytes32 private constant VeHemiStorageLocation =
+        0xce9089376a1cc53ad6f3f228275562963bb36351d7ba82f45e7888c80a144d00;
+
+    function _getVeHemiStorage() private pure returns (VeHemiStorage storage $) {
+        assembly {
+            $.slot := VeHemiStorageLocation
+        }
+    }
 
     // --- Errors ---
     error AmountIsZero();
@@ -66,9 +96,10 @@ contract VeHemi is
         if (owner_ == address(0)) revert OwnerIsZero();
         __ERC721_init("veHemi", "veHemi");
         __Ownable_init_unchained(owner_);
-        globalPointHistory[0].blockNumber = block.number.toUint64();
-        globalPointHistory[0].timestamp = block.timestamp.toUint64();
-        nextTokenId = 1;
+        VeHemiStorage storage $ = _getVeHemiStorage();
+        $._globalPointHistory[0].blockNumber = block.number.toUint64();
+        $._globalPointHistory[0].timestamp = block.timestamp.toUint64();
+        $._nextTokenId = 1;
     }
 
     /**
@@ -150,43 +181,17 @@ contract VeHemi is
      * @param tokenId_ The token ID to forfeit
      */
     function forfeit(uint256 tokenId_) external nonReentrant {
-        if (_msgSender() != forfeitAdmin) revert NotForfeitAdmin();
-        if (!forfeitable[tokenId_]) revert NotForfeitable();
-        if (locked[tokenId_].end < block.timestamp) revert LockExpired();
-        voteDelegation.delegate(tokenId_, address(0));
+        VeHemiStorage storage $ = _getVeHemiStorage();
+
+        if (_msgSender() != $._forfeitAdmin) revert NotForfeitAdmin();
+        if (!isForfeitable(tokenId_)) revert NotForfeitable();
+        if ($._locked[tokenId_].end < block.timestamp) revert LockExpired();
+
+        $._voteDelegation.delegate(tokenId_, address(0));
+
         _withdraw(tokenId_);
-        delete forfeitable[tokenId_];
-    }
 
-    /**
-     * @notice Get the locked balance information for a specific token
-     * @param tokenId_ The token ID to get locked balance for
-     * @return The LockedBalance struct containing amount and end time
-     */
-    function getLockedBalance(uint256 tokenId_) external view returns (LockedBalance memory) {
-        return locked[tokenId_];
-    }
-
-    /**
-     * @notice Returns the user point for a given token and epoch
-     * @param tokenId_ The token ID
-     * @param epoch_ The epoch number
-     * @return The Point struct for the user at the given epoch
-     */
-    function getUserPoint(
-        uint256 tokenId_,
-        uint256 epoch_
-    ) external view returns (UserPoint memory) {
-        return userPointHistory[tokenId_][epoch_];
-    }
-
-    /**
-     * @notice Returns the global point for a given epoch
-     * @param epoch_ The epoch number
-     * @return The Point struct for the global point at the given epoch
-     */
-    function getGlobalPoint(uint256 epoch_) external view returns (Point memory) {
-        return globalPointHistory[epoch_];
+        $._isForfeitable[tokenId_] = false;
     }
 
     /**
@@ -195,7 +200,8 @@ contract VeHemi is
      * @param amount_ The additional amount to lock
      */
     function increaseAmount(uint256 tokenId_, uint256 amount_) external nonReentrant {
-        LockedBalance memory _oldLocked = locked[tokenId_];
+        VeHemiStorage storage $ = _getVeHemiStorage();
+        LockedBalance memory _oldLocked = $._locked[tokenId_];
 
         if (amount_ == 0) revert AmountIsZero();
         if (_oldLocked.end <= block.timestamp) revert LockExpired();
@@ -211,7 +217,8 @@ contract VeHemi is
      */
     function increaseUnlockTime(uint256 tokenId_, uint256 lockDuration_) external nonReentrant {
         if (_ownerOf(tokenId_) != _msgSender()) revert NotOwner();
-        LockedBalance memory _oldLocked = locked[tokenId_];
+        VeHemiStorage storage $ = _getVeHemiStorage();
+        LockedBalance memory _oldLocked = $._locked[tokenId_];
         if (_oldLocked.end <= block.timestamp) revert LockExpired();
         if (_oldLocked.amount <= 0) revert NoExistingLock();
         uint256 _unlockTime = ((block.timestamp + lockDuration_) / SIX_DAYS) * SIX_DAYS; // unlock time is rounded down to SIX_DAYS
@@ -227,7 +234,8 @@ contract VeHemi is
      * @return True if the token is transferable (default), false if transfer is not allowed
      */
     function isTransferable(uint256 tokenId_) public view returns (bool) {
-        return (transferableAfter[tokenId_] < block.timestamp);
+        VeHemiStorage storage $ = _getVeHemiStorage();
+        return $._transferableAfter[tokenId_] < block.timestamp;
     }
 
     /**
@@ -254,12 +262,13 @@ contract VeHemi is
      */
     function totalVeHemiSupplyAtBlock(uint256 blockNumber_) external view returns (uint256) {
         if (blockNumber_ >= block.number) revert BlockNotReached();
-        uint256 _epoch = epoch;
+        VeHemiStorage storage $ = _getVeHemiStorage();
+        uint256 _epoch = $._epoch;
         uint256 _targetEpoch = _findBlockEpoch(blockNumber_, _epoch);
-        Point memory _point = globalPointHistory[_targetEpoch];
+        Point memory _point = $._globalPointHistory[_targetEpoch];
         uint256 dt;
         if (_targetEpoch < _epoch) {
-            Point memory _nextPoint = globalPointHistory[_targetEpoch + 1];
+            Point memory _nextPoint = $._globalPointHistory[_targetEpoch + 1];
             if (_point.blockNumber != _nextPoint.blockNumber) {
                 dt =
                     ((blockNumber_ - _point.blockNumber) *
@@ -283,8 +292,9 @@ contract VeHemi is
      */
     function updateRewardDistributor(IRewardDistributor newRewardDistributor_) external onlyOwner {
         // Allowed to set to 0x0
-        IRewardDistributor _oldRewardDistributor = rewardDistributor;
-        rewardDistributor = newRewardDistributor_;
+        VeHemiStorage storage $ = _getVeHemiStorage();
+        IRewardDistributor _oldRewardDistributor = $._rewardDistributor;
+        $._rewardDistributor = newRewardDistributor_;
         emit RewardDistributorUpdated(_oldRewardDistributor, newRewardDistributor_);
     }
 
@@ -294,8 +304,9 @@ contract VeHemi is
      * @param newForfeitAdmin_ The new forfeit admin address
      */
     function updateForfeitAdmin(address newForfeitAdmin_) external onlyOwner {
-        address _oldForfeitAdmin = forfeitAdmin;
-        forfeitAdmin = newForfeitAdmin_;
+        VeHemiStorage storage $ = _getVeHemiStorage();
+        address _oldForfeitAdmin = $._forfeitAdmin;
+        $._forfeitAdmin = newForfeitAdmin_;
         emit ForfeitAdminUpdated(_oldForfeitAdmin, newForfeitAdmin_);
     }
 
@@ -305,8 +316,9 @@ contract VeHemi is
      */
     function updateVoteDelegation(IVeHemiVoteDelegation newVoteDelegation_) external onlyOwner {
         if (address(newVoteDelegation_) == address(0)) revert AddressIsNull();
-        IVeHemiVoteDelegation _oldVoteDelegation = voteDelegation;
-        voteDelegation = newVoteDelegation_;
+        VeHemiStorage storage $ = _getVeHemiStorage();
+        IVeHemiVoteDelegation _oldVoteDelegation = $._voteDelegation;
+        $._voteDelegation = newVoteDelegation_;
         emit VoteDelegationUpdated(_oldVoteDelegation, newVoteDelegation_);
     }
 
@@ -316,7 +328,8 @@ contract VeHemi is
      */
     function withdraw(uint256 tokenId_) external nonReentrant {
         if (_ownerOf(tokenId_) != _msgSender()) revert NotOwner();
-        if (block.timestamp < locked[tokenId_].end) revert LockNotExpired();
+        VeHemiStorage storage $ = _getVeHemiStorage();
+        if (block.timestamp < $._locked[tokenId_].end) revert LockNotExpired();
         _withdraw(tokenId_);
     }
 
@@ -327,7 +340,9 @@ contract VeHemi is
         uint256 _epoch = _getPastUserPointIndex(tokenId_, timestamp_);
         // epoch 0 is an empty point
         if (_epoch == 0) return (0, address(0));
-        UserPoint memory _lastUserPoint = userPointHistory[tokenId_][_epoch];
+        VeHemiStorage storage $ = _getVeHemiStorage();
+
+        UserPoint memory _lastUserPoint = $._userPointHistory[tokenId_][_epoch];
         _lastUserPoint.point.bias -=
             _lastUserPoint.point.slope *
             (timestamp_ - _lastUserPoint.point.timestamp).toInt256().toInt128();
@@ -345,13 +360,15 @@ contract VeHemi is
         uint256 _min;
         uint256 _max = maxEpoch_;
 
+        VeHemiStorage storage $ = _getVeHemiStorage();
+
         for (uint256 i; i < 128; i++) {
             // Will be always enough for 128-bit numbers
             if (_min >= _max) {
                 break;
             }
             uint256 _mid = (_min + _max + 1) / 2;
-            if (globalPointHistory[_mid].blockNumber <= blockNumber_) {
+            if ($._globalPointHistory[_mid].blockNumber <= blockNumber_) {
                 _min = _mid;
             } else {
                 _max = _mid - 1;
@@ -365,16 +382,19 @@ contract VeHemi is
         uint256 timestamp_
     ) internal view returns (uint256) {
         if (epoch_ == 0) return 0;
+
+        VeHemiStorage storage $ = _getVeHemiStorage();
+
         // First check most recent balance
-        if (globalPointHistory[epoch_].timestamp <= timestamp_) return (epoch_);
+        if ($._globalPointHistory[epoch_].timestamp <= timestamp_) return (epoch_);
         // Next check implicit zero balance
-        if (globalPointHistory[1].timestamp > timestamp_) return 0;
+        if ($._globalPointHistory[1].timestamp > timestamp_) return 0;
 
         uint256 _lower;
         uint256 _upper = epoch_;
         while (_upper > _lower) {
             uint256 _center = _upper - (_upper - _lower) / 2; // ceil, avoiding overflow
-            Point memory _globalPoint = globalPointHistory[_center];
+            Point memory _globalPoint = $._globalPointHistory[_center];
             if (_globalPoint.timestamp == timestamp_) {
                 return _center;
             } else if (_globalPoint.timestamp < timestamp_) {
@@ -390,19 +410,22 @@ contract VeHemi is
         uint256 tokenId_,
         uint256 timestamp_
     ) internal view returns (uint256) {
-        uint256 _userEpoch = userPointEpoch[tokenId_];
+        uint256 _userEpoch = userPointEpoch(tokenId_);
         if (_userEpoch == 0) return 0;
-        Point memory _lastPoint = userPointHistory[tokenId_][_userEpoch].point;
+
+        VeHemiStorage storage $ = _getVeHemiStorage();
+
+        Point memory _lastPoint = $._userPointHistory[tokenId_][_userEpoch].point;
         // First check most recent balance
         if (_lastPoint.timestamp <= timestamp_) return (_userEpoch);
         // Next check implicit zero balance
-        if (userPointHistory[tokenId_][1].point.timestamp > timestamp_) return 0;
+        if ($._userPointHistory[tokenId_][1].point.timestamp > timestamp_) return 0;
 
         uint256 _lower;
         uint256 _upper = _userEpoch;
         while (_upper > _lower) {
             uint256 _center = _upper - (_upper - _lower) / 2; // ceil, avoiding overflow
-            Point memory _userPoint = userPointHistory[tokenId_][_center].point;
+            Point memory _userPoint = $._userPointHistory[tokenId_][_center].point;
             if (_userPoint.timestamp == timestamp_) {
                 return _center;
             } else if (_userPoint.timestamp < timestamp_) {
@@ -427,7 +450,8 @@ contract VeHemi is
     ) internal {
         Point memory _oldUserPoint;
         Point memory _newUserPoint;
-        uint256 _epoch = epoch;
+        VeHemiStorage storage $ = _getVeHemiStorage();
+        uint256 _epoch = $._epoch;
         int128 _oldDslope;
         int128 _newDslope;
 
@@ -452,12 +476,12 @@ contract VeHemi is
             // Read values of scheduled changes in the slope
             // _oldLocked.end can be in the past and in the future
             // _newLocked.end can ONLY by in the FUTURE unless everything expired: than zeros
-            _oldDslope = slopeChanges[oldLocked_.end];
+            _oldDslope = $._slopeChanges[oldLocked_.end];
             if (newLocked_.end != 0) {
                 if (newLocked_.end == oldLocked_.end) {
                     _newDslope = _oldDslope;
                 } else {
-                    _newDslope = slopeChanges[newLocked_.end];
+                    _newDslope = $._slopeChanges[newLocked_.end];
                 }
             }
         }
@@ -472,7 +496,7 @@ contract VeHemi is
         });
 
         if (_epoch > 0) {
-            _lastPoint = globalPointHistory[_epoch];
+            _lastPoint = $._globalPointHistory[_epoch];
         }
         uint256 _lastCheckpoint = _lastPoint.timestamp;
         Point memory _initialLastPoint = Point({
@@ -501,7 +525,7 @@ contract VeHemi is
                 if (t_i > block.timestamp) {
                     t_i = block.timestamp;
                 } else {
-                    d_slope = slopeChanges[t_i];
+                    d_slope = $._slopeChanges[t_i];
                 }
                 _lastPoint.bias -= _lastPoint.slope * (t_i - _lastCheckpoint).toInt256().toInt128();
                 _lastPoint.slope += d_slope;
@@ -523,7 +547,7 @@ contract VeHemi is
                     _lastPoint.blockNumber = block.number.toUint64();
                     break;
                 } else {
-                    globalPointHistory[_epoch] = _lastPoint;
+                    $._globalPointHistory[_epoch] = _lastPoint;
                 }
             }
         }
@@ -547,13 +571,13 @@ contract VeHemi is
         // Missing global checkpoints in prior SIX_DAYS. In this case, _epoch = epoch + x, where x > 1
         // No missing global checkpoints, but timestamp != block.timestamp. Create new checkpoint.
         // No missing global checkpoints, but timestamp == block.timestamp. Overwrite last checkpoint.
-        if (_epoch != 1 && globalPointHistory[_epoch - 1].timestamp == block.timestamp) {
+        if (_epoch != 1 && $._globalPointHistory[_epoch - 1].timestamp == block.timestamp) {
             // _epoch = epoch + 1, so we do not increment epoch
-            globalPointHistory[_epoch - 1] = _lastPoint;
+            $._globalPointHistory[_epoch - 1] = _lastPoint;
         } else {
             // more than one global point may have been written, so we update epoch
-            epoch = _epoch;
-            globalPointHistory[_epoch] = _lastPoint;
+            $._epoch = _epoch;
+            $._globalPointHistory[_epoch] = _lastPoint;
         }
 
         if (tokenId_ != 0) {
@@ -566,14 +590,14 @@ contract VeHemi is
                 if (newLocked_.end == oldLocked_.end) {
                     _oldDslope -= _newUserPoint.slope; // It was a new deposit, not extension
                 }
-                slopeChanges[oldLocked_.end] = _oldDslope;
+                $._slopeChanges[oldLocked_.end] = _oldDslope;
             }
 
             if (newLocked_.end > block.timestamp) {
                 // update slope if new lock is greater than old lock
                 if ((newLocked_.end > oldLocked_.end)) {
                     _newDslope -= _newUserPoint.slope; // old slope disappeared at this point
-                    slopeChanges[newLocked_.end] = _newDslope;
+                    $._slopeChanges[newLocked_.end] = _newDslope;
                 }
                 // else: we recorded it already in oldDslope
             }
@@ -582,18 +606,18 @@ contract VeHemi is
             // Exclude epoch 0
             _newUserPoint.timestamp = block.timestamp.toUint64();
             _newUserPoint.blockNumber = block.number.toUint64();
-            _newUserPoint.amount = locked[tokenId_].amount.toUint256().toUint128();
-            uint256 _userEpoch = userPointEpoch[tokenId_];
+            _newUserPoint.amount = $._locked[tokenId_].amount.toUint256().toUint128();
+            uint256 _userEpoch = userPointEpoch(tokenId_);
             if (
                 _userEpoch == 0 ||
-                userPointHistory[tokenId_][_userEpoch].point.timestamp != block.timestamp
+                $._userPointHistory[tokenId_][_userEpoch].point.timestamp != block.timestamp
             ) {
                 // Create new point at next epoch
-                userPointEpoch[tokenId_] = ++_userEpoch;
+                $._userPointEpoch[tokenId_] = ++_userEpoch;
             }
 
-            userPointHistory[tokenId_][_userEpoch].point = _newUserPoint;
-            userPointHistory[tokenId_][_userEpoch].owner = _ownerOf(tokenId_);
+            $._userPointHistory[tokenId_][_userEpoch].point = _newUserPoint;
+            $._userPointHistory[tokenId_][_userEpoch].owner = _ownerOf(tokenId_);
         }
         emit Checkpoint(_epoch, tokenId_, oldLocked_, newLocked_);
     }
@@ -611,19 +635,25 @@ contract VeHemi is
         if (unlockTime <= block.timestamp) revert LockDurationTooShort();
         if (unlockTime > block.timestamp + MAX_TIME) revert LockDurationTooLong();
 
-        _tokenId = nextTokenId++;
+        VeHemiStorage storage $ = _getVeHemiStorage();
+
+        _tokenId = $._nextTokenId++;
         _mint(account_, _tokenId);
 
-        _depositFor(_tokenId, amount_, unlockTime.toUint64(), locked[_tokenId]);
-        voteDelegation.delegate(_tokenId, account_);
+        _depositFor(_tokenId, amount_, unlockTime.toUint64(), $._locked[_tokenId]);
+        $._voteDelegation.delegate(_tokenId, account_);
 
         address _sender = _msgSender();
 
-        provider[_tokenId] = _sender;
+        $._provider[_tokenId] = _sender;
+
         if (!transferable_) {
-            transferableAfter[_tokenId] = unlockTime;
+            $._transferableAfter[_tokenId] = unlockTime;
         }
-        if (forfeitable_) forfeitable[_tokenId] = true;
+
+        if (forfeitable_) {
+            $._isForfeitable[_tokenId] = true;
+        }
 
         emit Lock(
             _sender,
@@ -648,7 +678,9 @@ contract VeHemi is
     ) internal {
         _updateReward(tokenId_);
 
-        totalLocked += amount_;
+        VeHemiStorage storage $ = _getVeHemiStorage();
+
+        $._totalLocked += amount_;
 
         // Set newLocked to _oldLocked without mangling memory
         LockedBalance memory _newLocked;
@@ -659,7 +691,7 @@ contract VeHemi is
         if (unlockTime_ != 0) {
             _newLocked.end = unlockTime_;
         }
-        locked[tokenId_] = _newLocked;
+        $._locked[tokenId_] = _newLocked;
 
         // Possibilities:
         // Both _oldLocked.end could be current or expired (>/< block.timestamp)
@@ -676,17 +708,20 @@ contract VeHemi is
     }
 
     function _reDelegate(uint256 delegator_) internal {
-        address _delegatee = voteDelegation.delegation(delegator_).delegatee;
+        VeHemiStorage storage $ = _getVeHemiStorage();
+        address _delegatee = $._voteDelegation.delegation(delegator_).delegatee;
         if (_delegatee != address(0)) {
-            voteDelegation.delegate(delegator_, _delegatee);
+            $._voteDelegation.delegate(delegator_, _delegatee);
         }
     }
 
     function _supplyAt(uint256 timestamp_) internal view returns (uint256) {
-        uint256 _epoch = _getPastGlobalPointIndex(epoch, timestamp_);
+        VeHemiStorage storage $ = _getVeHemiStorage();
+
+        uint256 _epoch = _getPastGlobalPointIndex($._epoch, timestamp_);
         // epoch 0 is an empty point
         if (_epoch == 0) return 0;
-        Point memory _point = globalPointHistory[_epoch];
+        Point memory _point = $._globalPointHistory[_epoch];
         return _supplyAt(_point, timestamp_);
     }
 
@@ -695,6 +730,8 @@ contract VeHemi is
         int128 slope = point_.slope;
         uint256 ts = point_.timestamp;
 
+        VeHemiStorage storage $ = _getVeHemiStorage();
+
         uint256 t_i = (ts / SIX_DAYS) * SIX_DAYS;
         for (uint256 i; i < 255; ++i) {
             t_i += SIX_DAYS;
@@ -702,7 +739,7 @@ contract VeHemi is
             if (t_i > timestamp_) {
                 t_i = timestamp_;
             } else {
-                dSlope = slopeChanges[t_i];
+                dSlope = $._slopeChanges[t_i];
             }
             bias -= slope * (t_i - ts).toInt256().toInt128();
             if (t_i == timestamp_) {
@@ -719,19 +756,21 @@ contract VeHemi is
     }
 
     function _updateReward(uint256 tokenId_) internal {
-        if (address(rewardDistributor) != address(0)) {
+        VeHemiStorage storage $ = _getVeHemiStorage();
+        if (address($._rewardDistributor) != address(0)) {
             // fail silently
-            try rewardDistributor.updateRewards(tokenId_) {} catch {}
+            try $._rewardDistributor.updateRewards(tokenId_) {} catch {}
         }
     }
 
     function _withdraw(uint256 tokenId_) internal {
         _updateReward(tokenId_);
-        LockedBalance memory _oldLocked = locked[tokenId_];
+        VeHemiStorage storage $ = _getVeHemiStorage();
+        LockedBalance memory _oldLocked = $._locked[tokenId_];
         uint256 _amount = _oldLocked.amount.toUint256();
         _burn(tokenId_);
-        delete locked[tokenId_];
-        totalLocked -= _amount;
+        $._locked[tokenId_] = LockedBalance(0, 0);
+        $._totalLocked -= _amount;
         // oldLocked can have either expired <= timestamp or zero end
         // oldLocked has only 0 end
         // Both can have >= 0 amount
@@ -748,17 +787,103 @@ contract VeHemi is
         address to_,
         uint256 tokenId_
     ) public override(ERC721Upgradeable, IERC721) {
+        VeHemiStorage storage $ = _getVeHemiStorage();
+
         if (from_ != address(0)) {
             if (!isTransferable(tokenId_)) revert NotTransferable();
             _updateReward(tokenId_);
-            voteDelegation.delegate(tokenId_, to_);
+            $._voteDelegation.delegate(tokenId_, to_);
         }
 
         super.transferFrom(from_, to_, tokenId_);
 
         if (from_ != address(0)) {
-            LockedBalance memory _locked = locked[tokenId_];
+            LockedBalance memory _locked = $._locked[tokenId_];
             _checkpoint(tokenId_, _locked, _locked);
         }
+    }
+
+    /**
+     * @notice Get the locked balance information for a specific token
+     * @param tokenId_ The token ID to get locked balance for
+     * @return The LockedBalance struct containing amount and end time
+     */
+    function getLockedBalance(uint256 tokenId_) external view returns (LockedBalance memory) {
+        VeHemiStorage storage $ = _getVeHemiStorage();
+        return $._locked[tokenId_];
+    }
+
+    /**
+     * @notice Returns the user point for a given token and epoch
+     * @param tokenId_ The token ID
+     * @param epoch_ The epoch number
+     * @return The Point struct for the user at the given epoch
+     */
+    function getUserPoint(
+        uint256 tokenId_,
+        uint256 epoch_
+    ) external view returns (UserPoint memory) {
+        VeHemiStorage storage $ = _getVeHemiStorage();
+        return $._userPointHistory[tokenId_][epoch_];
+    }
+
+    /**
+     * @notice Returns the global point for a given epoch
+     * @param epoch_ The epoch number
+     * @return The Point struct for the global point at the given epoch
+     */
+    function getGlobalPoint(uint256 epoch_) external view returns (Point memory) {
+        VeHemiStorage storage $ = _getVeHemiStorage();
+        return $._globalPointHistory[epoch_];
+    }
+
+    function totalLocked() public view returns (uint256) {
+        VeHemiStorage storage $ = _getVeHemiStorage();
+        return $._totalLocked;
+    }
+
+    function epoch() public view returns (uint256) {
+        VeHemiStorage storage $ = _getVeHemiStorage();
+        return $._epoch;
+    }
+
+    function nextTokenId() public view returns (uint256) {
+        VeHemiStorage storage $ = _getVeHemiStorage();
+        return $._nextTokenId;
+    }
+
+    function voteDelegation() public view returns (IVeHemiVoteDelegation) {
+        VeHemiStorage storage $ = _getVeHemiStorage();
+        return $._voteDelegation;
+    }
+
+    function rewardDistributor() public view returns (IRewardDistributor) {
+        VeHemiStorage storage $ = _getVeHemiStorage();
+        return $._rewardDistributor;
+    }
+
+    function forfeitAdmin() public view returns (address) {
+        VeHemiStorage storage $ = _getVeHemiStorage();
+        return $._forfeitAdmin;
+    }
+
+    function userPointEpoch(uint256 tokenId_) public view returns (uint256 _epoch) {
+        VeHemiStorage storage $ = _getVeHemiStorage();
+        return $._userPointEpoch[tokenId_];
+    }
+
+    function slopeChanges(uint256 timestamp_) public view returns (int128 _slopeChange) {
+        VeHemiStorage storage $ = _getVeHemiStorage();
+        return $._slopeChanges[timestamp_];
+    }
+
+    function provider(uint256 tokenId_) public view returns (address _provider) {
+        VeHemiStorage storage $ = _getVeHemiStorage();
+        return $._provider[tokenId_];
+    }
+
+    function isForfeitable(uint256 tokenId_) public view returns (bool) {
+        VeHemiStorage storage $ = _getVeHemiStorage();
+        return $._isForfeitable[tokenId_];
     }
 }

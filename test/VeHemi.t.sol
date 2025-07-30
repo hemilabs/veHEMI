@@ -79,7 +79,7 @@ contract VeHemiTest is Test {
 
     function testCreateLock() public {
         uint256 amount = 100 ether;
-        uint256 currentTimestamp = block.timestamp;
+        uint256 currentTimestamp = vm.getBlockTimestamp();
         uint256 lockDuration = 2 * 365 days;
         uint256 unlockTime = currentTimestamp + lockDuration;
 
@@ -112,7 +112,7 @@ contract VeHemiTest is Test {
         (uint256 tokenId, , ) = createLock(user, amount, 2 weeks);
 
         // Fast forward past unlock
-        vm.warp(block.timestamp + 2 weeks + 1);
+        vm.warp(vm.getBlockTimestamp() + 2 weeks + 1);
 
         uint256 userBalanceBefore = hemi.balanceOf(user);
 
@@ -137,7 +137,7 @@ contract VeHemiTest is Test {
         uint256 lockDuration = 2 weeks;
         (uint256 tokenId, , ) = createLock(user, amount, lockDuration);
 
-        vm.warp(block.timestamp + lockDuration + 1);
+        vm.warp(vm.getBlockTimestamp() + lockDuration + 1);
 
         vm.startPrank(user);
 
@@ -237,7 +237,7 @@ contract VeHemiTest is Test {
         // User epoch should increase
         uint256 userEpochAfter_ = veHemi.userPointEpoch(tokenId_);
         assertEq(userEpochAfter_, 1, "User epoch not incremented");
-        vm.warp(block.timestamp + 58 * 6 days); // Simulate time passing
+        vm.warp(vm.getBlockTimestamp() + 58 * 6 days); // Simulate time passing
         veHemi.checkpoint();
         assertEq(veHemi.epoch(), 59, "Global epoch should be 59 after checkpoint");
         IVeHemi.LockedBalance memory newLocked_ = IVeHemi.LockedBalance(
@@ -259,7 +259,7 @@ contract VeHemiTest is Test {
     function testEpoch() public {
         uint256 amount_ = 10 ether;
 
-        uint256 initialSixDaysCount = block.timestamp / SIX_DAYS;
+        uint256 initialSixDaysCount = vm.getBlockTimestamp() / SIX_DAYS;
 
         (uint256 tokenId_, , ) = createLock(user, amount_, 4 * 52 weeks);
         uint256 userEpochBefore = veHemi.userPointEpoch(tokenId_);
@@ -267,10 +267,10 @@ contract VeHemiTest is Test {
         // Increase amount through normal methods
         uint256 extraAmount_ = 5 ether;
 
-        vm.warp(block.timestamp + 8 days);
+        vm.warp(vm.getBlockTimestamp() + 8 days);
         vm.prank(user);
         veHemi.increaseAmount(tokenId_, extraAmount_);
-        uint256 expectedGlobalEpoch = block.timestamp / SIX_DAYS - initialSixDaysCount;
+        uint256 expectedGlobalEpoch = vm.getBlockTimestamp() / SIX_DAYS - initialSixDaysCount;
         assertEq(veHemi.epoch(), expectedGlobalEpoch + 2, "global epoch not incremented1");
         uint256 newUserEpoch_ = veHemi.userPointEpoch(tokenId_);
         assertEq(newUserEpoch_, 2, "user epoch not incremented");
@@ -283,7 +283,7 @@ contract VeHemiTest is Test {
         (uint256 tokenId, , ) = createLock(user, amount, oneYear);
 
         // Fast forward half a year
-        vm.warp(block.timestamp + 182 days);
+        vm.warp(vm.getBlockTimestamp() + 182 days);
 
         // Try to increase unlock time by another year
         uint256 newDuration = 2 * 365 days; // 2 years from now
@@ -292,7 +292,7 @@ contract VeHemiTest is Test {
 
         // Check that the lock's end is updated
         IVeHemi.LockedBalance memory lockedBalance = veHemi.getLockedBalance(tokenId);
-        uint256 expectedUnlockTime = ((block.timestamp + newDuration) / SIX_DAYS) * SIX_DAYS;
+        uint256 expectedUnlockTime = ((vm.getBlockTimestamp() + newDuration) / SIX_DAYS) * SIX_DAYS;
         assertEq(lockedBalance.end, expectedUnlockTime);
     }
 
@@ -323,13 +323,13 @@ contract VeHemiTest is Test {
         assertGt(bal, 0, "balanceOfNFT should be > 0 after lock");
         assertEq(
             bal,
-            slope * (veHemi.getLockedBalance(tokenId).end - block.timestamp),
+            slope * (veHemi.getLockedBalance(tokenId).end - vm.getBlockTimestamp()),
             "balanceOfNFT is not accurate"
         );
         assertLe(bal, amount, "balanceOfNFT should not exceed locked amount");
 
         // Fast forward to after expiry
-        vm.warp(block.timestamp + lockDuration + 1);
+        vm.warp(vm.getBlockTimestamp() + lockDuration + 1);
         bal = veHemi.balanceOfNFT(tokenId);
         assertEq(bal, 0, "balanceOfNFT should be 0 after lock expires");
         assertEq(veHemi.totalVeHemiSupply(), 0, "totalVeHemiSupply should be 0 after lock expires");
@@ -338,7 +338,7 @@ contract VeHemiTest is Test {
     function test_BalanceOfNFTAt() public {
         uint256 amount = 100 ether;
         uint256 lockDuration = 4 weeks;
-        uint256 start = block.timestamp;
+        uint256 start = vm.getBlockTimestamp();
         (uint256 tokenId, uint256 slope, ) = createLock(user, amount, lockDuration);
 
         // At creation time
@@ -448,7 +448,7 @@ contract VeHemiTest is Test {
 
         (uint256 tokenId1, uint256 user1Slope, ) = createLock(user, 1 ether, lockDuration);
         uint256 expectedBalance1 = user1Slope *
-            (veHemi.getLockedBalance(tokenId1).end - block.timestamp);
+            (veHemi.getLockedBalance(tokenId1).end - vm.getBlockTimestamp());
 
         uint256 balanceOfTokenId1 = veHemi.balanceOfNFT(tokenId1);
         assertEq(balanceOfTokenId1, expectedBalance1, "user1 nft balance is not correct");
@@ -461,7 +461,7 @@ contract VeHemiTest is Test {
         uint256 user2LockDuration = MAX_TIME / 2;
         (uint256 tokenId2, uint256 user2Slope, ) = createLock(alice, amountIn, user2LockDuration);
         uint256 expectedBalance2 = user2Slope *
-            (veHemi.getLockedBalance(tokenId2).end - block.timestamp);
+            (veHemi.getLockedBalance(tokenId2).end - vm.getBlockTimestamp());
         uint256 balanceOfTokenId2 = veHemi.balanceOfNFT(tokenId2);
         assertEq(balanceOfTokenId2, expectedBalance2, "user2 nft balance is not correct");
 
@@ -471,10 +471,14 @@ contract VeHemiTest is Test {
             "Total supply should be sum of all locks"
         );
 
-        vm.warp(block.timestamp + 365 days);
+        vm.warp(vm.getBlockTimestamp() + 365 days);
 
-        expectedBalance1 = user1Slope * (veHemi.getLockedBalance(tokenId1).end - block.timestamp);
-        expectedBalance2 = user2Slope * (veHemi.getLockedBalance(tokenId2).end - block.timestamp);
+        expectedBalance1 =
+            user1Slope *
+            (veHemi.getLockedBalance(tokenId1).end - vm.getBlockTimestamp());
+        expectedBalance2 =
+            user2Slope *
+            (veHemi.getLockedBalance(tokenId2).end - vm.getBlockTimestamp());
         balanceOfTokenId2 = veHemi.balanceOfNFT(tokenId2);
         balanceOfTokenId1 = veHemi.balanceOfNFT(tokenId1);
         assertEq(balanceOfTokenId1, expectedBalance1, "user2 nft balance is not correct");
@@ -489,7 +493,7 @@ contract VeHemiTest is Test {
     }
 
     function testSupplyAt() public {
-        uint256 startTime = block.timestamp;
+        uint256 startTime = vm.getBlockTimestamp();
 
         // Initially should be 0
         assertEq(veHemi.totalVeHemiSupplyAt(startTime), 0, "Initial total supply should be 0");
@@ -497,7 +501,8 @@ contract VeHemiTest is Test {
         // Create a lock
         (uint256 tokenId, uint256 slope, ) = createLock(user, 1 ether, MAX_TIME);
 
-        uint256 expectedBalance = slope * (veHemi.getLockedBalance(tokenId).end - block.timestamp);
+        uint256 expectedBalance = slope *
+            (veHemi.getLockedBalance(tokenId).end - vm.getBlockTimestamp());
 
         // At creation time
         assertEq(
@@ -525,7 +530,7 @@ contract VeHemiTest is Test {
     }
 
     function testPastSupplyAt() public {
-        uint256 startTime = block.timestamp;
+        uint256 startTime = vm.getBlockTimestamp();
 
         // Initially should be 0
         assertEq(veHemi.totalVeHemiSupplyAt(startTime), 0, "Initial total supply should be 0");
@@ -533,13 +538,13 @@ contract VeHemiTest is Test {
         // Create a lock
         createLock(user, 1 ether, MAX_TIME);
 
-        vm.warp(block.timestamp + 100 days);
-        uint256 t1 = block.timestamp;
+        vm.warp(vm.getBlockTimestamp() + 100 days);
+        uint256 t1 = vm.getBlockTimestamp();
         uint256 supplyAtT1 = veHemi.totalVeHemiSupply();
-        vm.warp(block.timestamp + 200 days);
+        vm.warp(vm.getBlockTimestamp() + 200 days);
 
         createLock(user, 1 ether, MAX_TIME);
-        vm.warp(block.timestamp + 10);
+        vm.warp(vm.getBlockTimestamp() + 10);
 
         // At creation time
         assertEq(veHemi.totalVeHemiSupplyAt(t1), supplyAtT1, "Total at past is not correct");
@@ -557,15 +562,15 @@ contract VeHemiTest is Test {
 
         // Create a lock
         createLock(user, 1 ether, MAX_TIME);
-        uint256 b1 = block.number;
+        uint256 b1 = vm.getBlockNumber();
         uint256 supplyAtT1 = veHemi.totalVeHemiSupply();
 
-        vm.warp(block.timestamp + 200 days);
-        vm.roll(block.number + (200 days / 10));
+        vm.warp(vm.getBlockTimestamp() + 200 days);
+        vm.roll(vm.getBlockNumber() + (200 days / 10));
 
         createLock(user, 1 ether, MAX_TIME);
-        vm.warp(block.timestamp + 10);
-        vm.roll(block.number + 1);
+        vm.warp(vm.getBlockTimestamp() + 10);
+        vm.roll(vm.getBlockNumber() + 1);
 
         assertEq(veHemi.totalVeHemiSupplyAtBlock(b1), supplyAtT1, "Total at past is not correct");
     }
@@ -591,7 +596,7 @@ contract VeHemiTest is Test {
         // Check that transfer is not allowed
         assertFalse(veHemi.isTransferable(tokenId), "Token should not be transferable");
 
-        vm.warp(block.timestamp + 2 * 365 days + 1);
+        vm.warp(vm.getBlockTimestamp() + 2 * 365 days + 1);
         assertTrue(veHemi.isTransferable(tokenId), "Token should be transferable");
 
         vm.prank(alice);
@@ -619,14 +624,18 @@ contract VeHemiTest is Test {
         vm.prank(alice);
         veHemi.increaseUnlockTime(tokenId, newLockDuration);
 
-        vm.warp(block.timestamp + firstLockDuration + 1);
+        vm.warp(vm.getBlockTimestamp() + firstLockDuration + 1);
         assertTrue(veHemi.isTransferable(tokenId), "Token should be transferable by default");
 
         vm.prank(alice);
         veHemi.transferFrom(alice, bob, tokenId);
         assertEq(veHemi.ownerOf(tokenId), bob, "Token should be transferred to bob");
 
-        assertGt(veHemi.getLockedBalance(tokenId).end, block.timestamp, "Lock should be extended");
+        assertGt(
+            veHemi.getLockedBalance(tokenId).end,
+            vm.getBlockTimestamp(),
+            "Lock should be extended"
+        );
     }
 
     function testTransferUpdatesUserPointHistory() public {
@@ -645,7 +654,7 @@ contract VeHemiTest is Test {
         assertEq(initialPoint.owner, user, "Initial owner should be user");
 
         // Fast forward time to make token transferable and ensure different timestamp
-        vm.warp(block.timestamp + 1 days);
+        vm.warp(vm.getBlockTimestamp() + 1 days);
 
         // Transfer the NFT
         vm.prank(user);
@@ -668,7 +677,7 @@ contract VeHemiTest is Test {
         );
         assertEq(
             newPoint.point.timestamp,
-            uint64(block.timestamp),
+            uint64(vm.getBlockTimestamp()),
             "Point timestamp should be current time"
         );
         assertEq(
@@ -695,7 +704,7 @@ contract VeHemiTest is Test {
         (uint256 tokenId, , ) = createLock(user, amount, lockDuration);
 
         // Fast forward time to make token transferable
-        vm.warp(block.timestamp + 1 days);
+        vm.warp(vm.getBlockTimestamp() + 1 days);
 
         // First transfer: user -> alice
         vm.prank(user);
@@ -715,7 +724,7 @@ contract VeHemiTest is Test {
         );
 
         // Fast forward more time
-        vm.warp(block.timestamp + 1 days);
+        vm.warp(vm.getBlockTimestamp() + 1 days);
 
         // Second transfer: alice -> bob
         vm.prank(alice);
@@ -763,7 +772,7 @@ contract VeHemiTest is Test {
         assertEq(epochAfterModification, 1, "Epoch should be 1 after modification");
 
         // Fast forward time to make token transferable
-        vm.warp(block.timestamp + 1 days);
+        vm.warp(vm.getBlockTimestamp() + 1 days);
 
         // Transfer the NFT
         vm.prank(user);
@@ -810,14 +819,14 @@ contract VeHemiTest is Test {
         uint256 balanceAtStart = veHemi.balanceOfNFT(tokenId);
         assertGt(balanceAtStart, 0);
 
-        vm.warp(block.timestamp + timeAdvance);
+        vm.warp(vm.getBlockTimestamp() + timeAdvance);
 
         uint256 balanceAfterTime = veHemi.balanceOfNFT(tokenId);
 
-        if (block.timestamp >= end) {
+        if (vm.getBlockTimestamp() >= end) {
             assertEq(balanceAfterTime, 0, "Balance should be 0 after lock expires");
         } else {
-            uint256 expectedBalance = slope * (end - block.timestamp);
+            uint256 expectedBalance = slope * (end - vm.getBlockTimestamp());
 
             assertEq(
                 balanceAfterTime,
@@ -862,7 +871,7 @@ contract VeHemiTest is Test {
         (uint256 tokenId1, , ) = createLock(user, amount, duration1);
         (uint256 tokenId2, , ) = createLock(alice, amount, duration2);
 
-        uint256 lockCreatedAt = block.timestamp;
+        uint256 lockCreatedAt = vm.getBlockTimestamp();
 
         vm.warp(lockCreatedAt + futureTime1);
 
@@ -910,12 +919,12 @@ contract VeHemiTest is Test {
         vm.prank(address(this));
         veHemi.updateForfeitAdmin(forfeitAdmin);
 
-        // Create forfeitable lock for team member
+        // Create isForfeitable lock for team member
         vm.prank(user);
         uint256 tokenId = veHemi.createLockFor(amount, 2 * 365 days, teamMember, false, true);
 
         // Check initial state
-        assertTrue(veHemi.forfeitable(tokenId), "Lock should be forfeitable");
+        assertTrue(veHemi.isForfeitable(tokenId), "Lock should be isForfeitable");
         assertEq(veHemi.totalLocked(), amount, "Total locked should be correct");
 
         // Forfeit admin should be able to forfeit the lock
@@ -950,7 +959,7 @@ contract VeHemiTest is Test {
         vm.prank(address(this));
         veHemi.updateForfeitAdmin(forfeitAdmin);
 
-        // Create forfeitable lock for team member
+        // Create isForfeitable lock for team member
         vm.prank(user);
         uint256 tokenId = veHemi.createLockFor(amount, 2 * 365 days, teamMember, false, true);
 
@@ -969,14 +978,14 @@ contract VeHemiTest is Test {
         vm.prank(address(this));
         veHemi.updateForfeitAdmin(forfeitAdmin);
 
-        // Create non-forfeitable lock
+        // Create non-isForfeitable lock
         vm.prank(user);
         uint256 tokenId = veHemi.createLockFor(amount, 2 * 365 days, teamMember, false, false);
 
-        // Check that lock is not forfeitable
-        assertFalse(veHemi.forfeitable(tokenId), "Lock should not be forfeitable");
+        // Check that lock is not isForfeitable
+        assertFalse(veHemi.isForfeitable(tokenId), "Lock should not be isForfeitable");
 
-        // Forfeit admin should not be able to forfeit non-forfeitable lock
+        // Forfeit admin should not be able to forfeit non-isForfeitable lock
         vm.prank(forfeitAdmin);
         vm.expectRevert(VeHemi.NotForfeitable.selector);
         veHemi.forfeit(tokenId);
@@ -991,12 +1000,12 @@ contract VeHemiTest is Test {
         vm.prank(address(this));
         veHemi.updateForfeitAdmin(forfeitAdmin);
 
-        // Create forfeitable lock with short duration
+        // Create isForfeitable lock with short duration
         vm.prank(user);
         uint256 tokenId = veHemi.createLockFor(amount, 1 weeks, teamMember, false, true);
 
         // Fast forward past unlock
-        vm.warp(block.timestamp + 1 weeks + 1);
+        vm.warp(vm.getBlockTimestamp() + 1 weeks + 1);
 
         // Forfeit admin should not be able to forfeit expired lock
         vm.prank(forfeitAdmin);
@@ -1013,7 +1022,7 @@ contract VeHemiTest is Test {
         vm.prank(address(this));
         veHemi.updateForfeitAdmin(forfeitAdmin);
 
-        // Create forfeitable lock for team member
+        // Create isForfeitable lock for team member
         vm.prank(user);
         uint256 tokenId = veHemi.createLockFor(amount, 2 * 365 days, teamMember, false, true);
 
@@ -1051,7 +1060,7 @@ contract VeHemiTest is Test {
         vm.prank(address(this));
         veHemi.updateForfeitAdmin(forfeitAdmin);
 
-        // Create two forfeitable locks
+        // Create two isForfeitable locks
         vm.prank(user);
         uint256 tokenId1 = veHemi.createLockFor(amount1, 2 * 365 days, teamMember1, false, true);
 
@@ -1096,14 +1105,14 @@ contract VeHemiTest is Test {
         vm.prank(address(this));
         veHemi.updateForfeitAdmin(forfeitAdmin);
 
-        // Create forfeitable lock for team member
+        // Create isForfeitable lock for team member
         vm.prank(user);
         uint256 tokenId = veHemi.createLockFor(amount, 2 * 365 days, teamMember, false, true);
 
         // Expect Withdraw event when forfeiting
         vm.prank(forfeitAdmin);
         vm.expectEmit(true, true, false, true);
-        emit IVeHemi.Withdraw(forfeitAdmin, tokenId, amount, block.timestamp);
+        emit IVeHemi.Withdraw(forfeitAdmin, tokenId, amount, vm.getBlockTimestamp());
         veHemi.forfeit(tokenId);
     }
 
@@ -1157,7 +1166,7 @@ contract VeHemiTest is Test {
         vm.prank(address(this));
         veHemi.updateForfeitAdmin(address(0));
 
-        // Create forfeitable lock for team member
+        // Create isForfeitable lock for team member
         vm.prank(user);
         uint256 tokenId = veHemi.createLockFor(amount, 2 * 365 days, teamMember, false, true);
 
@@ -1179,7 +1188,7 @@ contract VeHemiTest is Test {
         // Create regular lock
         (uint256 regularTokenId, , ) = createLock(user, amount, 2 * 365 days);
 
-        // Create forfeitable lock
+        // Create isForfeitable lock
         vm.prank(user);
         uint256 forfeitableTokenId = veHemi.createLockFor(
             amount,
@@ -1189,13 +1198,16 @@ contract VeHemiTest is Test {
             true
         );
 
-        // Check that regular lock is not forfeitable
-        assertFalse(veHemi.forfeitable(regularTokenId), "Regular lock should not be forfeitable");
+        // Check that regular lock is not isForfeitable
+        assertFalse(
+            veHemi.isForfeitable(regularTokenId),
+            "Regular lock should not be isForfeitable"
+        );
 
-        // Check that forfeitable lock is forfeitable
+        // Check that isForfeitable lock is isForfeitable
         assertTrue(
-            veHemi.forfeitable(forfeitableTokenId),
-            "Forfeitable lock should be forfeitable"
+            veHemi.isForfeitable(forfeitableTokenId),
+            "Forfeitable lock should be isForfeitable"
         );
 
         // Forfeit admin should not be able to forfeit regular lock
@@ -1203,7 +1215,7 @@ contract VeHemiTest is Test {
         vm.expectRevert(VeHemi.NotForfeitable.selector);
         veHemi.forfeit(regularTokenId);
 
-        // Forfeit admin should be able to forfeit forfeitable lock
+        // Forfeit admin should be able to forfeit isForfeitable lock
         vm.prank(forfeitAdmin);
         veHemi.forfeit(forfeitableTokenId);
 
@@ -1220,12 +1232,12 @@ contract VeHemiTest is Test {
         vm.prank(address(this));
         veHemi.updateForfeitAdmin(forfeitAdmin);
 
-        // Create forfeitable lock
+        // Create isForfeitable lock
         vm.prank(user);
         uint256 tokenId = veHemi.createLockFor(amount, 2 * 365 days, teamMember, false, true);
 
         // Check initial state
-        assertTrue(veHemi.forfeitable(tokenId), "Lock should be forfeitable");
+        assertTrue(veHemi.isForfeitable(tokenId), "Lock should be isForfeitable");
         assertEq(veHemi.totalLocked(), amount, "Total locked should be correct");
 
         // Forfeit the lock
@@ -1248,12 +1260,12 @@ contract VeHemiTest is Test {
         vm.prank(address(this));
         veHemi.updateForfeitAdmin(forfeitAdmin);
 
-        // Create forfeitable lock
+        // Create isForfeitable lock
         vm.prank(user);
         uint256 tokenId = veHemi.createLockFor(amount, duration, teamMember, false, true);
 
         // Check initial state
-        assertTrue(veHemi.forfeitable(tokenId), "Lock should be forfeitable");
+        assertTrue(veHemi.isForfeitable(tokenId), "Lock should be isForfeitable");
 
         // Forfeit the lock
         vm.prank(forfeitAdmin);
