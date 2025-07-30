@@ -5,11 +5,11 @@ import {IVeHemiVoteDelegation} from "../interfaces/IVeHemiVoteDelegation.sol";
 
 abstract contract VeHemiDelegationStorageV1 is IVeHemiVoteDelegation {
     mapping(uint256 delegator => IVeHemiVoteDelegation.Delegation delegate) public delegations;
-    mapping(uint256 delegatee => IVeHemiVoteDelegation.DelegateCheckpoint[])
+    mapping(address delegatee => IVeHemiVoteDelegation.DelegateCheckpoint[])
         public delegateCheckpoints;
 
     /// @notice Mapping from delegate to SIX_DAYS rounded time of expiry to the aggregated values at time of expiration.
-    mapping(uint256 delegate => mapping(uint256 sixDays => Expiration)) public expiredDelegations;
+    mapping(address delegatee => mapping(uint256 sixDays => Expiration)) public expiredDelegations;
     /// @notice Nonces needed for delegations by signature
     mapping(address signer => uint256 nonce) public nonces;
 }

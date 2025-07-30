@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.29;
 
-import {IERC721} from "@openzeppelin/contracts/token/ERC721/IERC721.sol";
+import {IERC721Enumerable} from "@openzeppelin/contracts/token/ERC721/extensions/IERC721Enumerable.sol";
 import {IVeHemiVoteDelegation} from "./IVeHemiVoteDelegation.sol";
 import {IRewardDistributor} from "./IRewardDistributor.sol";
 
-interface IVeHemi is IERC721 {
+interface IVeHemi is IERC721Enumerable {
     // --- Structs ---
     struct Point {
         int128 bias;
