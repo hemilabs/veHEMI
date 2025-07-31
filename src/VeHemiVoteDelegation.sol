@@ -210,16 +210,13 @@ contract VeHemiVoteDelegation is ReentrancyGuardTransientUpgradeable, VeHemiDele
         // All will be 0 if no expirations, only need to check one of them
         if (totalExpiredAmount_ == 0) return _calculatedCheckpoint;
 
-        /// NOTE: Checkpoint values will always be larger than or equal to expired values
-        unchecked {
-            _calculatedCheckpoint = DelegateCheckpoint({
-                timestamp: _checkpointTimestamp.toUint64(),
-                normalizedBias: (_lastCheckpoint.normalizedBias - totalExpiredBias_).toUint128(),
-                normalizedSlope: (_lastCheckpoint.normalizedSlope - totalExpiredSlope_).toUint64(),
-                totalAmount: (_lastCheckpoint.totalAmount - totalExpiredAmount_).toUint128(),
-                fixedBias: 0
-            });
-        }
+        _calculatedCheckpoint = DelegateCheckpoint({
+            timestamp: _checkpointTimestamp.toUint64(),
+            normalizedBias: (_lastCheckpoint.normalizedBias - totalExpiredBias_).toUint128(),
+            normalizedSlope: (_lastCheckpoint.normalizedSlope - totalExpiredSlope_).toUint64(),
+            totalAmount: (_lastCheckpoint.totalAmount - totalExpiredAmount_).toUint128(),
+            fixedBias: 0
+        });
     }
 
     /**
@@ -263,40 +260,37 @@ contract VeHemiVoteDelegation is ReentrancyGuardTransientUpgradeable, VeHemiDele
         _newCheckpoint.normalizedSlope = previousCheckpoint_.normalizedSlope;
         _newCheckpoint.totalAmount = previousCheckpoint_.totalAmount;
 
-        // All checkpoint fields will never exceed their size so addition and subtraction doesnt need to be checked
-        unchecked {
-            // Add or subtract the delta to the previous checkpoint
-            if (isDeltaPositive_) {
-                _newCheckpoint.normalizedBias += deltaBias_.toUint128();
-                _newCheckpoint.normalizedSlope += deltaSlope_.toUint64();
-                _newCheckpoint.totalAmount += deltaAmount_.toUint128();
-            } else {
-                // only subtract the weight from this tokenID if it has not already expired
-                if (previousDelegationEnd_ > checkpointTimestamp_) {
-                    _newCheckpoint.normalizedBias -= deltaBias_.toUint128();
-                    _newCheckpoint.normalizedSlope -= deltaSlope_.toUint64();
-                    _newCheckpoint.totalAmount -= deltaAmount_.toUint128();
-                }
+        // Add or subtract the delta to the previous checkpoint
+        if (isDeltaPositive_) {
+            _newCheckpoint.normalizedBias += deltaBias_.toUint128();
+            _newCheckpoint.normalizedSlope += deltaSlope_.toUint64();
+            _newCheckpoint.totalAmount += deltaAmount_.toUint128();
+        } else {
+            // only subtract the weight from this tokenID if it has not already expired
+            if (previousDelegationEnd_ > checkpointTimestamp_) {
+                _newCheckpoint.normalizedBias -= deltaBias_.toUint128();
+                _newCheckpoint.normalizedSlope -= deltaSlope_.toUint64();
+                _newCheckpoint.totalAmount -= deltaAmount_.toUint128();
             }
+        }
 
-            // If there have been expirations, incorporate the adjustments by subtracting them from the checkpoint
-            if (_newCheckpoint.timestamp != checkpointTimestamp_) {
-                (
-                    uint128 totalExpiredBias,
-                    uint64 totalExpiredSlope,
-                    uint128 totalExpiredAmount
-                ) = _calculateExpirations(
-                        delegatee_,
-                        _newCheckpoint.timestamp,
-                        checkpointTimestamp_,
-                        previousCheckpoint_
-                    );
+        // If there have been expirations, incorporate the adjustments by subtracting them from the checkpoint
+        if (_newCheckpoint.timestamp != checkpointTimestamp_) {
+            (
+                uint128 totalExpiredBias,
+                uint64 totalExpiredSlope,
+                uint128 totalExpiredAmount
+            ) = _calculateExpirations(
+                    delegatee_,
+                    _newCheckpoint.timestamp,
+                    checkpointTimestamp_,
+                    previousCheckpoint_
+                );
 
-                _newCheckpoint.timestamp = checkpointTimestamp_.toUint64();
-                _newCheckpoint.normalizedBias -= totalExpiredBias;
-                _newCheckpoint.normalizedSlope -= totalExpiredSlope;
-                _newCheckpoint.totalAmount -= totalExpiredAmount;
-            }
+            _newCheckpoint.timestamp = checkpointTimestamp_.toUint64();
+            _newCheckpoint.normalizedBias -= totalExpiredBias;
+            _newCheckpoint.normalizedSlope -= totalExpiredSlope;
+            _newCheckpoint.totalAmount -= totalExpiredAmount;
         }
     }
 
@@ -310,25 +304,23 @@ contract VeHemiVoteDelegation is ReentrancyGuardTransientUpgradeable, VeHemiDele
         view
         returns (uint128 totalExpiredBias, uint64 totalExpiredSlope, uint128 totalExpiredAmount)
     {
-        unchecked {
-            if (end_ > start_ + MAX_LOCK_DURATION) {
-                totalExpiredBias = checkpoint_.normalizedBias;
-                totalExpiredSlope = checkpoint_.normalizedSlope;
-                totalExpiredAmount = checkpoint_.totalAmount;
-            } else {
-                // Total values will always be less than or equal to a checkpoint's values
-                uint256 currentSixDayWindow = SIX_DAYS + (start_ / SIX_DAYS) * SIX_DAYS;
-                mapping(uint256 => Expiration) storage delegateExpirations = expiredDelegations[
-                    delegatee_
-                ];
-                // Sum values from currentSixDayWindow until end
-                while (currentSixDayWindow <= end_) {
-                    Expiration memory expiration = delegateExpirations[currentSixDayWindow];
-                    totalExpiredBias += expiration.bias;
-                    totalExpiredSlope += expiration.slope;
-                    totalExpiredAmount += expiration.amount;
-                    currentSixDayWindow += SIX_DAYS;
-                }
+        if (end_ > start_ + MAX_LOCK_DURATION) {
+            totalExpiredBias = checkpoint_.normalizedBias;
+            totalExpiredSlope = checkpoint_.normalizedSlope;
+            totalExpiredAmount = checkpoint_.totalAmount;
+        } else {
+            // Total values will always be less than or equal to a checkpoint's values
+            uint256 currentSixDayWindow = SIX_DAYS + (start_ / SIX_DAYS) * SIX_DAYS;
+            mapping(uint256 => Expiration) storage delegateExpirations = expiredDelegations[
+                delegatee_
+            ];
+            // Sum values from currentSixDayWindow until end
+            while (currentSixDayWindow <= end_) {
+                Expiration memory expiration = delegateExpirations[currentSixDayWindow];
+                totalExpiredBias += expiration.bias;
+                totalExpiredSlope += expiration.slope;
+                totalExpiredAmount += expiration.amount;
+                currentSixDayWindow += SIX_DAYS;
             }
         }
     }
@@ -485,13 +477,10 @@ contract VeHemiVoteDelegation is ReentrancyGuardTransientUpgradeable, VeHemiDele
             Expiration memory expiration = expiredDelegations[previousDelegation_.delegatee][
                 previousDelegation_.end
             ];
-            // All expiration fields will never exceed their size so subtraction doesnt need to be checked
-            // and they can be unsafely cast
-            unchecked {
-                expiration.bias -= previousDelegation_.bias;
-                expiration.slope -= previousDelegation_.slope;
-                expiration.amount -= previousDelegation_.amount;
-            }
+
+            expiration.bias -= previousDelegation_.bias;
+            expiration.slope -= previousDelegation_.slope;
+            expiration.amount -= previousDelegation_.amount;
 
             // Effects
             expiredDelegations[previousDelegation_.delegatee][previousDelegation_.end] = expiration;
