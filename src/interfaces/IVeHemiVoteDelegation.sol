@@ -35,6 +35,20 @@ interface IVeHemiVoteDelegation {
         uint256 end;
     }
 
+    /**
+     * @dev Emitted when an account changes their delegate.
+     */
+    event DelegateChanged(
+        uint256 indexed delegator,
+        address indexed fromDelegatee,
+        address indexed toDelegatee
+    );
+
+    /**
+     * @dev Emitted when a token transfer or delegate change results in changes to a delegate's number of voting units.
+     */
+    event DelegateVotesChanged(address indexed delegatee, uint256 previousVotes, uint256 newVotes);
+
     function delegate(uint256 delegator_, address delegatee_) external;
 
     function delegation(uint256 tokenId_) external view returns (Delegation memory);

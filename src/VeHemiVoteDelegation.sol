@@ -180,6 +180,8 @@ contract VeHemiVoteDelegation is ReentrancyGuardTransientUpgradeable, VeHemiDele
         address account_,
         uint256 timestamp_
     ) external view returns (uint256 _totalVotes) {
+        if (timestamp_ > block.timestamp) revert TimestampInFuture();
+
         _totalVotes = _getPastVotes(account_, timestamp_);
     }
 
@@ -422,14 +424,18 @@ contract VeHemiVoteDelegation is ReentrancyGuardTransientUpgradeable, VeHemiDele
             amount: _normalizedVeLockInfo.amount.toUint96(),
             slope: _normalizedVeLockInfo.slope.toUint64()
         });
+
+        emit DelegateChanged({
+            delegator: delegator_,
+            fromDelegatee: _previousDelegation.delegatee,
+            toDelegatee: delegatee_
+        });
     }
 
     function _getPastVotes(
         address account_,
         uint256 timestamp_
     ) internal view returns (uint256 _totalVotes) {
-        if (timestamp_ > block.timestamp) revert TimestampInFuture();
-
         return _getDelegateVotesAt(account_, timestamp_);
     }
 
@@ -502,6 +508,8 @@ contract VeHemiVoteDelegation is ReentrancyGuardTransientUpgradeable, VeHemiDele
             accountCheckpointsLength - 1
         ];
 
+        uint256 _previousVotes = _getPastVotes(previousDelegation_.delegatee, checkpointTimestamp_);
+
         if (previousDelegation_.end > checkpointTimestamp_) {
             // Calculations
             Expiration memory expiration = expiredDelegations[previousDelegation_.delegatee][
@@ -537,6 +545,15 @@ contract VeHemiVoteDelegation is ReentrancyGuardTransientUpgradeable, VeHemiDele
                 lastCheckpoint_: _lastCheckpoint
             });
         }
+
+        emit DelegateVotesChanged({
+            delegatee: previousDelegation_.delegatee,
+            previousVotes: _previousVotes,
+            newVotes: _getPastVotes({
+                account_: previousDelegation_.delegatee,
+                timestamp_: checkpointTimestamp_
+            })
+        });
     }
 
     /**
@@ -565,17 +582,15 @@ contract VeHemiVoteDelegation is ReentrancyGuardTransientUpgradeable, VeHemiDele
             })
             : newDelegateCheckpoints[_accountCheckpointsLength - 1];
 
+        uint256 _previousVotes = _getPastVotes(newDelegatee_, checkpointTimestamp_);
+
         // Handle expiration
         // Calculations
         Expiration memory _expiration = expiredDelegations[newDelegatee_][delegatorVeLockInfo_.end];
+        _expiration.bias += delegatorVeLockInfo_.bias.toUint96();
+        _expiration.slope += delegatorVeLockInfo_.slope.toUint64();
+        _expiration.amount += delegatorVeLockInfo_.amount.toUint96();
 
-        // NOTE: All expiration fields will never exceed their size so addition doesnt need to be checked
-        // and can be unsafely cast
-        unchecked {
-            _expiration.bias += delegatorVeLockInfo_.bias.toUint96();
-            _expiration.slope += delegatorVeLockInfo_.slope.toUint64();
-            _expiration.amount += delegatorVeLockInfo_.amount.toUint96();
-        }
         // Effects
         expiredDelegations[newDelegatee_][delegatorVeLockInfo_.end] = _expiration;
 
@@ -597,6 +612,12 @@ contract VeHemiVoteDelegation is ReentrancyGuardTransientUpgradeable, VeHemiDele
             accountCheckpointsLength_: _accountCheckpointsLength,
             newCheckpoint_: _newCheckpoint,
             lastCheckpoint_: _lastCheckpoint
+        });
+
+        emit DelegateVotesChanged({
+            delegatee: newDelegatee_,
+            previousVotes: _previousVotes,
+            newVotes: _getPastVotes({account_: newDelegatee_, timestamp_: checkpointTimestamp_})
         });
     }
 
