@@ -675,7 +675,7 @@ contract VeHemi is
         emit Deposit(from, tokenId_, amount_, _newLocked.end, block.timestamp);
     }
 
-    function _reDelegate(uint256 delegator_) internal {
+    function _reDelegate(uint256 delegator_) internal virtual {
         address _delegatee = voteDelegation.delegation(delegator_).delegatee;
         if (_delegatee != address(0)) {
             voteDelegation.delegate(delegator_, _delegatee);
