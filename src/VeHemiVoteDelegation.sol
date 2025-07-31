@@ -70,6 +70,20 @@ contract VeHemiVoteDelegation is ReentrancyGuardTransientUpgradeable, VeHemiDele
     function initialize() external initializer {}
 
     /**
+     * @dev Clock used for flagging checkpoints.
+     */
+    function clock() public view returns (uint48) {
+        return block.timestamp.toUint48();
+    }
+
+    /**
+     * @dev Machine-readable description of the clock as specified in ERC-6372.
+     */
+    function CLOCK_MODE() public view virtual returns (string memory) {
+        return "mode=timestamp";
+    }
+
+    /**
      * @notice Delegate voting power from one token to another
      * @dev Delegations take effect at the next epoch (next day boundary). The delegator loses
      * their voting power and the delegatee gains it. Delegations expire when the delegator's
@@ -167,6 +181,22 @@ contract VeHemiVoteDelegation is ReentrancyGuardTransientUpgradeable, VeHemiDele
         uint256 timestamp_
     ) external view returns (uint256 _totalVotes) {
         _totalVotes = _getPastVotes(account_, timestamp_);
+    }
+
+    /**
+     * @dev Returns the total supply of votes available at a specific moment in the past. If the `clock()` is
+     * configured to use block numbers, this will return the value at the end of the corresponding block.
+     *
+     * NOTE: This value is the sum of all available votes, which is not necessarily the sum of all delegated votes.
+     * Votes that have not been delegated are still part of total supply, even though they would not participate in a
+     * vote.
+     */
+    function getPastTotalSupply(
+        uint256 timestamp_
+    ) external view returns (uint256 pastTotalSupply) {
+        if (timestamp_ > block.timestamp) revert TimestampInFuture();
+
+        pastTotalSupply = veHemi.totalVeHemiSupplyAt(timestamp_);
     }
 
     /**

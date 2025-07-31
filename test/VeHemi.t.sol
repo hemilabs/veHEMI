@@ -545,31 +545,6 @@ contract VeHemiTest is Test {
         assertEq(veHemi.totalVeHemiSupplyAt(t1), supplyAtT1, "Total at past is not correct");
     }
 
-    function testPastSupplyAtBlock() public {
-        uint256 blockNumber = block.number;
-
-        // Initially should be 0
-        assertEq(
-            veHemi.totalVeHemiSupplyAtBlock(blockNumber - 1),
-            0,
-            "Initial total supply should be 0"
-        );
-
-        // Create a lock
-        createLock(user, 1 ether, MAX_TIME);
-        uint256 b1 = block.number;
-        uint256 supplyAtT1 = veHemi.totalVeHemiSupply();
-
-        vm.warp(block.timestamp + 200 days);
-        vm.roll(block.number + (200 days / 10));
-
-        createLock(user, 1 ether, MAX_TIME);
-        vm.warp(block.timestamp + 10);
-        vm.roll(block.number + 1);
-
-        assertEq(veHemi.totalVeHemiSupplyAtBlock(b1), supplyAtT1, "Total at past is not correct");
-    }
-
     //     // --- Transfer Control Tests ---
 
     function testTransferNotAllowedFlag() public {

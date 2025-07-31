@@ -248,35 +248,6 @@ contract VeHemi is
     }
 
     /**
-     * @notice Get the total veHEMI at a specific block number
-     * @param blockNumber_ The block number to check total supply at
-     * @return The total amount of veHemi at the given block
-     */
-    function totalVeHemiSupplyAtBlock(uint256 blockNumber_) external view returns (uint256) {
-        if (blockNumber_ >= block.number) revert BlockNotReached();
-        uint256 _epoch = epoch;
-        uint256 _targetEpoch = _findBlockEpoch(blockNumber_, _epoch);
-        Point memory _point = globalPointHistory[_targetEpoch];
-        uint256 dt;
-        if (_targetEpoch < _epoch) {
-            Point memory _nextPoint = globalPointHistory[_targetEpoch + 1];
-            if (_point.blockNumber != _nextPoint.blockNumber) {
-                dt =
-                    ((blockNumber_ - _point.blockNumber) *
-                        (_nextPoint.timestamp - _point.timestamp)) /
-                    (_nextPoint.blockNumber - _point.blockNumber);
-            }
-        } else {
-            if (_point.blockNumber != block.number) {
-                dt =
-                    ((blockNumber_ - _point.blockNumber) * (block.timestamp - _point.timestamp)) /
-                    (block.number - _point.blockNumber);
-            }
-        } // # Now dt contains info on how far are we beyond point
-        return _supplyAt(_point, _point.timestamp + dt);
-    }
-
-    /**
      * @notice Update the reward distributor contract address
      * @dev Only callable by the contract owner. Can be set to address(0) to disable rewards.
      * @param newRewardDistributor_ The new reward distributor contract address
@@ -335,29 +306,6 @@ contract VeHemi is
             _lastUserPoint.point.bias = 0;
         }
         return (_lastUserPoint.point.bias.toUint256(), _lastUserPoint.owner);
-    }
-
-    function _findBlockEpoch(
-        uint256 blockNumber_,
-        uint256 maxEpoch_
-    ) internal view returns (uint256) {
-        // Binary search
-        uint256 _min;
-        uint256 _max = maxEpoch_;
-
-        for (uint256 i; i < 128; i++) {
-            // Will be always enough for 128-bit numbers
-            if (_min >= _max) {
-                break;
-            }
-            uint256 _mid = (_min + _max + 1) / 2;
-            if (globalPointHistory[_mid].blockNumber <= blockNumber_) {
-                _min = _mid;
-            } else {
-                _max = _mid - 1;
-            }
-        }
-        return _min;
     }
 
     function _getPastGlobalPointIndex(

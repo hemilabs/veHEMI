@@ -92,4 +92,5 @@ interface IVeHemi is IERC721Enumerable {
         uint256 tokenId,
         uint256 timestamp
     ) external view returns (uint256, address);
+    function totalVeHemiSupplyAt(uint256 timestamp_) external view returns (uint256);
 }
