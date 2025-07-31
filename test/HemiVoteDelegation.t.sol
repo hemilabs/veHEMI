@@ -9,6 +9,7 @@ import {MockERC20} from "./mocks/MockERC20.sol";
 import {IVeHemiVoteDelegation} from "../src/interfaces/IVeHemiVoteDelegation.sol";
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
+import {MockVeHemi} from "./mocks/MockVeHemi.sol";
 
 contract TestVeHemiVoteDelegation is Test {
     using SafeCast for uint256;
@@ -113,6 +114,75 @@ contract TestVeHemiVoteDelegation is Test {
             aliceVotesAfter,
             expectedAliceVotes,
             "Voting power should not decay more than 5% in one day"
+        );
+    }
+
+    // This test following scenario
+    // 1. User1 create lock for x days delegate to Alice. Alice's original lock has amount less than amount locked by User1
+    // 2. Before x days passed.  User1 increase lock time to x+ y days
+    // 3. After x days passed , User1 delegate to User2 .
+    // In this flow, previous delegation  removed and expired delegation also removed.
+    // This subtract two times that cause underflow. Alice get huge voting power due to underflow.
+    // Must use MockVeHemi to test this scenario because redelegate during extend lock prevent this underflow
+    function testExtendLockAfterExpiredDelegation() public {
+        MockVeHemi logic = new MockVeHemi(address(hemiToken));
+
+        // Step 2: Deploy VeHemi proxy with initialization
+        ERC1967Proxy proxy = new ERC1967Proxy(
+            address(logic),
+            abi.encodeWithSelector(VeHemi.initialize.selector, address(this))
+        );
+        MockVeHemi mockVeHemi = MockVeHemi(address(proxy));
+        VeHemiVoteDelegation _hemiVoteDelegation = new VeHemiVoteDelegation(address(mockVeHemi));
+
+        // Step 4: Update VeHemi with the vote delegation address
+        mockVeHemi.updateVoteDelegation(_hemiVoteDelegation);
+        address user1 = address(0x11111);
+        address user2 = address(0x22222);
+
+        hemiToken.mint(user1, 1_000 ether);
+        hemiToken.mint(user2, 1_000 ether);
+        hemiToken.mint(ALICE, 1_000 ether);
+
+        uint256 amount = 1 ether;
+        uint256 firstLockDuration = 2 * 365 days;
+        uint256 newLockDuration = 3 * 365 days;
+
+        vm.startPrank(ALICE);
+        hemiToken.approve(address(mockVeHemi), amount / 2);
+        uint256 aliceTokenId = mockVeHemi.createLock(amount / 2, MAX_TIME);
+        vm.stopPrank();
+
+        vm.startPrank(user2);
+        hemiToken.approve(address(mockVeHemi), amount);
+        uint256 tokenId2 = mockVeHemi.createLock(amount, newLockDuration);
+        vm.stopPrank();
+
+        vm.startPrank(user1);
+        hemiToken.approve(address(mockVeHemi), amount);
+        uint256 tokenId1 = mockVeHemi.createLock(amount, firstLockDuration);
+        _hemiVoteDelegation.delegate(tokenId1, ALICE);
+        uint256 delegationStarts = ((block.timestamp / 1 days) * 1 days) + 1 days;
+        vm.warp(delegationStarts);
+        mockVeHemi.increaseUnlockTime(tokenId1, newLockDuration);
+        vm.warp(block.timestamp + firstLockDuration + 2 days);
+        _hemiVoteDelegation.delegate(tokenId1, user2);
+        delegationStarts = ((block.timestamp / 1 days) * 1 days) + 1 days;
+        vm.warp(delegationStarts);
+        vm.stopPrank();
+
+        assertEq(_hemiVoteDelegation.getVotes(user1), 0, "user1 should have no votes");
+
+        assertEq(
+            _hemiVoteDelegation.getVotes(user2),
+            mockVeHemi.balanceOfNFT(tokenId2) + mockVeHemi.balanceOfNFT(tokenId1),
+            "User2 should have self and delegate vote"
+        );
+
+        assertEq(
+            _hemiVoteDelegation.getVotes(ALICE),
+            mockVeHemi.balanceOfNFT(aliceTokenId),
+            "Alice should have self votes only"
         );
     }
 

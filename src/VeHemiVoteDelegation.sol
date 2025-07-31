@@ -271,8 +271,8 @@ contract VeHemiVoteDelegation is ReentrancyGuardTransientUpgradeable, VeHemiDele
                 _newCheckpoint.normalizedSlope += deltaSlope_.toUint64();
                 _newCheckpoint.totalAmount += deltaAmount_.toUint128();
             } else {
-                // only subtract the weight from this tokenID if it has not already expired in a previous checkpoint
-                if (previousDelegationEnd_ > previousCheckpoint_.timestamp) {
+                // only subtract the weight from this tokenID if it has not already expired
+                if (previousDelegationEnd_ > checkpointTimestamp_) {
                     _newCheckpoint.normalizedBias -= deltaBias_.toUint128();
                     _newCheckpoint.normalizedSlope -= deltaSlope_.toUint64();
                     _newCheckpoint.totalAmount -= deltaAmount_.toUint128();
