@@ -77,6 +77,50 @@ contract TestVeHemiVoteDelegation is Test {
         vm.warp(delegationStarts);
     }
 
+    function testEvents() public {
+        //
+        // given
+        //
+        uint256 amount = 100e18;
+        address user1 = makeAddr("user1");
+        address user2 = makeAddr("user2");
+
+        hemiToken.mint(user1, amount);
+
+        vm.prank(user1);
+        hemiToken.approve(address(veHemi), amount);
+
+        uint256 tokenId = 1;
+        uint256 expectedVotes = 99875941136116830000; // 99.87e18
+
+        //
+        // Emit events when creating lock
+        //
+        vm.expectEmit();
+        emit IVeHemiVoteDelegation.DelegateVotesChanged(user1, 0, expectedVotes);
+
+        vm.expectEmit();
+        emit IVeHemiVoteDelegation.DelegateChanged(tokenId, address(0), user1);
+
+        vm.prank(user1);
+        veHemi.createLock(amount, MAX_TIME);
+
+        //
+        // Emit events when delegating
+        //
+        vm.expectEmit();
+        emit IVeHemiVoteDelegation.DelegateVotesChanged(user1, expectedVotes, 0);
+
+        vm.expectEmit();
+        emit IVeHemiVoteDelegation.DelegateVotesChanged(user2, 0, expectedVotes);
+
+        vm.expectEmit();
+        emit IVeHemiVoteDelegation.DelegateChanged(tokenId, user1, user2);
+
+        vm.prank(user1);
+        hemiVoteDelegation.delegate(tokenId, user2);
+    }
+
     // Test basic delegation functionality
     function testBasicDelegation() public {
         // Given - Bill and Alice have locks
