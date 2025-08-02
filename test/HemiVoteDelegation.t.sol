@@ -230,6 +230,53 @@ contract TestVeHemiVoteDelegation is Test {
         );
     }
 
+    function test_debug1() public {
+        vm.warp(block.timestamp + 956140); // ~ 11 days
+        uint amount = 100e18;
+
+        hemiToken.mint(ALICE, amount);
+
+        vm.startPrank(ALICE);
+        hemiToken.approve(address(veHemi), amount);
+        veHemi.createLock(amount, 525960); // SIX_DAYS constant
+        vm.stopPrank();
+    }
+
+    function test_debug2() public {
+        //
+        // warp
+        //
+        vm.warp(block.timestamp + 2551003);
+
+        //
+        // create lock
+        //
+        uint amount = 158665776514575;
+        uint duration = 612360;
+
+        vm.startPrank(ALICE);
+        hemiToken.mint(ALICE, amount);
+        hemiToken.approve(address(veHemi), amount);
+        veHemi.createLock(amount, duration);
+        vm.stopPrank();
+
+        //
+        // warp
+        //
+        vm.warp(block.timestamp + 493937);
+
+        //
+        // increase amount
+        //
+        uint increaseAmount = 999999999000000000193;
+
+        vm.startPrank(ALICE);
+        hemiToken.mint(ALICE, increaseAmount);
+        hemiToken.approve(address(veHemi), increaseAmount);
+        veHemi.increaseAmount(1, increaseAmount);
+        vm.stopPrank();
+    }
+
     function testReDelegation() public {
         // Given - Bill and Alice have locks
         (uint256 billTokenId, ) = _createLock(BILL, LOCK_AMOUNT, MAX_TIME);
