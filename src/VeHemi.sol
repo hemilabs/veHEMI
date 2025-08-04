@@ -553,6 +553,7 @@ contract VeHemi is
         bool transferable_,
         bool forfeitable_
     ) internal returns (uint256 _tokenId) {
+        if (lockDuration_ < 2 * SIX_DAYS) revert LockDurationTooShort();
         uint256 unlockTime = ((block.timestamp + lockDuration_) / SIX_DAYS) * SIX_DAYS; // Lock time is rounded down to SIX_DAYS
 
         if (amount_ == 0) revert AmountIsZero();
