@@ -411,7 +411,7 @@ contract TestVeHemiVoteDelegation is Test {
     // Test delegation with expired lock
     function testCantDelegateExpiredLock() public {
         // Given - Bill has a lock that will expire soon
-        (uint256 billTokenId, ) = _createLock(BILL, LOCK_AMOUNT, 7 days); // Short lock duration
+        (uint256 billTokenId, ) = _createLock(BILL, LOCK_AMOUNT, 14 days); // Short lock duration
 
         // When - Warp to just before lock expires
         uint256 lockEnd = veHemi.getLockedBalance(billTokenId).end;
@@ -1069,7 +1069,7 @@ contract TestVeHemiVoteDelegation is Test {
 
     function testExpirations() public {
         // Given - Bill delegates to Alice with short lock duration
-        uint256 shortLockDuration = 7 days; // 1 week
+        uint256 shortLockDuration = 14 days; // 1 week
         (uint256 billTokenIdNew, ) = _createLock(BILL, LOCK_AMOUNT, shortLockDuration);
 
         vm.startPrank(BILL);
@@ -1111,7 +1111,7 @@ contract TestVeHemiVoteDelegation is Test {
     function testWriteNewCheckpointWithExpirations() public {
         // Given - Bill delegates to Alice with short lock duration
         _createLock(ALICE, LOCK_AMOUNT, MAX_TIME);
-        uint256 shortLockDuration = 7 days; // 1 week
+        uint256 shortLockDuration = 14 days; // 2 weeks
         (uint256 billTokenIdNew, ) = _createLock(BILL, LOCK_AMOUNT, shortLockDuration);
 
         vm.startPrank(BILL);
@@ -1127,7 +1127,7 @@ contract TestVeHemiVoteDelegation is Test {
         assertEq(delegationCheckpointsBefore.length, 1, "Should have 1 checkpoint");
 
         // When - Warp past expiration and write new checkpoint
-        vm.warp(delegationStarts + 8 days);
+        vm.warp(delegationStarts + 15 days);
         hemiVoteDelegation.writeNewCheckpointForExpiredDelegations(ALICE);
 
         // Then - Should have 2 checkpoints
@@ -1143,8 +1143,8 @@ contract TestVeHemiVoteDelegation is Test {
     function testDifferentExpirations() public {
         // Given - Bill and Walter delegate to Bob with different lock durations
         (uint256 bobTokenId, ) = _createLock(BOB, LOCK_AMOUNT, 4 * 365 days);
-        (uint256 billTokenId, ) = _createLock(BILL, LOCK_AMOUNT, 7 days); // 1 week
-        (uint256 walterTokenId, ) = _createLock(WALTER, LOCK_AMOUNT, 14 days); // 2 weeks
+        (uint256 billTokenId, ) = _createLock(BILL, LOCK_AMOUNT, 14 days); // 2 weeks
+        (uint256 walterTokenId, ) = _createLock(WALTER, LOCK_AMOUNT, 28 days); // 4 weeks
 
         // When - Bill and Walter delegate to Bob
         vm.startPrank(BILL);
@@ -1156,7 +1156,7 @@ contract TestVeHemiVoteDelegation is Test {
         vm.stopPrank();
 
         // When - Warp to after Bill's expiration and write checkpoint
-        vm.warp(block.timestamp + 9 days);
+        vm.warp(block.timestamp + 15 days);
         IVeHemiVoteDelegation.DelegateCheckpoint[] memory delegationCheckpoints = hemiVoteDelegation
             .getDelegationCheckpoints(BOB);
         assertEq(delegationCheckpoints.length, 1, "Should have 1 checkpoint");
@@ -1174,7 +1174,7 @@ contract TestVeHemiVoteDelegation is Test {
         );
 
         // When - Warp to after Walter's expiration and write checkpoint
-        vm.warp(block.timestamp + 9 days);
+        vm.warp(block.timestamp + 15 days);
         hemiVoteDelegation.writeNewCheckpointForExpiredDelegations(BOB);
         delegationCheckpoints = hemiVoteDelegation.getDelegationCheckpoints(BOB);
         assertEq(delegationCheckpoints.length, 3, "Should have 3 checkpoints");

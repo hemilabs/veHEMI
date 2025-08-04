@@ -162,7 +162,7 @@ contract VeHemiTest is Test {
         uint256 amount = 1 ether;
 
         vm.startPrank(user);
-        uint256 tokenId = veHemi.createLockFor(amount, 1 weeks, alice, false, false);
+        uint256 tokenId = veHemi.createLockFor(amount, 2 weeks, alice, false, false);
 
         vm.expectRevert(VeHemi.NotTransferable.selector);
         veHemi.transferFrom(user, address(0xABCD), tokenId);
@@ -177,8 +177,8 @@ contract VeHemiTest is Test {
         uint256 amount2 = 2 ether;
 
         // User creates two locks (two NFTs)
-        (uint256 tokenId1, , ) = createLock(user, amount1, 1 weeks);
-        (uint256 tokenId2, , ) = createLock(user, amount2, 1 weeks);
+        (uint256 tokenId1, , ) = createLock(user, amount1, 2 weeks);
+        (uint256 tokenId2, , ) = createLock(user, amount2, 2 weeks);
 
         // Check balanceOf (number of NFTs owned)
         uint256 balance = veHemi.balanceOf(user);
@@ -777,7 +777,7 @@ contract VeHemiTest is Test {
         uint256 timeAdvance
     ) public {
         amount = bound(amount, 1 ether, MAX_AMOUNT);
-        duration = bound(duration, SIX_DAYS, MAX_TIME);
+        duration = bound(duration, 2 * SIX_DAYS, MAX_TIME);
         timeAdvance = bound(timeAdvance, 0, duration);
 
         (uint256 tokenId, uint256 slope, uint256 end) = createLock(user, amount, duration);
@@ -831,8 +831,8 @@ contract VeHemiTest is Test {
         amount = bound(amount, 1 ether, MAX_AMOUNT);
         futureTime2 = bound(futureTime2, 0, MAX_TIME);
         futureTime1 = bound(futureTime1, 0, futureTime2);
-        duration1 = bound(duration1, 1 weeks, MAX_TIME);
-        duration2 = bound(duration2, 1 weeks, MAX_TIME);
+        duration1 = bound(duration1, 2 weeks, MAX_TIME);
+        duration2 = bound(duration2, 2 weeks, MAX_TIME);
 
         (uint256 tokenId1, , ) = createLock(user, amount, duration1);
         (uint256 tokenId2, , ) = createLock(alice, amount, duration2);
@@ -968,10 +968,10 @@ contract VeHemiTest is Test {
 
         // Create forfeitable lock with short duration
         vm.prank(user);
-        uint256 tokenId = veHemi.createLockFor(amount, 1 weeks, teamMember, false, true);
+        uint256 tokenId = veHemi.createLockFor(amount, 2 weeks, teamMember, false, true);
 
         // Fast forward past unlock
-        vm.warp(block.timestamp + 1 weeks + 1);
+        vm.warp(block.timestamp + 2 weeks + 1);
 
         // Forfeit admin should not be able to forfeit expired lock
         vm.prank(forfeitAdmin);
@@ -1217,7 +1217,7 @@ contract VeHemiTest is Test {
         address forfeitAdmin = address(0x5678);
 
         // Bound duration to reasonable range
-        duration = bound(duration, 1 weeks, MAX_TIME);
+        duration = bound(duration, 2 weeks, MAX_TIME);
 
         // Set up forfeit admin
         vm.prank(address(this));

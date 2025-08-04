@@ -153,7 +153,7 @@ contract VeHemi is
         if (_msgSender() != forfeitAdmin) revert NotForfeitAdmin();
         if (!forfeitable[tokenId_]) revert NotForfeitable();
         if (locked[tokenId_].end < block.timestamp) revert LockExpired();
-        voteDelegation.delegate(tokenId_, address(0));
+        _delegate(tokenId_, address(0));
         _withdraw(tokenId_);
         delete forfeitable[tokenId_];
     }
@@ -553,6 +553,7 @@ contract VeHemi is
         bool transferable_,
         bool forfeitable_
     ) internal returns (uint256 _tokenId) {
+        if (lockDuration_ < 2 * SIX_DAYS) revert LockDurationTooShort();
         uint256 unlockTime = ((block.timestamp + lockDuration_) / SIX_DAYS) * SIX_DAYS; // Lock time is rounded down to SIX_DAYS
 
         if (amount_ == 0) revert AmountIsZero();
@@ -563,7 +564,7 @@ contract VeHemi is
         _mint(account_, _tokenId);
 
         _depositFor(_tokenId, amount_, unlockTime.toUint64(), locked[_tokenId]);
-        voteDelegation.delegate(_tokenId, account_);
+        _delegate(_tokenId, account_);
 
         address _sender = _msgSender();
 
@@ -625,8 +626,16 @@ contract VeHemi is
 
     function _reDelegate(uint256 delegator_) internal virtual {
         address _delegatee = voteDelegation.delegation(delegator_).delegatee;
-        if (_delegatee != address(0)) {
-            voteDelegation.delegate(delegator_, _delegatee);
+        _delegate(delegator_, _delegatee);
+    }
+
+    function _delegate(uint256 delegator_, address delegatee_) internal {
+        // Delegation changes are effective only after 1 day. If lock is ending before that no need to delegate
+        // Example: User is increasing amount just few hours before lock ends.
+        // NFT is transferred just few hours before lock ends.
+        uint256 _newDelegationStarts = ((block.timestamp / 1 days) * 1 days) + 1 days;
+        if (_newDelegationStarts < locked[delegator_].end) {
+            voteDelegation.delegate(delegator_, delegatee_);
         }
     }
 
@@ -699,7 +708,7 @@ contract VeHemi is
         if (from_ != address(0)) {
             if (!isTransferable(tokenId_)) revert NotTransferable();
             _updateReward(tokenId_);
-            voteDelegation.delegate(tokenId_, to_);
+            _delegate(tokenId_, to_);
         }
 
         super.transferFrom(from_, to_, tokenId_);
