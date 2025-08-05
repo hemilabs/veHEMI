@@ -18,9 +18,9 @@ openzeppelin-contracts-upgradeable = "5.4.0"
 runs = 1000
 
 [profile.default.invariant]
-runs = 1000
-depth = 15
-fail_on_revert = false
+runs = 1024
+depth = 128
+fail_on_revert = true
 
 # Add custom scripts
 [profile.default.scripts]
