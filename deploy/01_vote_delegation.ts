@@ -2,11 +2,12 @@ import { DeployFunction } from "hardhat-deploy/types";
 import { Addresses } from "../helpers/addresses";
 import { saveForSafeBatchExecution } from "../helpers/safe";
 
+const VOTE_DELEGATION = "VeHemiVoteDelegation";
 const VE_HEMI = "VeHemi";
 
 const func: DeployFunction = async function (hre) {
     const { deployments, getNamedAccounts, network } = hre;
-    const { deploy, catchUnknownSigner } = deployments;
+    const { deploy, catchUnknownSigner, get, execute } = deployments;
     const { deployer } = await getNamedAccounts();
     // Revert if not on chain ID 43111 (Hemi) or 31337 (Localhost)
     if (network.config.chainId !== 43111 && network.config.chainId !== 31337) {
@@ -14,12 +15,14 @@ const func: DeployFunction = async function (hre) {
             `This deployment script is only for Hemi and Localhost. Current chain ID: ${network.config.chainId}`
         );
     }
+    const { address: veHemiAddress } = await get(VE_HEMI);
+    console.log("veHemiAddress", veHemiAddress);
 
     const deployFunction = () =>
-        deploy(VE_HEMI, {
+        deploy(VOTE_DELEGATION, {
             from: deployer,
             log: true,
-            args: [Addresses.Hemi.HEMI_TOKEN],
+            args: [veHemiAddress],
             proxy: {
                 // Hardhat-deploy will deploy these proxy-related contracts:
                 // ProxyAdmin: https://github.com/wighawag/hardhat-deploy/blob/v1.0.4/solc_0.8/openzeppelin/proxy/transparent/ProxyAdmin.sol
@@ -29,7 +32,7 @@ const func: DeployFunction = async function (hre) {
                 execute: {
                     init: {
                         methodName: "initialize",
-                        args: [deployer]
+                        args: []
                     }
                 }
             }
@@ -40,7 +43,18 @@ const func: DeployFunction = async function (hre) {
     if (multiSigDeployTx) {
         await saveForSafeBatchExecution(multiSigDeployTx);
     }
+    // update vote delegation
+    const doExecute = async () => {
+        const { address: voteDelegationAddress } = await get(VOTE_DELEGATION);
+        return execute(VE_HEMI, { from: deployer, log: true }, "updateVoteDelegation", voteDelegationAddress);
+    };
+
+    const updateVoteDelegation = await catchUnknownSigner(doExecute, { log: true });
+
+    if (updateVoteDelegation) {
+        await saveForSafeBatchExecution(updateVoteDelegation);
+    }
 };
 
-func.tags = [VE_HEMI];
+func.tags = [VOTE_DELEGATION];
 export default func;
