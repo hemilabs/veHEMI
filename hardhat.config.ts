@@ -11,6 +11,7 @@ const config: HardhatUserConfig = {
     defaultNetwork: "hardhat",
     networks: {
         localhost: {
+            chainId: 31337,
             accounts,
             saveDeployments: true,
             autoImpersonate: true
@@ -43,7 +44,8 @@ const config: HardhatUserConfig = {
             optimizer: {
                 enabled: true,
                 runs: 200
-            }
+            },
+            evmVersion: "cancun"
         }
     },
     paths: {

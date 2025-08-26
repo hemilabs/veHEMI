@@ -11,7 +11,9 @@
         "lint:fix": "solhint 'src/**/*.sol' --fix",
         "check": "forge build && npm run lint && npm run format:check",
         "test": "forge test",
-        "test:gas": "forge test --gas-report"
+        "test:gas": "forge test --gas-report",
+        "verify": "hardhat etherscan-verify",
+        "verify:hemi": "hardhat etherscan-verify --network hemi --api-url https://explorer.hemi.xyz/api"
     },
     "devDependencies": {
         "@nomicfoundation/hardhat-foundry": "1.2.0",
