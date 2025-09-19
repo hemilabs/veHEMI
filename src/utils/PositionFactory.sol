@@ -25,10 +25,19 @@ contract PositionFactory is Ownable2Step {
         address indexed user_,
         uint256 amount_,
         uint256 duration_,
-        bool transferable_,
-        bool forfeitable_,
         Status status
     );
+    event PositionCreated(
+        bytes32 indexed hash,
+        address indexed user_,
+        uint256 amount_,
+        uint256 duration_,
+        bool transferable_,
+        bool forfeitable_
+    );
+
+    error PositionCreatedAlready();
+    error InvalidArrays();
 
     constructor(address owner_) Ownable(owner_) {}
 
@@ -39,63 +48,41 @@ contract PositionFactory is Ownable2Step {
         bool transferable_,
         bool forfeitable_
     ) external {
-        bytes32 _hash = keccak256(
-            abi.encodePacked(user_, amount_, duration_, transferable_, forfeitable_)
-        );
+        bytes32 _hash = keccak256(abi.encodePacked(user_, amount_, duration_));
 
         Status _status = created[_hash];
 
-        if (_status != Status.PENDING) {
-            return;
-        }
+        if (_status != Status.PENDING) revert PositionCreatedAlready();
 
         hemi.safeTransferFrom(msg.sender, address(this), amount_);
         hemi.forceApprove(address(veHemi), amount_);
         veHemi.createLockFor(amount_, duration_, user_, transferable_, forfeitable_);
 
         created[_hash] = Status.CREATED;
+
+        emit PositionCreated(_hash, user_, amount_, duration_, transferable_, forfeitable_);
     }
 
     function updateStatus(
         address[] calldata users_,
         uint256[] calldata amounts_,
         uint256[] calldata durations_,
-        bool[] calldata transferables_,
-        bool[] calldata forfeitables_,
         Status status_
     ) external onlyOwner {
         uint256 _length = users_.length;
 
-        require(
-            _length == amounts_.length &&
-                _length == durations_.length &&
-                _length == transferables_.length &&
-                _length == forfeitables_.length,
-            "INVALID_LENGTH"
-        );
+        if (_length != amounts_.length || _length != durations_.length) revert InvalidArrays();
 
         for (uint256 i; i < _length; ++i) {
             uint256 _amount = amounts_[i];
             uint256 _duration = durations_[i];
             address _user = users_[i];
-            bool _transferable = transferables_[i];
-            bool _forfeitable = forfeitables_[i];
 
-            bytes32 _hash = keccak256(
-                abi.encodePacked(_user, _amount, _duration, _transferable, _forfeitable)
-            );
+            bytes32 _hash = keccak256(abi.encodePacked(_user, _amount, _duration));
 
             created[_hash] = status_;
 
-            emit StatusUpdated(
-                _hash,
-                _user,
-                _amount,
-                _duration,
-                _transferable,
-                _forfeitable,
-                status_
-            );
+            emit StatusUpdated(_hash, _user, _amount, _duration, status_);
         }
     }
 }
