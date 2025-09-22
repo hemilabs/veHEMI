@@ -36,7 +36,7 @@ contract PositionFactory is Ownable2Step {
         bool forfeitable_
     );
 
-    error PositionCreatedAlready();
+    error PositionCreatedAlready(address user_, uint256 amount_, uint256 duration_);
     error InvalidArrays();
 
     constructor(address owner_) Ownable(owner_) {}
@@ -52,7 +52,7 @@ contract PositionFactory is Ownable2Step {
 
         Status _status = created[_hash];
 
-        if (_status != Status.PENDING) revert PositionCreatedAlready();
+        if (_status != Status.PENDING) revert PositionCreatedAlready(user_, amount_, duration_);
 
         hemi.safeTransferFrom(msg.sender, address(this), amount_);
         hemi.forceApprove(address(veHemi), amount_);
@@ -67,7 +67,8 @@ contract PositionFactory is Ownable2Step {
         address[] calldata users_,
         uint256[] calldata amounts_,
         uint256[] calldata durations_,
-        Status status_
+        Status status_,
+        bool revertIfCreated_
     ) external onlyOwner {
         uint256 _length = users_.length;
 
@@ -79,7 +80,8 @@ contract PositionFactory is Ownable2Step {
             address _user = users_[i];
 
             bytes32 _hash = keccak256(abi.encodePacked(_user, _amount, _duration));
-
+            if (revertIfCreated_ && created[_hash] == Status.CREATED)
+                revert PositionCreatedAlready(_user, _amount, _duration);
             created[_hash] = status_;
 
             emit StatusUpdated(_hash, _user, _amount, _duration, status_);

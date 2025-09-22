@@ -20,7 +20,7 @@ const FILE_PATH = "POSITIONS.csv";
 const STATUS_BATCH_SIZE = 1000; // Each status update costs ~30k gas, so 1000 should fit in a block
 const RPC_URL = "https://rpc.hemi.network/rpc";
 const HEMI_TOKEN_ADDRESS = "0x99e3dE3817F6081B2568208337ef83295b7f591D";
-const POSITION_FACTORY_ADDRESS = ""; // TODO
+const POSITION_FACTORY_ADDRESS = "0xBFf8293Bafb943BE783d01f5C34d5382C2EeD90F";
 
 const LOCAL_PRIVATE_KEY = "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"; // hardhat/anvil account[0]
 const LOCAL_RPC_URL = "http://localhost:8545";
@@ -80,7 +80,7 @@ const whitelist = async (rows: CsvRow[], factory: PositionFactory) => {
             forfeitables.push(forfeitable === "true");
         }
 
-        const tx = await factory.updateStatus(users, amounts, durations, Status.PENDING);
+        const tx = await factory.updateStatus(users, amounts, durations, Status.PENDING, true);
         console.log(`Batch ${i++} transaction hash: ${tx.hash}`);
         await tx.wait(2);
     }
