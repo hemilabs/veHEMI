@@ -13,7 +13,8 @@
         "test": "forge test",
         "test:gas": "forge test --gas-report",
         "verify": "hardhat etherscan-verify",
-        "verify:hemi": "hardhat etherscan-verify --network hemi --api-url https://explorer.hemi.xyz/api"
+        "verify:hemi": "hardhat etherscan-verify --network hemi --api-url https://explorer.hemi.xyz/api",
+        "positions:create": "npx ts-node scripts/positions-factory.ts"
     },
     "devDependencies": {
         "@nomicfoundation/hardhat-foundry": "1.2.0",
