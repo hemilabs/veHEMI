@@ -82,7 +82,7 @@ const whitelist = async (rows: CsvRow[], factory: PositionFactory) => {
 
         const tx = await factory.updateStatus(users, amounts, durations, Status.PENDING, true);
         console.log(`Batch ${i++} transaction hash: ${tx.hash}`);
-        await tx.wait(2);
+        await tx.wait(1);
     }
 };
 
@@ -92,7 +92,7 @@ const create = async (rows: CsvRow[], factory: PositionFactory, wallet: Wallet) 
     const hemi = new ethers.Contract(HEMI_TOKEN_ADDRESS, IERC20__factory.abi, wallet);
     const approveMaxTx = await hemi.approve(factory.target, ethers.MaxUint256);
     console.log("Hemi infinity approval transaction hash:", approveMaxTx.hash);
-    await approveMaxTx.wait(2);
+    await approveMaxTx.wait(1);
 
     let i = 1;
     for (const { wallet, amount, duration, transferable, forfeitable } of rows) {
@@ -124,12 +124,12 @@ const create = async (rows: CsvRow[], factory: PositionFactory, wallet: Wallet) 
             forfeitable === "true"
         );
         console.log("Transaction hash:", tx.hash);
-        await tx.wait(2);
+        await tx.wait(1);
     }
 
     const approveZeroTx = await hemi.approve(factory.target, 0);
     console.log("\nHemi remove approval transaction hash:", approveZeroTx.hash);
-    await approveZeroTx.wait(2);
+    await approveZeroTx.wait(1);
 };
 
 /**
@@ -143,16 +143,21 @@ const create = async (rows: CsvRow[], factory: PositionFactory, wallet: Wallet) 
  * - Run `npx hardhat compile` when changing the smart contract
  */
 const main = async () => {
+    console.log("🚀 Starting positions-factory script...");
+    console.log(`NODE_ENV: ${NODE_ENV}`);
+    console.log(`FILE_PATH: ${FILE_PATH}`);
+
     let provider: JsonRpcProvider;
     let wallet: Wallet;
     let factory: PositionFactory;
 
     if (NODE_ENV == "local") {
+        console.log("🔧 Running in LOCAL mode");
         provider = new ethers.JsonRpcProvider(LOCAL_RPC_URL);
         wallet = new ethers.Wallet(LOCAL_PRIVATE_KEY, provider);
         factory = await new PositionFactory__factory(wallet).deploy(wallet);
         const deploymentTx = factory.deploymentTransaction()!;
-        await deploymentTx.wait(2);
+        await deploymentTx.wait(1); // Wait for 1 confirmation instead of 2
 
         // deal 1M HEMI to our wallet
         const slot = 0; // HEMI balance slot
@@ -160,7 +165,16 @@ const main = async () => {
         const index = stripZerosLeft(hexlify(solidityPackedKeccak256(["uint256", "uint256"], [wallet.address, slot])));
         const value = hexlify(toBeHex(balance, 32));
         await provider.send("hardhat_setStorageAt", [HEMI_TOKEN_ADDRESS, index, value]);
+        console.log("✅ Local setup complete - deployed factory and funded wallet");
     } else {
+        console.log("🌐 Running in PRODUCTION mode");
+        console.log(`RPC_URL: ${RPC_URL}`);
+        console.log(`POSITION_FACTORY_ADDRESS: ${POSITION_FACTORY_ADDRESS}`);
+
+        if (!PRIVATE_KEY) {
+            throw new Error("PRIVATE_KEY environment variable is required for production mode");
+        }
+
         provider = new ethers.JsonRpcProvider(RPC_URL);
         wallet = new ethers.Wallet(PRIVATE_KEY!, provider);
         factory = new ethers.Contract(
@@ -168,12 +182,17 @@ const main = async () => {
             PositionFactory__factory.abi,
             wallet
         ) as PositionFactory & Contract;
+        console.log("✅ Production setup complete");
     }
 
+    console.log(`📖 Reading CSV file: ${FILE_PATH}`);
     const rows = (await readCsv(FILE_PATH)) as CsvRow[];
+    console.log(`📊 Found ${rows.length} positions to process`);
 
     await whitelist(rows, factory);
     await create(rows, factory, wallet);
+
+    console.log("🎉 Script completed successfully!");
 };
 
 main().catch(console.error);
