@@ -78,6 +78,12 @@ const whitelist = async (rows: CsvRow[], factory: PositionFactory) => {
             durations.push(BigInt(duration));
             transferables.push(transferable === "true");
             forfeitables.push(forfeitable === "true");
+            const hash = ethers.keccak256(
+                ethers.solidityPacked(["address", "uint256", "uint256"], [wallet, BigInt(amount), BigInt(duration)])
+            );
+            console.log("Hash:", hash);
+            let s = Number(await factory.created(hash)) as Status;
+            console.log("Status:", s);
         }
 
         const tx = await factory.updateStatus(users, amounts, durations, Status.PENDING, true);
@@ -88,6 +94,7 @@ const whitelist = async (rows: CsvRow[], factory: PositionFactory) => {
 
 const create = async (rows: CsvRow[], factory: PositionFactory, wallet: Wallet) => {
     console.log(`\n=== Creating veHemi positions... ===`);
+    await new Promise((resolve) => setTimeout(resolve, 1000));
 
     const hemi = new ethers.Contract(HEMI_TOKEN_ADDRESS, IERC20__factory.abi, wallet);
     const approveMaxTx = await hemi.approve(factory.target, ethers.MaxUint256);
@@ -96,6 +103,7 @@ const create = async (rows: CsvRow[], factory: PositionFactory, wallet: Wallet) 
 
     let i = 1;
     for (const { wallet, amount, duration, transferable, forfeitable } of rows) {
+        await new Promise((resolve) => setTimeout(resolve, 2000));
         const hash = ethers.keccak256(
             ethers.solidityPacked(["address", "uint256", "uint256"], [wallet, BigInt(amount), BigInt(duration)])
         );
@@ -104,7 +112,8 @@ const create = async (rows: CsvRow[], factory: PositionFactory, wallet: Wallet) 
             `\n[${i++}/${rows.length}] Creating position for wallet ${wallet} with amount ${amount} and duration ${duration}...`
         );
 
-        const s = Number(await factory.created(hash)) as Status;
+        let s = Number(await factory.created(hash)) as Status;
+        console.log("Status:", s);
 
         if (s == Status.CREATED) {
             console.log(`Position was already created. you can workaround this by adding 1 wei to the amount.`);
