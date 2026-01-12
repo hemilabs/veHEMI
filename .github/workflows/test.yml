@@ -16,12 +16,12 @@ jobs:
         name: Foundry project
         runs-on: ubuntu-latest
         steps:
-            - uses: actions/checkout@v4
+            - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
               with:
                   submodules: recursive
 
             - name: Use nvmrc
-              uses: actions/setup-node@v4
+              uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
               with:
                   node-version-file: ".nvmrc"
 
@@ -29,7 +29,7 @@ jobs:
               run: npm i
 
             - name: Install Foundry
-              uses: foundry-rs/foundry-toolchain@v1
+              uses: foundry-rs/foundry-toolchain@8b0419c685ef46cb79ec93fbdc131174afceb730 # v1.6.0
 
             - name: Show Forge version
               run: |
