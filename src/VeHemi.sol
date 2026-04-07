@@ -32,6 +32,7 @@ contract VeHemi is
     uint256 private constant SIX_DAYS = YEAR / (12 * 5); // 1 year = 12 month, 1 month = 30 day
     uint256 private constant MAX_TIME = 4 * YEAR; // 4 years
     uint256 private constant MULTIPLIER = 1 ether;
+    uint256 private constant MIN_LOCK_FOR_AMOUNT = 10e18; // 10 HEMI
     string public constant version = "1.0.0";
     uint8 public constant decimals = 18;
 
@@ -50,6 +51,7 @@ contract VeHemi is
     error NotForfeitAdmin();
     error OwnerIsZero();
     error NotTransferable();
+    error AmountTooSmallForLockFor();
 
     constructor(address hemi_) {
         if (hemi_ == address(0)) revert AddressIsNull();
@@ -64,7 +66,7 @@ contract VeHemi is
      */
     function initialize(address owner_) external initializer {
         if (owner_ == address(0)) revert OwnerIsZero();
-        __ERC721_init("veHemi", "veHemi");
+        __ERC721_init("veHEMI", "veHEMI");
         __Ownable_init_unchained(owner_);
         globalPointHistory[0].blockNumber = block.number.toUint64();
         globalPointHistory[0].timestamp = block.timestamp.toUint64();
@@ -142,6 +144,7 @@ contract VeHemi is
         bool forfeitable_
     ) external nonReentrant returns (uint256 _tokenId) {
         if (account_ == address(0)) revert AddressIsNull();
+        if (amount_ < MIN_LOCK_FOR_AMOUNT) revert AmountTooSmallForLockFor();
         _tokenId = _createLock(amount_, lockDuration_, account_, transferable_, forfeitable_);
     }
 
@@ -564,7 +567,15 @@ contract VeHemi is
         _mint(account_, _tokenId);
 
         _depositFor(_tokenId, amount_, unlockTime.toUint64(), locked[_tokenId]);
-        _delegate(_tokenId, account_);
+
+        // If the owner has an auto-delegate set (via adapter.delegate), use that.
+        // Otherwise self-delegate as usual. try/catch ensures backwards
+        // compatibility if voteDelegation hasn't been upgraded yet.
+        address _autoDel;
+        try voteDelegation.autoDelegate(account_) returns (address result) {
+            _autoDel = result;
+        } catch {}
+        _delegate(_tokenId, _autoDel != address(0) ? _autoDel : account_);
 
         address _sender = _msgSender();
 
@@ -630,10 +641,9 @@ contract VeHemi is
     }
 
     function _delegate(uint256 delegator_, address delegatee_) internal {
-        // Delegation changes are effective only after 1 day. If lock is ending before that no need to delegate
-        // Example: User is increasing amount just few hours before lock ends.
-        // NFT is transferred just few hours before lock ends.
-        uint256 _newDelegationStarts = ((block.timestamp / 1 days) * 1 days) + 1 days;
+        // Delegation changes take effect at the next epoch boundary. If lock ends before that, skip delegation.
+        // Example: User is increasing amount or transferring just before lock ends.
+        uint256 _newDelegationStarts = ((block.timestamp / 1 hours) * 1 hours) + 1 hours;
         if (_newDelegationStarts < locked[delegator_].end) {
             voteDelegation.delegate(delegator_, delegatee_);
         }
@@ -708,7 +718,13 @@ contract VeHemi is
         if (from_ != address(0)) {
             if (!isTransferable(tokenId_)) revert NotTransferable();
             _updateReward(tokenId_);
-            _delegate(tokenId_, to_);
+            // If the recipient has an auto-delegate set, delegate to that address.
+            // try/catch ensures backwards compatibility during upgrades.
+            address _autoDel;
+            try voteDelegation.autoDelegate(to_) returns (address result) {
+                _autoDel = result;
+            } catch {}
+            _delegate(tokenId_, _autoDel != address(0) ? _autoDel : to_);
         }
 
         super.transferFrom(from_, to_, tokenId_);

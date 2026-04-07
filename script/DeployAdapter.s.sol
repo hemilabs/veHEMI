@@ -89,8 +89,10 @@ contract DeployAdapter is Script {
             ^ bytes4(keccak256("delegateBySig(address,uint256,uint256,uint8,bytes32,bytes32)"));
         require(adapter.supportsInterface(ivotesId), "IVotes interface not supported");
         require(adapter.supportsInterface(0x01ffc9a7), "ERC165 interface not supported");
+        require(adapter.supportsInterface(0xda287a1d), "IERC6372 interface not supported");
         console.log("ERC-165 IVotes:    OK");
         console.log("ERC-165 ERC165:    OK");
+        console.log("ERC-165 IERC6372:  OK");
 
         console.log("");
         console.log("=== DEPLOYMENT COMPLETE ===");
@@ -107,5 +109,19 @@ contract DeployAdapter is Script {
         console.log("");
         console.log("Spot-check a known holder's voting power:");
         console.log("  cast call", address(adapter), "\"getVotes(address)\" <HOLDER_ADDRESS> --rpc-url https://rpc.hemi.network");
+        console.log("");
+        console.log("=== IMPORTANT: SET TRUSTED ADAPTER ===");
+        console.log("");
+        console.log("The VeHemi owner (Gnosis Safe) must call setTrustedAdapter on");
+        console.log("VeHemiVoteDelegation so that adapter.delegate() works.");
+        console.log("Without this step, users cannot delegate through the Aragon UI.");
+        console.log("");
+        console.log("Propose via Gnosis Safe UI:");
+        console.log("  To:       0xBF5b2f370370494B8A4575962512dd3ea7c29e2d");
+        console.log("  Function: setTrustedAdapter(address)");
+        console.log("  Param:   ", address(adapter));
+        console.log("");
+        console.log("Calldata:");
+        console.log("  cast calldata \"setTrustedAdapter(address)\"", address(adapter));
     }
 }

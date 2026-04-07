@@ -53,7 +53,7 @@ contract InvariantTest is Test {
     }
 
     function invariant_votingPower() public {
-        vm.warp(block.timestamp + ((block.timestamp / 1 days) * 1 days) + 1 days); // warp to the next checkpoint
+        vm.warp(((block.timestamp / 1 hours) * 1 hours) + 1 hours); // warp to the next checkpoint
 
         uint256 sumOfBalances;
         uint256 sumOfVotes;

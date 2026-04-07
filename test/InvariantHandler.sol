@@ -18,6 +18,7 @@ contract InvariantHandler is Test {
     uint256 private constant SIX_DAYS = MONTH / 5;
 
     uint256 private constant MIN_AMOUNT = 0.000001e18;
+    uint256 private constant MIN_LOCK_FOR_AMOUNT = 10e18;
     uint256 private constant MAX_AMOUNT = 1_000e18;
 
     uint256 private constant MIN_DURATION = 2 * SIX_DAYS;
@@ -74,7 +75,7 @@ contract InvariantHandler is Test {
     }
 
     function createLockFor(uint256 amount, uint256 duration) public returns (uint256 tokenId) {
-        amount = bound(amount, MIN_AMOUNT, MAX_AMOUNT);
+        amount = bound(amount, MIN_LOCK_FOR_AMOUNT, MAX_AMOUNT);
         duration = bound(duration, MIN_DURATION, MAX_DURATION / 2);
 
         vm.startPrank(veHemi.owner());
@@ -192,7 +193,7 @@ contract InvariantHandler is Test {
 
             IVeHemi.LockedBalance memory _lock = veHemi.getLockedBalance(id);
 
-            uint256 _nextCheckpoint = ((block.timestamp / 1 days) * 1 days) + 1 days;
+            uint256 _nextCheckpoint = ((block.timestamp / 1 hours) * 1 hours) + 1 hours;
 
             if (_nextCheckpoint >= _lock.end) continue;
 

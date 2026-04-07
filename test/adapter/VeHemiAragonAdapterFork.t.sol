@@ -129,7 +129,7 @@ contract VeHemiAragonAdapterForkTest is Test {
     uint8 constant VOTE_NO = 3;
 
     uint256 private constant YEAR = 365.25 days;
-    uint256 private constant ONE_DAY = 1 days;
+    uint256 private constant CHECKPOINT_INTERVAL = 1 hours;
 
     MockERC20 hemiToken;
     VeHemi veHemi;
@@ -167,6 +167,7 @@ contract VeHemiAragonAdapterForkTest is Test {
         veHemi.updateVoteDelegation(delegation);
 
         adapter = new VeHemiAragonAdapter(address(veHemi));
+        delegation.setTrustedAdapter(address(adapter));
 
         // Create locks
         _createLock(alice, 10e18, 4 * YEAR);
@@ -178,9 +179,9 @@ contract VeHemiAragonAdapterForkTest is Test {
         _delegateToSelf(bob);
         _delegateToSelf(carol);
 
-        // Warp past next day boundary so delegations are active
-        uint256 nextDay = ((block.timestamp / ONE_DAY) * ONE_DAY) + ONE_DAY;
-        vm.warp(nextDay + 1);
+        // Warp past next epoch boundary so delegations are active
+        uint256 nextEpoch = ((block.timestamp / CHECKPOINT_INTERVAL) * CHECKPOINT_INTERVAL) + CHECKPOINT_INTERVAL;
+        vm.warp(nextEpoch + 1);
     }
 
     function _createLock(address account, uint256 amount, uint256 duration) internal {
@@ -346,6 +347,7 @@ contract VeHemiAragonAdapterForkTest is Test {
         // Execute
         assertTrue(tv.canExecute(proposalId), "proposal should be executable");
         tv.execute(proposalId);
+        assertFalse(tv.canExecute(proposalId), "proposal should not be executable after execution");
     }
 
     function test_fork_voteAndExecute_withAction() public {
@@ -390,6 +392,7 @@ contract VeHemiAragonAdapterForkTest is Test {
             sendAmount,
             "recipient should receive ETH"
         );
+        assertFalse(tv.canExecute(proposalId), "proposal should not be executable after execution");
     }
 
     function test_fork_proposalDefeated_noQuorum() public {
@@ -461,5 +464,224 @@ contract VeHemiAragonAdapterForkTest is Test {
         uint256 snapshot = block.timestamp - 1;
         uint256 tvp = tv.totalVotingPower(snapshot);
         assertGt(tvp, 0, "timestamp-based totalVotingPower should work");
+    }
+
+    /// @notice End-to-end test of the exact Aragon UI user flow:
+    ///         adapter.delegate(BOB) -> warp -> create proposal -> BOB votes
+    ///         with Alice's delegated power -> proposal passes.
+    ///
+    ///         This exercises the code path that real Aragon users trigger when
+    ///         they click "Delegate" in the Aragon UI, which calls the IVotes
+    ///         delegate(address) on the voting token (our adapter).  The adapter
+    ///         routes through delegateAllFor, which requires trustedAdapter to be
+    ///         set — a prerequisite that the existing fork tests never configured.
+    function test_fork_adapterDelegateAndVote() public {
+        vm.skip(!forkEnabled);
+
+        // trustedAdapter is already set in setUp
+
+        // ── 1. Alice delegates ALL her voting power to Bob via the adapter ──
+        //       This is the exact call the Aragon UI makes.
+        vm.prank(alice);
+        adapter.delegate(bob);
+
+        // ── 3. Warp past epoch boundary so the new delegation is active ──
+        uint256 nextEpoch = ((block.timestamp / CHECKPOINT_INTERVAL) * CHECKPOINT_INTERVAL) + CHECKPOINT_INTERVAL;
+        vm.warp(nextEpoch + 1);
+
+        // Sanity: Bob should now have his own power + Alice's delegated power
+        uint256 bobPower = adapter.getPastVotes(bob, block.timestamp - 1);
+        uint256 alicePower = adapter.getPastVotes(alice, block.timestamp - 1);
+        assertGt(bobPower, 0, "bob should have voting power");
+        assertEq(alicePower, 0, "alice should have zero power (delegated away)");
+
+        // ── 4. Create DAO + proposal ──
+        (, address plugin) = _createDao();
+        ITokenVoting tv = ITokenVoting(plugin);
+
+        Action[] memory actions = new Action[](0);
+        vm.prank(bob);
+        uint256 proposalId = tv.createProposal(
+            "", actions, 0, 0, 0, VOTE_NONE, false
+        );
+
+        // ── 5. Bob votes Yes (with Alice's delegated power) ──
+        vm.prank(bob);
+        tv.vote(proposalId, VOTE_YES, false);
+
+        // Carol votes Yes too (to clear participation threshold easily)
+        vm.prank(carol);
+        tv.vote(proposalId, VOTE_YES, false);
+
+        // ── 6. Warp past minDuration and verify execution ──
+        vm.warp(block.timestamp + 3601);
+
+        assertTrue(
+            tv.canExecute(proposalId),
+            "proposal should pass: bob voted with alice's delegated power + carol voted"
+        );
+        tv.execute(proposalId);
+    }
+
+    /// @notice Verifies that Bob alone (with only Alice's delegation, no Carol)
+    ///         can pass a proposal, proving the aggregate power is counted.
+    function test_fork_adapterDelegate_singleVoterAggregatedPower() public {
+        vm.skip(!forkEnabled);
+
+        // Alice delegates to Bob
+        vm.prank(alice);
+        adapter.delegate(bob);
+
+        // Carol also delegates to Bob — so Bob has 3x the power
+        vm.prank(carol);
+        adapter.delegate(bob);
+
+        // Warp past epoch boundary
+        uint256 nextEpoch = ((block.timestamp / CHECKPOINT_INTERVAL) * CHECKPOINT_INTERVAL) + CHECKPOINT_INTERVAL;
+        vm.warp(nextEpoch + 1);
+
+        // Bob should now hold all three positions' power
+        uint256 bobPower = adapter.getPastVotes(bob, block.timestamp - 1);
+        assertGt(bobPower, 0, "bob should have aggregated voting power");
+
+        // Create DAO + proposal
+        (, address plugin) = _createDao();
+        ITokenVoting tv = ITokenVoting(plugin);
+
+        Action[] memory actions = new Action[](0);
+        vm.prank(bob);
+        uint256 proposalId = tv.createProposal(
+            "", actions, 0, 0, 0, VOTE_NONE, false
+        );
+
+        // Only Bob votes — but he has 100% of the voting power
+        vm.prank(bob);
+        tv.vote(proposalId, VOTE_YES, false);
+
+        // Warp past minDuration
+        vm.warp(block.timestamp + 3601);
+
+        // Bob alone should be sufficient: 100% participation, 100% support
+        assertTrue(
+            tv.canExecute(proposalId),
+            "bob alone with all delegated power should pass the proposal"
+        );
+        tv.execute(proposalId);
+    }
+
+    // ─── Item 4: Non-member vote rejection ──────────────────────────────
+
+    function test_fork_nonMemberCannotVote() public {
+        vm.skip(!forkEnabled);
+
+        (, address plugin) = _createDao();
+        ITokenVoting tv = ITokenVoting(plugin);
+
+        // Create proposal
+        Action[] memory actions = new Action[](0);
+        vm.prank(alice);
+        uint256 proposalId = tv.createProposal(
+            "", actions, 0, 0, 0, VOTE_NONE, false
+        );
+
+        // Non-member (no veHEMI, no delegation) tries to vote
+        address nobody = makeAddr("nobody");
+        assertFalse(tv.isMember(nobody), "nobody should not be a member");
+
+        vm.prank(nobody);
+        vm.expectRevert();
+        tv.vote(proposalId, VOTE_YES, false);
+    }
+
+    // ─── Item 5: minProposerVotingPower gate ────────────────────────────
+
+    function _createDaoWithProposerThreshold()
+        internal
+        returns (address dao, address tokenVotingPlugin)
+    {
+        VotingSettings memory votingSettings = VotingSettings({
+            votingMode: 0,
+            supportThreshold: 500_000,
+            minParticipation: 150_000,
+            minDuration: 3600,
+            minProposerVotingPower: 1 // any non-zero power required
+        });
+
+        TokenSettings memory tokenSettings = TokenSettings({
+            addr: address(adapter),
+            name: "",
+            symbol: ""
+        });
+
+        MintSettings memory mintSettings = MintSettings({
+            receivers: new address[](0),
+            amounts: new uint256[](0),
+            ensureDelegationOnMint: false
+        });
+
+        TargetConfig memory targetConfig = TargetConfig({
+            target: address(0),
+            operation: 0
+        });
+
+        bytes memory pluginData = abi.encode(
+            votingSettings,
+            tokenSettings,
+            mintSettings,
+            targetConfig,
+            uint256(0),
+            bytes(""),
+            new address[](0)
+        );
+
+        PluginSettings[] memory plugins = new PluginSettings[](1);
+        plugins[0] = PluginSettings({
+            pluginSetupRef: PluginSetupRef({
+                versionTag: Tag({release: 1, build: 4}),
+                pluginSetupRepo: TOKEN_VOTING_REPO
+            }),
+            data: pluginData
+        });
+
+        DAOSettings memory daoSettings = DAOSettings({
+            trustedForwarder: address(0),
+            daoURI: "",
+            subdomain: "",
+            metadata: ""
+        });
+
+        InstalledPlugin[] memory installed;
+        (dao, installed) = IDAOFactory(DAO_FACTORY).createDao(daoSettings, plugins);
+        tokenVotingPlugin = installed[0].plugin;
+    }
+
+    function test_fork_minProposerVotingPower_memberCanPropose() public {
+        vm.skip(!forkEnabled);
+
+        (, address plugin) = _createDaoWithProposerThreshold();
+        ITokenVoting tv = ITokenVoting(plugin);
+
+        // Alice has voting power — should be able to create a proposal
+        Action[] memory actions = new Action[](0);
+        vm.prank(alice);
+        uint256 proposalId = tv.createProposal(
+            "", actions, 0, 0, 0, VOTE_NONE, false
+        );
+        assertTrue(proposalId != 0, "member with voting power should create proposal");
+    }
+
+    function test_fork_minProposerVotingPower_nonMemberCannotPropose() public {
+        vm.skip(!forkEnabled);
+
+        (, address plugin) = _createDaoWithProposerThreshold();
+        ITokenVoting tv = ITokenVoting(plugin);
+
+        // Non-member has no voting power — should be rejected
+        address nobody = makeAddr("nobody");
+        Action[] memory actions = new Action[](0);
+
+        vm.prank(nobody);
+        vm.expectRevert();
+        tv.createProposal("", actions, 0, 0, 0, VOTE_NONE, false);
     }
 }
