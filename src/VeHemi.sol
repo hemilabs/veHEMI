@@ -66,7 +66,7 @@ contract VeHemi is
      */
     function initialize(address owner_) external initializer {
         if (owner_ == address(0)) revert OwnerIsZero();
-        __ERC721_init("veHEMI", "veHEMI");
+        __ERC721_init("veHemi", "veHemi");
         __Ownable_init_unchained(owner_);
         globalPointHistory[0].blockNumber = block.number.toUint64();
         globalPointHistory[0].timestamp = block.timestamp.toUint64();

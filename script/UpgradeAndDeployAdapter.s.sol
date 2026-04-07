@@ -72,6 +72,21 @@ contract UpgradeAndDeployAdapter is Script {
         address adminOwner = abi.decode(ret3, (address));
         require(adminOwner == SAFE_OWNER, "ProxyAdmin owner mismatch");
         console.log("ProxyAdmin owner:  OK (matches Safe)");
+
+        // Verify VeHemi ownership (needed for TX3: setTrustedAdapter checks veHemi.owner())
+        (bool ok4, bytes memory ret4) = VEHEMI_PROXY.staticcall(
+            abi.encodeWithSignature("owner()")
+        );
+        require(ok4 && ret4.length == 32, "VeHemi.owner() call failed");
+        address veHemiOwner = abi.decode(ret4, (address));
+        console.log("VeHemi owner:      ", veHemiOwner);
+        if (veHemiOwner != SAFE_OWNER) {
+            console.log("WARNING: VeHemi owner is NOT the Safe!");
+            console.log("  TX3 (setTrustedAdapter) must be called by:", veHemiOwner);
+            console.log("  NOT by the Safe. Adjust your deployment plan accordingly.");
+        } else {
+            console.log("VeHemi owner:      OK (matches Safe)");
+        }
         console.log("");
 
         // ── Deploy ──
