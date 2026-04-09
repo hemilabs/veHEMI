@@ -64,7 +64,23 @@ interface IVeHemi is IERC721Enumerable {
         IRewardDistributor indexed newRewardDistributor
     );
 
-    event ForfeitAdminUpdated(address indexed oldRevokeAdmin, address indexed newRevokeAdmin);
+    event ForfeitAdminUpdated(address indexed oldForfeitAdmin, address indexed newForfeitAdmin);
+
+    // --- V2 Events ---
+    event LockedSeedingFinalized(uint256 epoch);
+    event RewardUpdateFailed(uint256 indexed tokenId);
+    event DelegationUpdateFailed(uint256 indexed delegator);
+
+    // --- Errors ---
+    // Declared in VeHemi.sol (not here) to avoid Solidity duplicate-identifier
+    // conflicts when both IVeHemi and VeHemi are imported in the same compilation unit.
+    // Errors are included in VeHemi's ABI and can be decoded from revert data.
+    //
+    // AddressIsNull, AmountIsZero, AmountTooSmall, EmptyArray, ForfeitWindowExpired,
+    // InvalidConfiguration, LockDurationTooLong, LockDurationTooShort, LockExpired,
+    // LockNotExpired, NewLockDurationNotGreater, NoExistingLock, NotForfeitAdmin,
+    // NotForfeitable, NotNonTransferrable, NotOwner, NotTransferable, OwnerIsZero,
+    // SeedingAlreadyFinalized, TokenDoesNotExist, UnsortedOrDuplicateTokenIds
 
     // --- External/Public Functions ---
     function initialize(address owner) external;
@@ -75,22 +91,41 @@ interface IVeHemi is IERC721Enumerable {
         uint256 lockDuration,
         address account,
         bool transferable,
-        bool revokable
+        bool forfeitable
     ) external returns (uint256 tokenId);
     function increaseAmount(uint256 tokenId, uint256 amount) external;
     function increaseUnlockTime(uint256 tokenId, uint256 lockDuration) external;
     function withdraw(uint256 tokenId) external;
+    function forfeit(uint256 tokenId) external;
     function getUserPoint(uint256 tokenId, uint256 epoch) external view returns (UserPoint memory);
     function getGlobalPoint(uint256 epoch) external view returns (Point memory);
     function getLockedBalance(uint256 tokenId) external view returns (LockedBalance memory);
+    function isTransferable(uint256 tokenId) external view returns (bool);
     function totalLocked() external view returns (uint256);
     function epoch() external view returns (uint256);
     function userPointEpoch(uint256 tokenId) external view returns (uint256);
+    function nextTokenId() external view returns (uint256);
+    function provider(uint256 tokenId) external view returns (address);
+    function transferableAfter(uint256 tokenId) external view returns (uint256);
+    function forfeitable(uint256 tokenId) external view returns (bool);
+    function forfeitAdmin() external view returns (address);
+    function slopeChanges(uint256 timestamp) external view returns (int128);
     function balanceOfNFT(uint256 tokenId) external view returns (uint256);
     function balanceOfNFTAt(uint256 tokenId, uint256 timestamp) external view returns (uint256);
     function balanceAndOwnerOfNFTAt(
         uint256 tokenId,
         uint256 timestamp
     ) external view returns (uint256, address);
+    function totalVeHemiSupply() external view returns (uint256);
     function totalVeHemiSupplyAt(uint256 timestamp_) external view returns (uint256);
+
+    // --- V2 Locked + Forfeitable Curve Functions ---
+    function seedAndFinalizeLockedPositions(uint256[] calldata tokenIds) external;
+    function nonTransferableTotalVeHemiSupply() external view returns (uint256);
+    function nonTransferableTotalVeHemiSupplyAt(uint256 timestamp) external view returns (uint256);
+    function forfeitableTotalVeHemiSupply() external view returns (uint256);
+    function forfeitableTotalVeHemiSupplyAt(uint256 timestamp) external view returns (uint256);
+    function supplyBreakdown() external view returns (uint256 total, uint256 locked_, uint256 forfeitable_, uint256 transferable);
+    // lockedSeedingFinalized(), lockedSlopeChanges(uint256), and forfeitableSlopeChanges(uint256)
+    // are exposed as public state variables via VeHemiStorageV2 (auto-generated getters).
 }

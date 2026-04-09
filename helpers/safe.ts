@@ -75,7 +75,7 @@ const prepareTx = ({ to, data, value }: MultiSigTx): MetaTransactionData => {
 
 const proposeSafeTransaction = async (hre: HardhatRuntimeEnvironment, txs: MetaTransactionData[]) => {
     const chainId = BigInt(await hre.getChainId());
-    const safeAddress = Addresses.GNOSIS_SAFE;
+    const safeAddress = Addresses.Hemi.GNOSIS_SAFE;
 
     if (["hardhat", "localhost"].includes(hre.network.name)) {
         for (const tx of txs) {

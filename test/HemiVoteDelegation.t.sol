@@ -24,7 +24,7 @@ contract TestVeHemiVoteDelegation is Test {
     VeHemi public veHemi;
     MockERC20 public hemiToken;
 
-    uint256 public constant LOCK_AMOUNT = 1e18;
+    uint256 public constant LOCK_AMOUNT = 11e18;
     uint256 private constant YEAR = 365.25 days;
     uint256 private constant MONTH = YEAR / 12;
     uint256 private constant SIX_DAYS = MONTH / 5;
@@ -188,7 +188,7 @@ contract TestVeHemiVoteDelegation is Test {
         hemiToken.mint(user2, 1_000 ether);
         hemiToken.mint(ALICE, 1_000 ether);
 
-        uint256 amount = 1 ether;
+        uint256 amount = 22 ether; // must be large enough that amount/2 >= MIN_LOCK_AMOUNT (10e18)
         uint256 firstLockDuration = 2 * 365 days;
         uint256 newLockDuration = 3 * 365 days;
 
@@ -720,7 +720,7 @@ contract TestVeHemiVoteDelegation is Test {
     // Test delegation expiration
     function testDelegationExpiration() public {
         // Given - Alice has a long lock, Bill has a shorter lock
-        uint256 lockAmount = 1 ether;
+        uint256 lockAmount = 11 ether;
         (uint256 aliceTokenId, ) = _createLock(ALICE, lockAmount, 4 * 365 days);
         uint256 delegationStarts = ((block.timestamp / 1 days) * 1 days) + 1 days;
         vm.warp(delegationStarts);
@@ -728,7 +728,7 @@ contract TestVeHemiVoteDelegation is Test {
         uint256 aliceInitialVotes = hemiVoteDelegation.getVotes(ALICE);
         assertEq(aliceInitialVotes, veHemi.balanceOfNFT(aliceTokenId));
 
-        (uint256 billTokenId, ) = _createLock(BILL, 1 ether, 365 days);
+        (uint256 billTokenId, ) = _createLock(BILL, 11 ether, 365 days);
         _delegateAndWarp(billTokenId, ALICE);
 
         // When - Bill delegates to Alice
@@ -763,7 +763,7 @@ contract TestVeHemiVoteDelegation is Test {
 
     function testVoteAfterForfeit() public {
         // Given - Set up forfeit admin and create forfeitable lock for Walter
-        uint256 lockAmount = 1 ether;
+        uint256 lockAmount = 11 ether;
         address forfeitAdmin = address(0x5678);
 
         // Set up forfeit admin
@@ -796,7 +796,7 @@ contract TestVeHemiVoteDelegation is Test {
 
     function testDelegatedVotesAfterForfeit() public {
         // Given - Set up forfeit admin and create locks
-        uint256 lockAmount = 1 ether;
+        uint256 lockAmount = 11 ether;
         address forfeitAdmin = address(0x5678);
 
         // Set up forfeit admin
@@ -838,7 +838,7 @@ contract TestVeHemiVoteDelegation is Test {
 
     function testVoteAfterDelegateeLockExpire() public {
         // Given - Alice and Bill have locks, Bill delegates to Alice
-        uint256 lockAmount = 1 ether;
+        uint256 lockAmount = 11 ether;
         (uint256 aliceTokenId, ) = _createLock(ALICE, lockAmount, 365 days);
         uint256 delegationStarts = ((block.timestamp / 1 days) * 1 days) + 1 days;
         vm.warp(delegationStarts);
@@ -846,7 +846,7 @@ contract TestVeHemiVoteDelegation is Test {
         uint256 aliceInitialVotes = hemiVoteDelegation.getVotes(ALICE);
         assertEq(aliceInitialVotes, veHemi.balanceOfNFT(aliceTokenId));
 
-        (uint256 billTokenId, ) = _createLock(BILL, 1 ether, 2 * 365 days);
+        (uint256 billTokenId, ) = _createLock(BILL, 11 ether, 2 * 365 days);
         _delegateAndWarp(billTokenId, ALICE);
 
         // When - Bill delegates to Alice
@@ -961,10 +961,10 @@ contract TestVeHemiVoteDelegation is Test {
 
     // Test delegation with multiple delegators and expirations
     function testMultipleDelegatorsWithExpirations() public {
-        (uint256 billTokenId, ) = _createLock(BILL, 1 ether, 365 days);
-        (uint256 aliceTokenId, ) = _createLock(ALICE, 1 ether, 2 * 365 days);
-        (uint256 walterTokenId, ) = _createLock(WALTER, 1 ether, 3 * 365 days);
-        (uint256 delegateTokenId, uint256 delegateSlope) = _createLock(BOB, 1 ether, 4 * 365 days);
+        (uint256 billTokenId, ) = _createLock(BILL, 11 ether, 365 days);
+        (uint256 aliceTokenId, ) = _createLock(ALICE, 11 ether, 2 * 365 days);
+        (uint256 walterTokenId, ) = _createLock(WALTER, 11 ether, 3 * 365 days);
+        (uint256 delegateTokenId, uint256 delegateSlope) = _createLock(BOB, 11 ether, 4 * 365 days);
 
         vm.startPrank(BILL);
         hemiVoteDelegation.delegate(billTokenId, BOB);

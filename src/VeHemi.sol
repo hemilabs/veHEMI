@@ -2,6 +2,7 @@
 pragma solidity 0.8.29;
 
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {Ownable2StepUpgradeable} from "@openzeppelin/contracts-upgradeable/access/Ownable2StepUpgradeable.sol";
 import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
 import {IERC721} from "@openzeppelin/contracts/token/ERC721/IERC721.sol";
@@ -10,6 +11,7 @@ import {IVeHemiVoteDelegation} from "./interfaces/IVeHemiVoteDelegation.sol";
 import {ERC721EnumerableUpgradeable, ERC721Upgradeable} from "@openzeppelin/contracts-upgradeable/token/ERC721/extensions/ERC721EnumerableUpgradeable.sol";
 import {ReentrancyGuardTransientUpgradeable} from "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardTransientUpgradeable.sol";
 import {VeHemiStorageV1} from "./storage/VeHemiStorageV1.sol";
+import {VeHemiStorageV2} from "./storage/VeHemiStorageV2.sol";
 
 /**
  * @title VeHemi
@@ -19,11 +21,13 @@ contract VeHemi is
     ERC721EnumerableUpgradeable,
     Ownable2StepUpgradeable,
     ReentrancyGuardTransientUpgradeable,
-    VeHemiStorageV1
+    VeHemiStorageV1,
+    VeHemiStorageV2
 {
     using SafeCast for uint256;
     using SafeCast for int256;
     using SafeCast for int128;
+    using SafeERC20 for IERC20;
 
     IERC20 public immutable HEMI;
 
@@ -32,12 +36,14 @@ contract VeHemi is
     uint256 private constant SIX_DAYS = YEAR / (12 * 5); // 1 year = 12 month, 1 month = 30 day
     uint256 private constant MAX_TIME = 4 * YEAR; // 4 years
     uint256 private constant MULTIPLIER = 1 ether;
-    string public constant version = "1.0.0";
+    uint256 private constant MIN_LOCK_AMOUNT = 10e18; // 10 HEMI — prevents dust lock griefing
+    string public constant version = "2.0.0";
     uint8 public constant decimals = 18;
 
     // --- Errors ---
-    error AmountIsZero();
     error AddressIsNull();
+    error AmountIsZero();
+    error AmountTooSmall();
     error LockExpired();
     error LockNotExpired();
     error LockDurationTooShort();
@@ -45,11 +51,17 @@ contract VeHemi is
     error NoExistingLock();
     error NotOwner();
     error NewLockDurationNotGreater();
-    error BlockNotReached();
     error NotForfeitable();
     error NotForfeitAdmin();
     error OwnerIsZero();
     error NotTransferable();
+    error SeedingAlreadyFinalized();
+    error EmptyArray();
+    error NotNonTransferrable();
+    error UnsortedOrDuplicateTokenIds();
+    error ForfeitWindowExpired();
+    error InvalidConfiguration();
+    error TokenDoesNotExist();
 
     constructor(address hemi_) {
         if (hemi_ == address(0)) revert AddressIsNull();
@@ -72,19 +84,22 @@ contract VeHemi is
     }
 
     /**
-     * @notice Returns the current staked balance for a given NFT
+     * @notice Returns the current stake weight for a given NFT
+     * @dev Stake weight is the linearly-decaying bias: slope * (lock.end - now).
+     *      This is NOT the deposited HEMI amount — use getLockedBalance() for that.
      * @param tokenId_ The token ID
-     * @return _balance The staked balance for the NFT
+     * @return _balance The stake weight (0 if expired or non-existent)
      */
     function balanceOfNFT(uint256 tokenId_) external view returns (uint256 _balance) {
         (_balance, ) = _balanceOfNFTAt(tokenId_, block.timestamp);
     }
 
     /**
-     * @notice Returns the current staked balance for a given NFT
+     * @notice Returns the stake weight for a given NFT at a specific timestamp
+     * @dev Stake weight is the linearly-decaying bias: slope * (lock.end - timestamp).
      * @param tokenId_ The token ID
-     * @param timestamp_ timestamp
-     * @return _balance The staked balance for the NFT
+     * @param timestamp_ The timestamp to query
+     * @return _balance The stake weight at the given timestamp
      */
     function balanceOfNFTAt(
         uint256 tokenId_,
@@ -94,11 +109,13 @@ contract VeHemi is
     }
 
     /**
-     * @notice Returns the current staked balance for a given NFT
+     * @notice Returns the stake weight and recorded owner for a given NFT at a specific timestamp
+     * @dev The owner is the address recorded in the user point history at that time
+     *      (may differ from current ownerOf after transfers or burns).
      * @param tokenId_ The token ID
-     * @param timestamp_ timestamp
-     * @return _balance The staked balance for the NFT
-     * @return _owner The owner of the NFT
+     * @param timestamp_ The timestamp to query
+     * @return _balance The stake weight at the given timestamp
+     * @return _owner The owner recorded in the user point at that timestamp
      */
     function balanceAndOwnerOfNFTAt(
         uint256 tokenId_,
@@ -146,16 +163,23 @@ contract VeHemi is
     }
 
     /**
-     * @notice Forfeit a lock by admin and withdraw HEMI
+     * @notice Forfeit a lock position — callable only by the forfeit admin.
+     * @dev The locked HEMI is transferred to the forfeit admin (msg.sender), NOT the position owner.
+     *      V2: The forfeit window is bounded by transferableAfter. Once block.timestamp >= transferableAfter,
+     *      the position can no longer be forfeited (reverts ForfeitWindowExpired). This prevents punishing
+     *      users who voluntarily extended their lock past the original non-transferability term.
      * @param tokenId_ The token ID to forfeit
      */
     function forfeit(uint256 tokenId_) external nonReentrant {
         if (_msgSender() != forfeitAdmin) revert NotForfeitAdmin();
         if (!forfeitable[tokenId_]) revert NotForfeitable();
         if (locked[tokenId_].end < block.timestamp) revert LockExpired();
+        // V2: Forfeit window is bounded by transferableAfter. Once the position
+        // becomes transferable, it can no longer be forfeited — this prevents
+        // punishing users who voluntarily extend their lock past the original term.
+        if (block.timestamp >= transferableAfter[tokenId_]) revert ForfeitWindowExpired();
         _delegate(tokenId_, address(0));
         _withdraw(tokenId_);
-        delete forfeitable[tokenId_];
     }
 
     /**
@@ -198,8 +222,8 @@ contract VeHemi is
         LockedBalance memory _oldLocked = locked[tokenId_];
 
         if (amount_ == 0) revert AmountIsZero();
-        if (_oldLocked.end <= block.timestamp) revert LockExpired();
         if (_oldLocked.amount <= 0) revert NoExistingLock();
+        if (_oldLocked.end <= block.timestamp) revert LockExpired();
 
         _depositFor(tokenId_, amount_, 0, _oldLocked);
     }
@@ -218,30 +242,42 @@ contract VeHemi is
         if (_unlockTime > block.timestamp + MAX_TIME) revert LockDurationTooLong();
         if (_unlockTime <= _oldLocked.end) revert NewLockDurationNotGreater();
 
+        // V2: transferableAfter is NOT extended when the user voluntarily extends their lock.
+        // The user was promised transferability at the original unlock time, and extending the
+        // lock should not move that goalpost. After transferableAfter passes, the position:
+        //   - becomes transferable (can be traded via transferFrom)
+        //   - is no longer forfeitable (admin cannot claw it back)
+        //   - exits the locked/forfeitable subcurves (tracked in global only)
+        //   - retains its full voting power until the new lock.end
+
         _depositFor(tokenId_, 0, _unlockTime.toUint64(), _oldLocked);
     }
 
     /**
-     * @notice Check if a token is transferable based on its extraData
+     * @notice Check if a token is currently transferable
+     * @dev Returns true for: (a) positions created with transferable=true (transferableAfter == 0),
+     *      or (b) non-transferable positions whose transferableAfter timestamp has been reached.
+     *      Uses <= so the position becomes transferable AT the exact transferableAfter timestamp.
+     *      Note: returns true for non-existent/burned token IDs (transferableAfter defaults to 0).
      * @param tokenId_ The token ID
-     * @return True if the token is transferable (default), false if transfer is not allowed
+     * @return True if the token is transferable, false if still within non-transferability window
      */
     function isTransferable(uint256 tokenId_) public view returns (bool) {
-        return (transferableAfter[tokenId_] < block.timestamp);
+        return (transferableAfter[tokenId_] <= block.timestamp);
     }
 
     /**
-     * @notice Get the total supply of  veHEMI at the current timestamp
-     * @return The total amount of veHEMI currently locked
+     * @notice Get the total veHEMI stake weight at the current timestamp
+     * @return The aggregate stake weight across all positions (sum of linearly-decaying biases)
      */
     function totalVeHemiSupply() public view returns (uint256) {
         return _supplyAt(block.timestamp);
     }
 
     /**
-     * @notice Get the total supply of  veHEMI at a specific timestamp
-     * @param timestamp_ The timestamp to check total supply at
-     * @return The total amount of veHEMI  at the given timestamp
+     * @notice Get the total veHEMI stake weight at a specific timestamp
+     * @param timestamp_ The timestamp to query
+     * @return The aggregate stake weight at the given timestamp
      */
     function totalVeHemiSupplyAt(uint256 timestamp_) external view returns (uint256) {
         return _supplyAt(timestamp_);
@@ -291,6 +327,11 @@ contract VeHemi is
         _withdraw(tokenId_);
     }
 
+    /**
+     * @dev Computes the linearly-decayed stake weight for a token at a historical timestamp
+     *      by binary-searching the user point history and projecting from the nearest point.
+     *      Returns (0, address(0)) if no user point exists (epoch 0).
+     */
     function _balanceOfNFTAt(
         uint256 tokenId_,
         uint256 timestamp_
@@ -363,8 +404,19 @@ contract VeHemi is
     }
 
     /**
-     * @notice Internal function to checkpoint user and global point histories
-     * @param tokenId_ The token ID
+     * @notice Internal function to checkpoint user and global point histories.
+     * @dev V2: Maintains parallel locked and forfeitable subcurves.
+     *      - Locked curve: all non-transferrable positions (transferableAfter != 0)
+     *      - Forfeitable curve: forfeitable non-transferrable positions (strict subset of locked)
+     *      Both share the same epoch counter as the global curve.
+     *      All subcurve tracking is gated on `lockedSeedingFinalized` to prevent corruption
+     *      during the seeding window.
+     *
+     *      Stack depth is managed by:
+     *        - Moving `_initialLastPoint`, `_blockSlope`, `_lastCheckpoint` into the
+     *          catchup loop's scoping block (they are only used inside the loop).
+     *        - Extracting slope change scheduling (Phase D) into `_scheduleSlopeChanges`.
+     * @param tokenId_ The token ID (0 for external checkpoint)
      * @param oldLocked_ The previous locked balance
      * @param newLocked_ The new locked balance
      */
@@ -375,13 +427,17 @@ contract VeHemi is
     ) internal {
         Point memory _oldUserPoint;
         Point memory _newUserPoint;
-        uint256 _epoch = epoch;
-        int128 _oldDslope;
-        int128 _newDslope;
+        // V2: Curve membership flags (packed into uint8 for stack depth).
+        // Bits: [newFlags:4..7][oldFlags:0..3]. Each nibble: 0=transferable, 1=locked, 2=locked+forfeitable.
+        // oldFlags: what the position WAS (determines subcurve removal)
+        // newFlags: what the position IS NOW (determines subcurve addition)
+        uint8 _curveFlags;
+        // V2: Subcurve-specific bias deltas (differ from global when transferableAfter < lock.end)
+        int128 _oldSubcurveBias;
+        int128 _newSubcurveBias;
 
-        // Update user point history for this lock (tokenId)
+        // --- Phase A: Compute old/new user points, determine locked/forfeitable status ---
         if (tokenId_ != 0) {
-            // Old lock
             if (oldLocked_.end > block.timestamp && oldLocked_.amount > 0) {
                 _oldUserPoint.slope = oldLocked_.amount / MAX_TIME.toInt256().toInt128();
                 _oldUserPoint.bias =
@@ -389,7 +445,6 @@ contract VeHemi is
                     (oldLocked_.end - block.timestamp).toInt256().toInt128();
             }
 
-            // New lock
             if (newLocked_.end > block.timestamp && newLocked_.amount > 0) {
                 _newUserPoint.slope = newLocked_.amount / MAX_TIME.toInt256().toInt128();
                 _newUserPoint.bias =
@@ -397,15 +452,30 @@ contract VeHemi is
                     (newLocked_.end - block.timestamp).toInt256().toInt128();
             }
 
-            // Read values of scheduled changes in the slope
-            // _oldLocked.end can be in the past and in the future
-            // _newLocked.end can ONLY by in the FUTURE unless everything expired: than zeros
-            _oldDslope = slopeChanges[oldLocked_.end];
-            if (newLocked_.end != 0) {
-                if (newLocked_.end == oldLocked_.end) {
-                    _newDslope = _oldDslope;
-                } else {
-                    _newDslope = slopeChanges[newLocked_.end];
+            if (lockedSeedingFinalized && transferableAfter[tokenId_] != 0) {
+                uint256 _ta = transferableAfter[tokenId_];
+                bool _isForfeitable = forfeitable[tokenId_];
+
+                // Old flags: position was in subcurves if it had active locked data
+                // AND was still within the non-transferability window at the old state.
+                // We use the old lock's end to determine if the position was previously tracked.
+                if (oldLocked_.end > 0 && oldLocked_.amount > 0 && _ta > block.timestamp) {
+                    _curveFlags |= _isForfeitable ? 2 : 1; // old flags in low nibble
+                }
+                // New flags: position is currently in subcurves if transferableAfter > now
+                if (_ta > block.timestamp) {
+                    _curveFlags |= (_isForfeitable ? 2 : 1) << 4; // new flags in high nibble
+                }
+
+                // Subcurve-specific biases use min(lock.end, transferableAfter) as effective end.
+                // This handles the case where a user extended their lock past transferableAfter.
+                if (oldLocked_.end > block.timestamp && oldLocked_.amount > 0 && _ta > block.timestamp) {
+                    uint256 _oldEffEnd = oldLocked_.end < _ta ? oldLocked_.end : _ta;
+                    _oldSubcurveBias = _oldUserPoint.slope * (_oldEffEnd - block.timestamp).toInt256().toInt128();
+                }
+                if (newLocked_.end > block.timestamp && newLocked_.amount > 0 && _ta > block.timestamp) {
+                    uint256 _newEffEnd = newLocked_.end < _ta ? newLocked_.end : _ta;
+                    _newSubcurveBias = _newUserPoint.slope * (_newEffEnd - block.timestamp).toInt256().toInt128();
                 }
             }
         }
@@ -419,115 +489,169 @@ contract VeHemi is
             fixedBias: 0
         });
 
-        if (_epoch > 0) {
-            _lastPoint = globalPointHistory[_epoch];
-        }
-        uint256 _lastCheckpoint = _lastPoint.timestamp;
-        Point memory _initialLastPoint = Point({
-            bias: _lastPoint.bias,
-            slope: _lastPoint.slope,
-            timestamp: _lastPoint.timestamp,
-            blockNumber: _lastPoint.blockNumber,
-            amount: _lastPoint.amount,
-            fixedBias: 0
-        });
-        uint256 _blockSlope;
-        if (block.timestamp > _lastPoint.timestamp) {
-            _blockSlope =
-                (MULTIPLIER * (block.number - _lastPoint.blockNumber)) /
-                (block.timestamp - _lastPoint.timestamp);
-        }
-
-        // Go over SIX_DAYS to fill history and calculate what the current point is
+        // --- Phases B + C + epoch write ---
+        // _epoch and subcurve points scoped here to manage stack depth.
+        uint256 _writtenEpoch;
         {
-            uint256 t_i = (_lastCheckpoint / SIX_DAYS) * SIX_DAYS;
-            for (uint256 i; i < 300; ++i) {
-                // Hopefully it won't happen that this won't get used in 5 years!
-                // If it does, users will be able to withdraw but vote weight will be broken
-                t_i += SIX_DAYS; // Initial value of t_i is always larger than the ts of the last point
-                int128 d_slope;
-                if (t_i > block.timestamp) {
-                    t_i = block.timestamp;
-                } else {
-                    d_slope = slopeChanges[t_i];
+            uint256 _epoch = epoch;
+            if (_epoch > 0) {
+                _lastPoint = globalPointHistory[_epoch];
+            }
+
+            // V2: Load locked + forfeitable points (only after seeding is finalized)
+            LockedPoint memory _lastLockedPoint;
+            LockedPoint memory _lastForfeitablePoint;
+            if (_epoch > 0 && lockedSeedingFinalized) {
+                _lastLockedPoint = lockedGlobalPointHistory[_epoch];
+                _lastForfeitablePoint = forfeitableGlobalPointHistory[_epoch];
+            }
+
+            // --- Phase B: Catchup loop — fill history at SIX_DAYS boundaries ---
+            {
+                uint256 _lastCheckpoint = _lastPoint.timestamp;
+                Point memory _initialLastPoint = Point({
+                    bias: _lastPoint.bias,
+                    slope: _lastPoint.slope,
+                    timestamp: _lastPoint.timestamp,
+                    blockNumber: _lastPoint.blockNumber,
+                    amount: _lastPoint.amount,
+                    fixedBias: 0
+                });
+                uint256 _blockSlope;
+                if (block.timestamp > _lastPoint.timestamp) {
+                    _blockSlope =
+                        (MULTIPLIER * (block.number - _lastPoint.blockNumber)) /
+                        (block.timestamp - _lastPoint.timestamp);
                 }
-                _lastPoint.bias -= _lastPoint.slope * (t_i - _lastCheckpoint).toInt256().toInt128();
-                _lastPoint.slope += d_slope;
-                if (_lastPoint.bias < 0) {
-                    // This can happen
-                    _lastPoint.bias = 0;
+
+                uint256 t_i = (_lastCheckpoint / SIX_DAYS) * SIX_DAYS;
+                for (uint256 i; i < 300; ++i) {
+                    t_i += SIX_DAYS;
+                    int128 d_slope;
+                    bool _atBoundary = (t_i <= block.timestamp);
+                    if (!_atBoundary) {
+                        t_i = block.timestamp;
+                    } else {
+                        d_slope = slopeChanges[t_i];
+                    }
+
+                    // Global curve decay
+                    int128 _dt = (t_i - _lastCheckpoint).toInt256().toInt128();
+                    _lastPoint.bias -= _lastPoint.slope * _dt;
+                    _lastPoint.slope += d_slope;
+                    if (_lastPoint.bias < 0) {
+                        _lastPoint.bias = 0;
+                    }
+                    if (_lastPoint.slope < 0) {
+                        _lastPoint.slope = 0;
+                    }
+
+                    // V2: Locked + forfeitable curve decay (parallel tracking)
+                    // Slope changes read inline (no temp vars) to avoid stack-too-deep.
+                    if (lockedSeedingFinalized) {
+                        _lastLockedPoint.bias -= _lastLockedPoint.slope * _dt;
+                        if (_atBoundary) _lastLockedPoint.slope += lockedSlopeChanges[t_i];
+                        if (_lastLockedPoint.bias < 0) _lastLockedPoint.bias = 0;
+                        if (_lastLockedPoint.slope < 0) _lastLockedPoint.slope = 0;
+                        _lastLockedPoint.timestamp = t_i.toUint64();
+
+                        _lastForfeitablePoint.bias -= _lastForfeitablePoint.slope * _dt;
+                        if (_atBoundary) _lastForfeitablePoint.slope += forfeitableSlopeChanges[t_i];
+                        if (_lastForfeitablePoint.bias < 0) _lastForfeitablePoint.bias = 0;
+                        if (_lastForfeitablePoint.slope < 0) _lastForfeitablePoint.slope = 0;
+                        _lastForfeitablePoint.timestamp = t_i.toUint64();
+                    }
+
+                    _lastCheckpoint = t_i;
+                    _lastPoint.timestamp = t_i.toUint64();
+                    _lastPoint.blockNumber = (_initialLastPoint.blockNumber +
+                        (_blockSlope * (t_i - _initialLastPoint.timestamp)) /
+                        MULTIPLIER).toUint64();
+                    _epoch += 1;
+                    if (t_i == block.timestamp) {
+                        _lastPoint.blockNumber = block.number.toUint64();
+                        if (lockedSeedingFinalized) {
+                            _lastLockedPoint.blockNumber = block.number.toUint64();
+                            _lastForfeitablePoint.blockNumber = block.number.toUint64();
+                        }
+                        break;
+                    } else {
+                        globalPointHistory[_epoch] = _lastPoint;
+                        if (lockedSeedingFinalized) {
+                            _lastLockedPoint.blockNumber = _lastPoint.blockNumber;
+                            lockedGlobalPointHistory[_epoch] = _lastLockedPoint;
+                            _lastForfeitablePoint.blockNumber = _lastPoint.blockNumber;
+                            forfeitableGlobalPointHistory[_epoch] = _lastForfeitablePoint;
+                        }
+                    }
                 }
+            }
+
+            // --- Phase C: Apply user delta to global + locked + forfeitable points ---
+            // V2: Subcurve deltas use separate old/new flags and subcurve-specific biases.
+            //     oldFlags (low nibble of _curveFlags): determines removal from subcurves
+            //     newFlags (high nibble of _curveFlags): determines addition to subcurves
+            //     Subcurve biases use min(lock.end, transferableAfter) as effective end.
+            if (tokenId_ != 0) {
+                _lastPoint.slope += (_newUserPoint.slope - _oldUserPoint.slope);
+                _lastPoint.bias += (_newUserPoint.bias - _oldUserPoint.bias);
                 if (_lastPoint.slope < 0) {
-                    // This cannot happen - just in case
                     _lastPoint.slope = 0;
                 }
-                _lastCheckpoint = t_i;
-                _lastPoint.timestamp = t_i.toUint64();
-                _lastPoint.blockNumber = (_initialLastPoint.blockNumber +
-                    (_blockSlope * (t_i - _initialLastPoint.timestamp)) /
-                    MULTIPLIER).toUint64();
-                _epoch += 1;
-                if (t_i == block.timestamp) {
-                    _lastPoint.blockNumber = block.number.toUint64();
-                    break;
-                } else {
-                    globalPointHistory[_epoch] = _lastPoint;
+                if (_lastPoint.bias < 0) {
+                    _lastPoint.bias = 0;
+                }
+
+                // V2: Locked curve — apply old removal + new addition separately
+                uint8 _oldFlags = _curveFlags & 0x0F;
+                uint8 _newFlags = (_curveFlags >> 4) & 0x0F;
+                if (_oldFlags >= 1 || _newFlags >= 1) {
+                    // Slope delta is same as global (slope = amount/MAX_TIME, independent of end)
+                    // Bias delta uses subcurve-specific values (bounded by transferableAfter)
+                    int128 _slopeDelta;
+                    if (_newFlags >= 1) _slopeDelta += _newUserPoint.slope;
+                    if (_oldFlags >= 1) _slopeDelta -= _oldUserPoint.slope;
+                    _lastLockedPoint.slope += _slopeDelta;
+                    _lastLockedPoint.bias += (_newSubcurveBias - _oldSubcurveBias);
+                    if (_lastLockedPoint.slope < 0) _lastLockedPoint.slope = 0;
+                    if (_lastLockedPoint.bias < 0) _lastLockedPoint.bias = 0;
+
+                    // Forfeitable curve — same logic, only for flags == 2
+                    if (_oldFlags == 2 || _newFlags == 2) {
+                        int128 _forfSlopeDelta;
+                        if (_newFlags == 2) _forfSlopeDelta += _newUserPoint.slope;
+                        if (_oldFlags == 2) _forfSlopeDelta -= _oldUserPoint.slope;
+                        _lastForfeitablePoint.slope += _forfSlopeDelta;
+                        _lastForfeitablePoint.bias += (_newSubcurveBias - _oldSubcurveBias);
+                        if (_lastForfeitablePoint.slope < 0) _lastForfeitablePoint.slope = 0;
+                        if (_lastForfeitablePoint.bias < 0) _lastForfeitablePoint.bias = 0;
+                    }
+                }
+            }
+
+            // Write global + locked + forfeitable points (same overwrite-vs-append logic)
+            if (_epoch != 1 && globalPointHistory[_epoch - 1].timestamp == block.timestamp) {
+                _writtenEpoch = _epoch - 1;
+                globalPointHistory[_writtenEpoch] = _lastPoint;
+                if (lockedSeedingFinalized) {
+                    lockedGlobalPointHistory[_writtenEpoch] = _lastLockedPoint;
+                    forfeitableGlobalPointHistory[_writtenEpoch] = _lastForfeitablePoint;
+                }
+            } else {
+                _writtenEpoch = _epoch;
+                epoch = _epoch;
+                globalPointHistory[_epoch] = _lastPoint;
+                if (lockedSeedingFinalized) {
+                    lockedGlobalPointHistory[_epoch] = _lastLockedPoint;
+                    forfeitableGlobalPointHistory[_epoch] = _lastForfeitablePoint;
                 }
             }
         }
 
+        // --- Phase D: Schedule slope changes + write user point ---
         if (tokenId_ != 0) {
-            // If last point was in this block, the slope change has been applied already
-            // But in such case we have 0 slope(s)
-            _lastPoint.slope += (_newUserPoint.slope - _oldUserPoint.slope);
-            _lastPoint.bias += (_newUserPoint.bias - _oldUserPoint.bias);
-            if (_lastPoint.slope < 0) {
-                _lastPoint.slope = 0;
-            }
-            if (_lastPoint.bias < 0) {
-                _lastPoint.bias = 0;
-            }
-        }
-        // If timestamp of last global point is the same, overwrite the last global point
-        // Else record the new global point into history
-        // Exclude epoch 0 (note: _epoch is always >= 1, see above)
-        // Two possible outcomes:
-        // Missing global checkpoints in prior SIX_DAYS. In this case, _epoch = epoch + x, where x > 1
-        // No missing global checkpoints, but timestamp != block.timestamp. Create new checkpoint.
-        // No missing global checkpoints, but timestamp == block.timestamp. Overwrite last checkpoint.
-        if (_epoch != 1 && globalPointHistory[_epoch - 1].timestamp == block.timestamp) {
-            // _epoch = epoch + 1, so we do not increment epoch
-            globalPointHistory[_epoch - 1] = _lastPoint;
-        } else {
-            // more than one global point may have been written, so we update epoch
-            epoch = _epoch;
-            globalPointHistory[_epoch] = _lastPoint;
-        }
+            _scheduleSlopeChanges(tokenId_, oldLocked_, newLocked_, _oldUserPoint, _newUserPoint, _curveFlags);
 
-        if (tokenId_ != 0) {
-            // Schedule the slope changes (slope is going down)
-            // We subtract new_user_slope from [_newLocked.end]
-            // and add old_user_slope to [_oldLocked.end]
-            if (oldLocked_.end > block.timestamp) {
-                // oldDslope was <something> - uOld.slope, so we cancel that
-                _oldDslope += _oldUserPoint.slope;
-                if (newLocked_.end == oldLocked_.end) {
-                    _oldDslope -= _newUserPoint.slope; // It was a new deposit, not extension
-                }
-                slopeChanges[oldLocked_.end] = _oldDslope;
-            }
-
-            if (newLocked_.end > block.timestamp) {
-                // update slope if new lock is greater than old lock
-                if ((newLocked_.end > oldLocked_.end)) {
-                    _newDslope -= _newUserPoint.slope; // old slope disappeared at this point
-                    slopeChanges[newLocked_.end] = _newDslope;
-                }
-                // else: we recorded it already in oldDslope
-            }
-            // If timestamp of last user point is the same, overwrite the last user point
-            // Else record the new user point into history
-            // Exclude epoch 0
             _newUserPoint.timestamp = block.timestamp.toUint64();
             _newUserPoint.blockNumber = block.number.toUint64();
             _newUserPoint.amount = locked[tokenId_].amount.toUint256().toUint128();
@@ -536,16 +660,125 @@ contract VeHemi is
                 _userEpoch == 0 ||
                 userPointHistory[tokenId_][_userEpoch].point.timestamp != block.timestamp
             ) {
-                // Create new point at next epoch
                 userPointEpoch[tokenId_] = ++_userEpoch;
             }
 
             userPointHistory[tokenId_][_userEpoch].point = _newUserPoint;
             userPointHistory[tokenId_][_userEpoch].owner = _ownerOf(tokenId_);
         }
-        emit Checkpoint(_epoch, tokenId_, oldLocked_, newLocked_);
+        emit Checkpoint(_writtenEpoch, tokenId_, oldLocked_, newLocked_);
     }
 
+    /**
+     * @dev Schedules slope changes for global, locked, and forfeitable curves.
+     *      Extracted from _checkpoint to manage stack depth (Phase D).
+     *
+     *      V2: For subcurves, the effective endpoint is min(lock.end, transferableAfter).
+     *      This handles the case where a user extends their lock past the transferability
+     *      window — the subcurve slope change fires at transferableAfter (when the position
+     *      exits the subcurve), not at lock.end.
+     *
+     * @param curveFlags_ Packed old/new flags: [newFlags:4..7][oldFlags:0..3]
+     */
+    function _scheduleSlopeChanges(
+        uint256 tokenId_,
+        LockedBalance memory oldLocked_,
+        LockedBalance memory newLocked_,
+        Point memory _oldUserPoint,
+        Point memory _newUserPoint,
+        uint8 curveFlags_
+    ) internal {
+        uint8 _oldFlags = curveFlags_ & 0x0F;
+        uint8 _newFlags = (curveFlags_ >> 4) & 0x0F;
+
+        // --- Global slope changes (use lock.end directly) ---
+        int128 _oldDslope = slopeChanges[oldLocked_.end];
+        int128 _newDslope;
+        if (newLocked_.end != 0) {
+            if (newLocked_.end == oldLocked_.end) {
+                _newDslope = _oldDslope;
+            } else {
+                _newDslope = slopeChanges[newLocked_.end];
+            }
+        }
+
+        if (oldLocked_.end > block.timestamp) {
+            _oldDslope += _oldUserPoint.slope;
+            if (newLocked_.end == oldLocked_.end) {
+                _oldDslope -= _newUserPoint.slope;
+            }
+            slopeChanges[oldLocked_.end] = _oldDslope;
+        }
+
+        if (newLocked_.end > block.timestamp && newLocked_.end > oldLocked_.end) {
+            _newDslope -= _newUserPoint.slope;
+            slopeChanges[newLocked_.end] = _newDslope;
+        }
+
+        // --- Subcurve slope changes (use min(lock.end, transferableAfter) as effective end) ---
+        if (_oldFlags >= 1 || _newFlags >= 1) {
+            uint256 _ta = transferableAfter[tokenId_];
+            // Effective ends for subcurves: bounded by transferableAfter
+            uint256 _oldSubEnd = (oldLocked_.end != 0 && _ta < oldLocked_.end) ? _ta : oldLocked_.end;
+            uint256 _newSubEnd = (newLocked_.end != 0 && _ta < newLocked_.end) ? _ta : newLocked_.end;
+
+            _scheduleSubcurveSlopeChanges(
+                _oldFlags, _newFlags, _oldSubEnd, _newSubEnd,
+                _oldUserPoint.slope, _newUserPoint.slope
+            );
+        }
+    }
+
+    /**
+     * @dev Schedules locked + forfeitable slope changes at subcurve-specific endpoints.
+     *      Separated to manage stack depth.
+     */
+    function _scheduleSubcurveSlopeChanges(
+        uint8 oldFlags_,
+        uint8 newFlags_,
+        uint256 oldSubEnd_,
+        uint256 newSubEnd_,
+        int128 oldSlope_,
+        int128 newSlope_
+    ) internal {
+        // --- Locked curve slope changes ---
+        if (oldFlags_ >= 1 && oldSubEnd_ > block.timestamp) {
+            int128 _oldLockedDslope = lockedSlopeChanges[oldSubEnd_];
+            _oldLockedDslope += oldSlope_;
+            if (newFlags_ >= 1 && newSubEnd_ == oldSubEnd_) {
+                _oldLockedDslope -= newSlope_;
+            }
+            lockedSlopeChanges[oldSubEnd_] = _oldLockedDslope;
+        }
+
+        if (newFlags_ >= 1 && newSubEnd_ > block.timestamp && newSubEnd_ > oldSubEnd_) {
+            int128 _newLockedDslope = lockedSlopeChanges[newSubEnd_];
+            _newLockedDslope -= newSlope_;
+            lockedSlopeChanges[newSubEnd_] = _newLockedDslope;
+        }
+
+        // --- Forfeitable curve slope changes (same logic, only for flags == 2) ---
+        if (oldFlags_ == 2 && oldSubEnd_ > block.timestamp) {
+            int128 _oldForfDslope = forfeitableSlopeChanges[oldSubEnd_];
+            _oldForfDslope += oldSlope_;
+            if (newFlags_ == 2 && newSubEnd_ == oldSubEnd_) {
+                _oldForfDslope -= newSlope_;
+            }
+            forfeitableSlopeChanges[oldSubEnd_] = _oldForfDslope;
+        }
+
+        if (newFlags_ == 2 && newSubEnd_ > block.timestamp && newSubEnd_ > oldSubEnd_) {
+            int128 _newForfDslope = forfeitableSlopeChanges[newSubEnd_];
+            _newForfDslope -= newSlope_;
+            forfeitableSlopeChanges[newSubEnd_] = _newForfDslope;
+        }
+    }
+
+    /**
+     * @dev Internal lock creation: validates params, mints NFT, sets transferableAfter/forfeitable
+     *      BEFORE _depositFor (so _checkpoint can read them for subcurve membership), then deposits.
+     *      Implicit invariant: forfeitable positions are always non-transferable (transferableAfter != 0).
+     */
     function _createLock(
         uint256 amount_,
         uint256 lockDuration_,
@@ -557,11 +790,23 @@ contract VeHemi is
         uint256 unlockTime = ((block.timestamp + lockDuration_) / SIX_DAYS) * SIX_DAYS; // Lock time is rounded down to SIX_DAYS
 
         if (amount_ == 0) revert AmountIsZero();
+        if (amount_ < MIN_LOCK_AMOUNT) revert AmountTooSmall();
         if (unlockTime <= block.timestamp) revert LockDurationTooShort();
         if (unlockTime > block.timestamp + MAX_TIME) revert LockDurationTooLong();
+        // A position cannot be both transferable and forfeitable: transferable positions
+        // have transferableAfter == 0, which causes forfeit() to always revert with
+        // ForfeitWindowExpired (block.timestamp >= 0 is always true).
+        if (transferable_ && forfeitable_) revert InvalidConfiguration();
 
         _tokenId = nextTokenId++;
         _mint(account_, _tokenId);
+
+        // V2: Set transferableAfter and forfeitable BEFORE _depositFor so that
+        // _checkpoint can read them to determine locked/forfeitable curve membership.
+        if (!transferable_) {
+            transferableAfter[_tokenId] = unlockTime;
+        }
+        if (forfeitable_) forfeitable[_tokenId] = true;
 
         _depositFor(_tokenId, amount_, unlockTime.toUint64(), locked[_tokenId]);
         _delegate(_tokenId, account_);
@@ -569,10 +814,6 @@ contract VeHemi is
         address _sender = _msgSender();
 
         provider[_tokenId] = _sender;
-        if (!transferable_) {
-            transferableAfter[_tokenId] = unlockTime;
-        }
-        if (forfeitable_) forfeitable[_tokenId] = true;
 
         emit Lock(
             _sender,
@@ -589,6 +830,12 @@ contract VeHemi is
         return _tokenId;
     }
 
+    /**
+     * @dev Internal deposit: pulls HEMI (if amount > 0), updates lock, checkpoints, re-delegates.
+     *      Token transfer happens BEFORE state update (CEI for pull patterns: receiving tokens
+     *      before updating books is correct; the nonReentrant modifier on all callers prevents
+     *      re-entry during the pre-effects external call).
+     */
     function _depositFor(
         uint256 tokenId_,
         uint256 amount_,
@@ -596,6 +843,13 @@ contract VeHemi is
         LockedBalance memory oldLocked_
     ) internal {
         _updateReward(tokenId_);
+
+        // Pull tokens FIRST (CEI for pull patterns: interaction before effects
+        // is correct when receiving tokens, not sending them).
+        address from = _msgSender();
+        if (amount_ != 0) {
+            HEMI.safeTransferFrom(from, address(this), amount_);
+        }
 
         totalLocked += amount_;
 
@@ -616,27 +870,245 @@ contract VeHemi is
         // newLocked.end > block.timestamp (always)
         _checkpoint(tokenId_, oldLocked_, _newLocked);
 
-        address from = _msgSender();
-        if (amount_ != 0) {
-            HEMI.transferFrom(from, address(this), amount_);
-        }
         _reDelegate(tokenId_);
         emit Deposit(from, tokenId_, amount_, _newLocked.end, block.timestamp);
     }
 
+    /// @dev Wrapped in try/catch so a broken voteDelegation contract cannot block
+    ///      critical operations (deposit, transfer). The owner can replace
+    ///      voteDelegation via updateVoteDelegation() to restore delegation.
     function _reDelegate(uint256 delegator_) internal virtual {
-        address _delegatee = voteDelegation.delegation(delegator_).delegatee;
-        _delegate(delegator_, _delegatee);
+        try voteDelegation.delegation(delegator_) returns (
+            IVeHemiVoteDelegation.Delegation memory d
+        ) {
+            if (d.delegatee != address(0)) {
+                _delegate(delegator_, d.delegatee);
+            }
+        } catch {
+            emit DelegationUpdateFailed(delegator_);
+        }
     }
 
+    /// @dev Wrapped in try/catch for the same defensive reason as _reDelegate.
     function _delegate(uint256 delegator_, address delegatee_) internal {
         // Delegation changes are effective only after 1 day. If lock is ending before that no need to delegate
         // Example: User is increasing amount just few hours before lock ends.
         // NFT is transferred just few hours before lock ends.
         uint256 _newDelegationStarts = ((block.timestamp / 1 days) * 1 days) + 1 days;
         if (_newDelegationStarts < locked[delegator_].end) {
-            voteDelegation.delegate(delegator_, delegatee_);
+            try voteDelegation.delegate(delegator_, delegatee_) {} catch {
+                emit DelegationUpdateFailed(delegator_);
+            }
         }
+    }
+
+    // =========================================================================
+    // V2: Non-transferrable position weight tracking
+    // =========================================================================
+
+    /**
+     * @notice Seeds all non-transferrable positions and finalizes the locked + forfeitable curves atomically.
+     * @dev Computes bias/slope entirely in memory for both locked and forfeitable subsets.
+     *      Calls _checkpoint to advance the epoch while lockedSeedingFinalized is still false
+     *      (so subcurve logic is skipped), then writes both LockedPoints.
+     *      Forfeitable positions are those where forfeitable[tokenId] == true.
+     *      Callable once. Gas: ~4-7M depending on forfeitable count.
+     * @param tokenIds_ Array of non-transferrable token IDs (must not be empty)
+     */
+    function seedAndFinalizeLockedPositions(uint256[] calldata tokenIds_) external onlyOwner {
+        if (lockedSeedingFinalized) revert SeedingAlreadyFinalized();
+        if (tokenIds_.length == 0) revert EmptyArray();
+
+        // Require strictly ascending token IDs to prevent double-counting.
+        // Duplicate IDs would permanently corrupt the curves since this
+        // function can only be called once (lockedSeedingFinalized gate).
+        for (uint256 i = 1; i < tokenIds_.length; ++i) {
+            if (tokenIds_[i] <= tokenIds_[i - 1]) revert UnsortedOrDuplicateTokenIds();
+        }
+
+        // --- Phase 1: Accumulate bias/slope in memory for locked AND forfeitable ---
+        int128 _totalSlope;
+        int128 _totalBias; // stores sum(slope_i * end_i), time-independent
+        int128 _totalForfeitableSlope;
+        int128 _totalForfeitableBias;
+
+        for (uint256 i; i < tokenIds_.length; ++i) {
+            uint256 tokenId = tokenIds_[i];
+            if (_ownerOf(tokenId) == address(0)) revert TokenDoesNotExist();
+            if (transferableAfter[tokenId] == 0) revert NotNonTransferrable();
+            LockedBalance memory _lock = locked[tokenId];
+            if (_lock.end <= block.timestamp || _lock.amount <= 0) continue;
+
+            int128 slope = _lock.amount / MAX_TIME.toInt256().toInt128();
+            // V2: Subcurve endpoint is min(lock.end, transferableAfter).
+            // Skip subcurve accumulation if the transferability window has already opened
+            // (the position is no longer in the locked/forfeitable subcurves).
+            uint256 _ta = transferableAfter[tokenId];
+            if (_ta > block.timestamp) {
+                uint256 _subEnd = _lock.end < _ta ? _lock.end : _ta;
+                _totalSlope += slope;
+                _totalBias += slope * uint256(_subEnd).toInt256().toInt128();
+                lockedSlopeChanges[_subEnd] -= slope;
+
+                // Forfeitable subset
+                if (forfeitable[tokenId]) {
+                    _totalForfeitableSlope += slope;
+                    _totalForfeitableBias += slope * uint256(_subEnd).toInt256().toInt128();
+                    forfeitableSlopeChanges[_subEnd] -= slope;
+                }
+            }
+            // Note: positions with _ta <= block.timestamp are still valid non-transferrable
+            // positions (they pass the transferableAfter[tokenId] != 0 check above), but
+            // their transferability window has opened so they are excluded from subcurves.
+        }
+
+        // --- Phase 2: Advance global epoch to block.timestamp ---
+        // lockedSeedingFinalized is still false, so _checkpoint skips all subcurve
+        // logic. The already-written slope changes are invisible to the catchup loop.
+        _checkpoint(0, LockedBalance(0, 0), LockedBalance(0, 0));
+
+        // --- Phase 3: Write locked + forfeitable points at current epoch ---
+        uint256 _epoch = epoch;
+        int128 _tsInt = uint256(block.timestamp).toInt256().toInt128();
+
+        // Locked point: derive bias at block.timestamp
+        int128 _lockedBias = _totalBias - _totalSlope * _tsInt;
+        if (_lockedBias < 0) _lockedBias = 0;
+
+        lockedGlobalPointHistory[_epoch] = LockedPoint({
+            bias: _lockedBias,
+            slope: _totalSlope,
+            timestamp: block.timestamp.toUint64(),
+            blockNumber: block.number.toUint64()
+        });
+
+        // Forfeitable point: always write (even if zero) so timestamp != 0 for view functions
+        int128 _forfeitableBias = _totalForfeitableBias - _totalForfeitableSlope * _tsInt;
+        if (_forfeitableBias < 0) _forfeitableBias = 0;
+
+        forfeitableGlobalPointHistory[_epoch] = LockedPoint({
+            bias: _forfeitableBias,
+            slope: _totalForfeitableSlope,
+            timestamp: block.timestamp.toUint64(),
+            blockNumber: block.number.toUint64()
+        });
+
+        // --- Phase 4: Finalize ---
+        lockedSeedingFinalized = true;
+        emit LockedSeedingFinalized(_epoch);
+    }
+
+    /**
+     * @notice Get the total non-transferrable veHEMI supply at the current timestamp.
+     * @return The voting weight of all non-transferrable positions
+     */
+    function nonTransferableTotalVeHemiSupply() public view returns (uint256) {
+        return _subcurveSupplyAt(block.timestamp, false);
+    }
+
+    /**
+     * @notice Get the total non-transferrable veHEMI supply at a specific timestamp.
+     * @param timestamp_ The timestamp to query
+     * @return The voting weight of all non-transferrable positions at that time
+     */
+    function nonTransferableTotalVeHemiSupplyAt(uint256 timestamp_) public view returns (uint256) {
+        return _subcurveSupplyAt(timestamp_, false);
+    }
+
+    /**
+     * @notice Get the total forfeitable (non-transferrable) veHEMI supply at the current timestamp.
+     * @return The voting weight of all forfeitable positions
+     */
+    function forfeitableTotalVeHemiSupply() public view returns (uint256) {
+        return _subcurveSupplyAt(block.timestamp, true);
+    }
+
+    /**
+     * @notice Get the total forfeitable veHEMI supply at a specific timestamp.
+     * @param timestamp_ The timestamp to query
+     * @return The voting weight of all forfeitable positions at that time
+     */
+    function forfeitableTotalVeHemiSupplyAt(uint256 timestamp_) public view returns (uint256) {
+        return _subcurveSupplyAt(timestamp_, true);
+    }
+
+    /**
+     * @notice Combined supply breakdown avoiding redundant binary searches.
+     * @dev Invariant: forfeitable_ <= locked_ <= total (enforced by defensive caps).
+     * @return total Total veHEMI supply
+     * @return locked_ Non-transferrable veHEMI supply (capped at total)
+     * @return forfeitable_ Forfeitable non-transferrable veHEMI supply (capped at locked_)
+     * @return transferable Transferrable veHEMI supply (total - locked_)
+     */
+    function supplyBreakdown() external view returns (uint256 total, uint256 locked_, uint256 forfeitable_, uint256 transferable) {
+        uint256 _epoch = _getPastGlobalPointIndex(epoch, block.timestamp);
+        if (_epoch == 0) return (0, 0, 0, 0);
+        total = _supplyAt(globalPointHistory[_epoch], block.timestamp);
+
+        LockedPoint memory _lp = lockedGlobalPointHistory[_epoch];
+        if (_lp.timestamp != 0) {
+            locked_ = _subcurveSupplyAtFromPoint(_lp, block.timestamp, false);
+        }
+
+        LockedPoint memory _rp = forfeitableGlobalPointHistory[_epoch];
+        if (_rp.timestamp != 0) {
+            forfeitable_ = _subcurveSupplyAtFromPoint(_rp, block.timestamp, true);
+        }
+
+        // Defense-in-depth: enforce forfeitable_ <= locked_ <= total
+        if (locked_ > total) locked_ = total;
+        if (forfeitable_ > locked_) forfeitable_ = locked_;
+        transferable = total - locked_;
+    }
+
+    /**
+     * @dev Parameterized subcurve supply-at query. Reads from either
+     *      locked or forfeitable point history and slope changes.
+     * @param timestamp_ The timestamp to query
+     * @param isForfeitable_ true = forfeitable curve, false = locked curve
+     */
+    function _subcurveSupplyAt(uint256 timestamp_, bool isForfeitable_) internal view returns (uint256) {
+        uint256 _epoch = _getPastGlobalPointIndex(epoch, timestamp_);
+        if (_epoch == 0) return 0;
+        LockedPoint memory _point = isForfeitable_
+            ? forfeitableGlobalPointHistory[_epoch]
+            : lockedGlobalPointHistory[_epoch];
+        // Pre-V2 epochs have all-zero points (timestamp == 0)
+        if (_point.timestamp == 0) return 0;
+        return _subcurveSupplyAtFromPoint(_point, timestamp_, isForfeitable_);
+    }
+
+    /**
+     * @dev Walk forward from a LockedPoint applying slope changes to compute supply at timestamp_.
+     *      Shared between locked and forfeitable curves — differs only in which slope change mapping is read.
+     */
+    function _subcurveSupplyAtFromPoint(LockedPoint memory point_, uint256 timestamp_, bool isForfeitable_) internal view returns (uint256) {
+        int128 bias = point_.bias;
+        int128 slope = point_.slope;
+        uint256 ts = point_.timestamp;
+
+        uint256 t_i = (ts / SIX_DAYS) * SIX_DAYS;
+        for (uint256 i; i < 255; ++i) {
+            t_i += SIX_DAYS;
+            int128 dSlope = 0;
+            if (t_i > timestamp_) {
+                t_i = timestamp_;
+            } else {
+                dSlope = isForfeitable_ ? forfeitableSlopeChanges[t_i] : lockedSlopeChanges[t_i];
+            }
+            bias -= slope * (t_i - ts).toInt256().toInt128();
+            if (t_i == timestamp_) {
+                break;
+            }
+            slope += dSlope;
+            if (slope < 0) slope = 0;
+            ts = t_i;
+        }
+
+        if (bias < 0) {
+            bias = 0;
+        }
+        return bias.toUint256();
     }
 
     function _supplyAt(uint256 timestamp_) internal view returns (uint256) {
@@ -666,6 +1138,7 @@ contract VeHemi is
                 break;
             }
             slope += dSlope;
+            if (slope < 0) slope = 0;
             ts = t_i;
         }
 
@@ -675,27 +1148,48 @@ contract VeHemi is
         return bias.toUint256();
     }
 
+    /// @dev Notifies the reward distributor of a position change. Fails silently (try/catch)
+    ///      so a broken distributor cannot block core operations.
     function _updateReward(uint256 tokenId_) internal {
         if (address(rewardDistributor) != address(0)) {
-            // fail silently
-            try rewardDistributor.updateRewards(tokenId_) {} catch {}
+            try rewardDistributor.updateRewards(tokenId_) {} catch {
+                emit RewardUpdateFailed(tokenId_);
+            }
         }
     }
 
+    /**
+     * @dev Internal withdraw: clears lock, checkpoints curves, burns NFT, transfers HEMI to msg.sender.
+     *      Used by both withdraw() (owner receives HEMI) and forfeit() (forfeit admin receives HEMI).
+     *      Checkpoint is called BEFORE burn so the final user point records the real owner.
+     *      transferableAfter/forfeitable/provider are deleted AFTER checkpoint (which reads them).
+     */
     function _withdraw(uint256 tokenId_) internal {
         _updateReward(tokenId_);
         LockedBalance memory _oldLocked = locked[tokenId_];
         uint256 _amount = _oldLocked.amount.toUint256();
-        _burn(tokenId_);
         delete locked[tokenId_];
         totalLocked -= _amount;
-        // oldLocked can have either expired <= timestamp or zero end
-        // oldLocked has only 0 end
-        // Both can have >= 0 amount
+        // Checkpoint BEFORE burn so the final user point records the real owner
+        // (not address(0)). newLocked is zero, so _checkpoint correctly subtracts
+        // the old position's bias/slope from the global curve. For expired locks,
+        // the old bias/slope are already zero. For forfeit (non-expired), the
+        // subtraction is necessary to maintain global curve correctness.
+        // NOTE: transferableAfter must NOT be deleted before this call — _checkpoint
+        // reads it to determine locked-curve membership for non-transferrable positions.
         _checkpoint(tokenId_, _oldLocked, LockedBalance(0, 0));
+        // Clean up remaining state AFTER checkpoint.
+        // forfeitable must also be deleted here (not just in forfeit()) so that
+        // naturally-expired forfeitable positions are properly cleaned up on withdraw.
+        delete transferableAfter[tokenId_];
+        delete forfeitable[tokenId_];
+        delete provider[tokenId_];
+        _burn(tokenId_);
 
         address _sender = _msgSender();
-        HEMI.transfer(_sender, _amount);
+        if (_amount > 0) {
+            HEMI.safeTransfer(_sender, _amount);
+        }
 
         emit Withdraw(_sender, tokenId_, _amount, block.timestamp);
     }

@@ -53,7 +53,10 @@ contract InvariantTest is Test {
     }
 
     function invariant_votingPower() public {
-        vm.warp(block.timestamp + ((block.timestamp / 1 days) * 1 days) + 1 days); // warp to the next checkpoint
+        // Warp to next day boundary (delegation takes effect at day boundaries),
+        // then restore timestamp so we don't pollute handler state.
+        uint256 savedTimestamp = block.timestamp;
+        vm.warp(((block.timestamp / 1 days) + 1) * 1 days);
 
         uint256 sumOfBalances;
         uint256 sumOfVotes;
@@ -71,5 +74,36 @@ contract InvariantTest is Test {
         }
 
         assertEq(sumOfBalances, sumOfVotes, "sum of balances != sum of votes");
+
+        vm.warp(savedTimestamp);
+    }
+
+    /// @dev V2: After seeding, forfeitable <= locked <= total must always hold.
+    function invariant_subcurveOrdering() public view {
+        if (!handler.seeded()) return; // Subcurves not active yet
+
+        uint256 total = veHemi.totalVeHemiSupply();
+        uint256 locked = veHemi.nonTransferableTotalVeHemiSupply();
+        uint256 forfeitable_ = veHemi.forfeitableTotalVeHemiSupply();
+
+        assertLe(forfeitable_, locked, "forfeitable > locked");
+        assertLe(locked, total, "locked > total");
+    }
+
+    /// @dev V2: supplyBreakdown must be internally consistent AND match individual functions.
+    function invariant_supplyBreakdownConsistency() public view {
+        if (!handler.seeded()) return;
+
+        (uint256 total, uint256 locked_, uint256 forfeitable_, uint256 transferable) = veHemi.supplyBreakdown();
+
+        // Internal consistency
+        assertLe(forfeitable_, locked_, "breakdown: forfeitable > locked");
+        assertLe(locked_, total, "breakdown: locked > total");
+        assertEq(transferable, total - locked_, "breakdown: transferable != total - locked");
+
+        // Cross-check against individual supply functions
+        assertApproxEqRel(total, veHemi.totalVeHemiSupply(), 0.001e18, "breakdown total != totalVeHemiSupply");
+        assertApproxEqRel(locked_, veHemi.nonTransferableTotalVeHemiSupply(), 0.001e18, "breakdown locked != nonTransferableTotalVeHemiSupply");
+        assertApproxEqRel(forfeitable_, veHemi.forfeitableTotalVeHemiSupply(), 0.001e18, "breakdown forfeitable != forfeitableTotalVeHemiSupply");
     }
 }
