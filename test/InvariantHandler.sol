@@ -276,7 +276,7 @@ contract InvariantHandler is Test {
 
             IVeHemi.LockedBalance memory _lock = veHemi.getLockedBalance(id);
 
-            uint256 _nextCheckpoint = ((block.timestamp / 1 days) * 1 days) + 1 days;
+            uint256 _nextCheckpoint = ((block.timestamp / 1 hours) * 1 hours) + 1 hours;
 
             if (_nextCheckpoint >= _lock.end) continue;
 

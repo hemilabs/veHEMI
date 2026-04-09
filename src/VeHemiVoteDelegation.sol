@@ -8,11 +8,22 @@ import {IVeHemi} from "./interfaces/IVeHemi.sol";
 import {VeHemiDelegationStorageV1} from "./storage/VeHemiDelegationStorageV1.sol";
 import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
 
+/// @dev Minimal interface for reading VeHemi's Ownable2Step owner.
+interface IOwnable {
+    function owner() external view returns (address);
+}
+
+/// @dev Callback interface for relaying DelegateVotesChanged events to the adapter.
+interface IAdapterNotify {
+    function notifyVotesChanged(address delegatee, uint256 previousVotes, uint256 newVotes) external;
+    function notifyDelegateChanged(address delegator, address fromDelegate, address toDelegate) external;
+}
+
 /**
  * @title VeHemiVoteDelegation
  * @notice Vote delegation system for veHemi tokens. Allows token holders to delegate their voting power
  * to other token holders without transferring ownership. Delegations take effect at the next epoch
- * (next day boundary) and expire when the delegator's lock expires.
+ * boundary and expire when the delegator's lock expires.
  * @dev Based on veFXS and veCRV delegation mechanism with adaptations for veHemi
  */
 contract VeHemiVoteDelegation is ReentrancyGuardTransientUpgradeable, VeHemiDelegationStorageV1 {
@@ -25,7 +36,8 @@ contract VeHemiVoteDelegation is ReentrancyGuardTransientUpgradeable, VeHemiDele
     uint256 private constant MONTH = YEAR / 12;
     uint256 private constant SIX_DAYS = MONTH / 5;
     uint256 private constant MAX_LOCK_DURATION = 4 * YEAR;
-    uint256 private constant ONE_DAY = 1 days;
+    uint256 private constant CHECKPOINT_INTERVAL = 1 hours;
+    uint256 private constant EPOCH_OFFSET = 0;
 
     /// @notice The EIP-712 typehash for the contract's domain
     bytes32 private constant DOMAIN_TYPEHASH =
@@ -49,6 +61,8 @@ contract VeHemiVoteDelegation is ReentrancyGuardTransientUpgradeable, VeHemiDele
     error SignatureExpired();
     error InvalidDelegatee();
     error CallerIsNotAuthorized();
+    error NotTrustedAdapter();
+    error NotVeHemiOwner();
 
     modifier onlyAuthorized(uint256 tokenId_) {
         address _msgSender = msg.sender;
@@ -69,6 +83,7 @@ contract VeHemiVoteDelegation is ReentrancyGuardTransientUpgradeable, VeHemiDele
 
     function initialize() external initializer {}
 
+
     /**
      * @dev Clock used for flagging checkpoints.
      */
@@ -85,7 +100,7 @@ contract VeHemiVoteDelegation is ReentrancyGuardTransientUpgradeable, VeHemiDele
 
     /**
      * @notice Delegate voting power from one token to another
-     * @dev Delegations take effect at the next epoch (next day boundary). The delegator loses
+     * @dev Delegations take effect at the next epoch boundary. The delegator loses
      * their voting power and the delegatee gains it. Delegations expire when the delegator's
      * lock expires. Delegating to self (same tokenId) is equivalent to no delegation.
      * @param delegator_ The token ID to delegate from (must be owned by msg.sender)
@@ -96,6 +111,60 @@ contract VeHemiVoteDelegation is ReentrancyGuardTransientUpgradeable, VeHemiDele
         address delegatee_
     ) external onlyAuthorized(delegator_) nonReentrant {
         _delegate(delegator_, delegatee_);
+    }
+
+    /**
+     * @notice Set the trusted adapter contract that can call delegateAllFor
+     * @param adapter_ The adapter address (or address(0) to disable)
+     */
+    function setTrustedAdapter(address adapter_) external {
+        if (msg.sender != IOwnable(address(veHemi)).owner()) revert NotVeHemiOwner();
+        address oldAdapter = trustedAdapter;
+        trustedAdapter = adapter_;
+        emit TrustedAdapterUpdated(oldAdapter, adapter_);
+    }
+
+    /**
+     * @notice Clear the auto-delegate setting for the caller.
+     * @dev Sets autoDelegate[msg.sender] to address(0) so future positions
+     *      created for this address will self-delegate by default.
+     *      Does NOT re-delegate existing positions — call delegate() per-position
+     *      or adapter.delegate(self) to also re-delegate existing positions.
+     */
+    function clearAutoDelegate() external {
+        autoDelegate[msg.sender] = address(0);
+    }
+
+    /**
+     * @notice Delegate all of an owner's veHEMI positions to a single delegatee.
+     * @dev Can only be called by the trusted adapter, which passes through the
+     *      real msg.sender as the owner parameter. Expired locks are silently
+     *      skipped (they have zero voting power). Sets autoDelegate[owner_] so
+     *      future locks created for this owner auto-delegate to delegatee_.
+     * @param owner_ The NFT owner whose positions should be delegated
+     * @param delegatee_ The address to delegate all voting power to
+     */
+    function delegateAllFor(
+        address owner_,
+        address delegatee_
+    ) external nonReentrant {
+        if (msg.sender != trustedAdapter) revert NotTrustedAdapter();
+
+        // Set auto-delegate so future positions created for this owner
+        // are automatically delegated to the same address.
+        autoDelegate[owner_] = delegatee_;
+
+        uint256 checkpointTs = (((block.timestamp - EPOCH_OFFSET) / CHECKPOINT_INTERVAL) * CHECKPOINT_INTERVAL) + CHECKPOINT_INTERVAL + EPOCH_OFFSET;
+        uint256 count = veHemi.balanceOf(owner_);
+        for (uint256 i; i < count;) {
+            uint256 tokenId = veHemi.tokenOfOwnerByIndex(owner_, i);
+            // Skip expired locks — they have zero voting power and _delegate
+            // would revert with CanNotDelegateExpiredLocks.
+            if (veHemi.getLockedBalance(tokenId).end > checkpointTs) {
+                _delegate(tokenId, delegatee_);
+            }
+            unchecked { ++i; }
+        }
     }
 
     /**
@@ -221,7 +290,7 @@ contract VeHemiVoteDelegation is ReentrancyGuardTransientUpgradeable, VeHemiDele
         DelegateCheckpoint memory _lastCheckpoint = delegationCheckpoints[_checkpointsLength - 1];
 
         // This ensures that checkpoints take effect at the next epoch
-        uint256 _checkpointTimestamp = ((block.timestamp / ONE_DAY) * ONE_DAY) + ONE_DAY;
+        uint256 _checkpointTimestamp = (((block.timestamp - EPOCH_OFFSET) / CHECKPOINT_INTERVAL) * CHECKPOINT_INTERVAL) + CHECKPOINT_INTERVAL + EPOCH_OFFSET;
 
         // Nothing expired because the most recent checkpoint is already written
         if (_lastCheckpoint.timestamp == _checkpointTimestamp) {
@@ -257,11 +326,83 @@ contract VeHemiVoteDelegation is ReentrancyGuardTransientUpgradeable, VeHemiDele
      * @param delegatee_ delegatee
      */
     function writeNewCheckpointForExpiredDelegations(address delegatee_) external nonReentrant {
+        uint256 _checkpointTimestamp = (((block.timestamp - EPOCH_OFFSET) / CHECKPOINT_INTERVAL) * CHECKPOINT_INTERVAL) + CHECKPOINT_INTERVAL + EPOCH_OFFSET;
+
+        uint256 _previousVotes = _getPastVotes(delegatee_, _checkpointTimestamp);
+
         DelegateCheckpoint memory _newCheckpoint = calculateExpiredDelegations(delegatee_);
 
         if (_newCheckpoint.timestamp == 0) revert NoExpirations();
 
         delegateCheckpoints[delegatee_].push(_newCheckpoint);
+
+        uint256 _newVotes = _getPastVotes(delegatee_, _checkpointTimestamp);
+
+        emit DelegateVotesChanged({
+            delegatee: delegatee_,
+            previousVotes: _previousVotes,
+            newVotes: _newVotes
+        });
+
+        if (trustedAdapter != address(0)) {
+            try IAdapterNotify(trustedAdapter).notifyVotesChanged(
+                delegatee_, _previousVotes, _newVotes
+            ) {} catch {}
+        }
+    }
+
+    /**
+     * @notice Emit a DelegateVotesChanged event with the current (decayed) voting power
+     * for a given delegatee, and relay it to the adapter.
+     * @dev This function writes no state. It exists so that off-chain indexers
+     * (e.g. Aragon's subgraph) can be informed of voting-power decay between
+     * checkpoints. Anyone can call it (permissionless).
+     *
+     * Both previousVotes and newVotes in the emitted event are set to the
+     * current decayed power. This signals "the authoritative power is now X"
+     * without implying any delegation change occurred.
+     *
+     * This does NOT duplicate writeNewCheckpointForExpiredDelegations, which
+     * writes a new checkpoint to reflect expired delegations in storage. This
+     * function is purely for event emission.
+     * @param delegatee_ The delegatee whose voting power to refresh
+     */
+    function refreshVotingPower(address delegatee_) public {
+        // Use the same next-epoch-boundary timestamp that _delegate and
+        // writeNewCheckpointForExpiredDelegations use so that the emitted
+        // value is consistent with delegation events. Using block.timestamp
+        // would produce a different value (the checkpoint written by _delegate
+        // has a future timestamp invisible to block.timestamp queries), which
+        // causes the Aragon subgraph to overwrite correct delegation event
+        // values with stale pre-delegation ones.
+        uint256 checkpointTimestamp = (((block.timestamp - EPOCH_OFFSET) / CHECKPOINT_INTERVAL) * CHECKPOINT_INTERVAL) + CHECKPOINT_INTERVAL + EPOCH_OFFSET;
+        uint256 currentVotes = _getPastVotes(delegatee_, checkpointTimestamp);
+
+        emit DelegateVotesChanged({
+            delegatee: delegatee_,
+            previousVotes: currentVotes,
+            newVotes: currentVotes
+        });
+
+        if (trustedAdapter != address(0)) {
+            try IAdapterNotify(trustedAdapter).notifyVotesChanged(
+                delegatee_, currentVotes, currentVotes
+            ) {} catch {}
+        }
+    }
+
+    /**
+     * @notice Batch version of refreshVotingPower for multiple delegatees.
+     * @dev Iterates over the array and calls refreshVotingPower for each.
+     * The caller is responsible for keeping the array length within gas limits.
+     * @param delegatees_ Array of delegatee addresses to refresh
+     */
+    function refreshVotingPowerBatch(address[] calldata delegatees_) external {
+        uint256 length = delegatees_.length;
+        for (uint256 i; i < length;) {
+            refreshVotingPower(delegatees_[i]);
+            unchecked { ++i; }
+        }
     }
 
     function _calculateCheckpoint(
@@ -363,18 +504,20 @@ contract VeHemiVoteDelegation is ReentrancyGuardTransientUpgradeable, VeHemiDele
     ) private view returns (DelegateCheckpoint memory closestCheckpoint_) {
         uint256 checkpointsLength_ = checkpoints_.length;
 
-        // What the newest checkpoint could be for timestamp (rounded to whole days). It will be earlier when checkpoints are sparse.
-        uint256 roundedDownTimestamp_ = (timestamp_ / ONE_DAY) * ONE_DAY;
-        // Newest checkpoint's timestamp (already rounded to whole days)
+        // What the newest checkpoint could be for timestamp (rounded to epoch boundary). It will be earlier when checkpoints are sparse.
+        uint256 roundedDownTimestamp_ = timestamp_ < EPOCH_OFFSET
+            ? 0
+            : ((timestamp_ - EPOCH_OFFSET) / CHECKPOINT_INTERVAL) * CHECKPOINT_INTERVAL + EPOCH_OFFSET;
+        // Newest checkpoint's timestamp (already rounded to epoch boundary)
         uint256 lastCheckpointTimestamp_ = checkpointsLength_ > 0
             ? checkpoints_[checkpointsLength_ - 1].timestamp
             : 0;
-        // The furthest back a checkpoint will ever be is the number of days delta between timestamp and the last
-        // checkpoints timestamp. This happens when there was a checkpoint written every single day over that period.
+        // The furthest back a checkpoint will ever be is the number of epochs delta between timestamp and the last
+        // checkpoints timestamp. This happens when there was a checkpoint written every single epoch over that period.
         // If roundedDownTimestamp > lastCheckpointTimestamp that means that we can just use the last index as
         // the checkpoint.
         uint256 delta = lastCheckpointTimestamp_ > roundedDownTimestamp_
-            ? (lastCheckpointTimestamp_ - roundedDownTimestamp_) / ONE_DAY
+            ? (lastCheckpointTimestamp_ - roundedDownTimestamp_) / CHECKPOINT_INTERVAL
             : 0;
         // low index is equal to the last checkpoints index minus the index delta
         uint256 low = (checkpointsLength_ > 0 && checkpointsLength_ - 1 > delta)
@@ -399,7 +542,7 @@ contract VeHemiVoteDelegation is ReentrancyGuardTransientUpgradeable, VeHemiDele
 
         Delegation memory _previousDelegation = delegations[delegator_];
 
-        uint256 _checkpointTimestamp = ((block.timestamp / ONE_DAY) * ONE_DAY) + ONE_DAY;
+        uint256 _checkpointTimestamp = (((block.timestamp - EPOCH_OFFSET) / CHECKPOINT_INTERVAL) * CHECKPOINT_INTERVAL) + CHECKPOINT_INTERVAL + EPOCH_OFFSET;
 
         NormalizedVeHemiLockInfo memory _normalizedVeLockInfo = _getNormalizedLockedInfo(
             delegator_,
@@ -430,6 +573,20 @@ contract VeHemiVoteDelegation is ReentrancyGuardTransientUpgradeable, VeHemiDele
             fromDelegatee: _previousDelegation.delegatee,
             toDelegatee: delegatee_
         });
+
+        // Relay DelegateChanged to adapter with address-based IVotes signature.
+        // Resolve tokenId → owner outside try/catch so a revert in ownerOf
+        // is not silently swallowed.  All call sites pass valid token IDs,
+        // but keeping the resolution explicit avoids a subtle pitfall where
+        // argument evaluation happens before Solidity enters try scope.
+        if (trustedAdapter != address(0)) {
+            address _owner = veHemi.ownerOf(delegator_);
+            try IAdapterNotify(trustedAdapter).notifyDelegateChanged(
+                _owner,
+                _previousDelegation.delegatee,
+                delegatee_
+            ) {} catch {}
+        }
     }
 
     function _getPastVotes(
@@ -546,14 +703,24 @@ contract VeHemiVoteDelegation is ReentrancyGuardTransientUpgradeable, VeHemiDele
             });
         }
 
+        uint256 _newVotesForPrevDelegatee = _getPastVotes({
+            account_: previousDelegation_.delegatee,
+            timestamp_: checkpointTimestamp_
+        });
+
         emit DelegateVotesChanged({
             delegatee: previousDelegation_.delegatee,
             previousVotes: _previousVotes,
-            newVotes: _getPastVotes({
-                account_: previousDelegation_.delegatee,
-                timestamp_: checkpointTimestamp_
-            })
+            newVotes: _newVotesForPrevDelegatee
         });
+
+        // Relay to adapter so the event appears from the voting token address
+        // that Aragon's subgraph indexes.
+        if (trustedAdapter != address(0)) {
+            try IAdapterNotify(trustedAdapter).notifyVotesChanged(
+                previousDelegation_.delegatee, _previousVotes, _newVotesForPrevDelegatee
+            ) {} catch {}
+        }
     }
 
     /**
@@ -614,11 +781,24 @@ contract VeHemiVoteDelegation is ReentrancyGuardTransientUpgradeable, VeHemiDele
             lastCheckpoint_: _lastCheckpoint
         });
 
+        uint256 _newVotesForNewDelegatee = _getPastVotes({
+            account_: newDelegatee_,
+            timestamp_: checkpointTimestamp_
+        });
+
         emit DelegateVotesChanged({
             delegatee: newDelegatee_,
             previousVotes: _previousVotes,
-            newVotes: _getPastVotes({account_: newDelegatee_, timestamp_: checkpointTimestamp_})
+            newVotes: _newVotesForNewDelegatee
         });
+
+        // Relay to adapter so the event appears from the voting token address
+        // that Aragon's subgraph indexes.
+        if (trustedAdapter != address(0)) {
+            try IAdapterNotify(trustedAdapter).notifyVotesChanged(
+                newDelegatee_, _previousVotes, _newVotesForNewDelegatee
+            ) {} catch {}
+        }
     }
 
     function _writeCheckpoint(

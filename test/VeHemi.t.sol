@@ -106,6 +106,38 @@ contract VeHemiTest is Test {
         assertEq(veHemi.ownerOf(tokenId), alice);
     }
 
+    function test_createLockFor_exactMinimumSucceeds() public {
+        uint256 exactMin = 10e18; // MIN_LOCK_AMOUNT
+        vm.prank(user);
+        uint256 tokenId = veHemi.createLockFor(exactMin, 2 * 365 days, alice, true, false);
+        assertEq(veHemi.ownerOf(tokenId), alice, "10e18 should succeed for createLockFor");
+    }
+
+    function test_createLockFor_belowMinimumReverts() public {
+        uint256 belowMin = 10e18 - 1;
+        vm.prank(user);
+        vm.expectRevert(VeHemi.AmountTooSmall.selector);
+        veHemi.createLockFor(belowMin, 2 * 365 days, alice, true, false);
+    }
+
+    function test_createLock_belowMinimumReverts() public {
+        // V2: MIN_LOCK_AMOUNT applies to ALL lock creation (createLock and createLockFor)
+        uint256 tiny = 1 ether;
+        hemi.mint(user, tiny);
+        vm.startPrank(user);
+        hemi.approve(address(veHemi), tiny);
+        vm.expectRevert(VeHemi.AmountTooSmall.selector);
+        veHemi.createLock(tiny, 2 * 365 days);
+        vm.stopPrank();
+    }
+
+    function testFuzz_createLockFor_revertsForSmallAmounts(uint256 amount) public {
+        amount = bound(amount, 1, 10e18 - 1);
+        vm.prank(user);
+        vm.expectRevert(VeHemi.AmountTooSmall.selector);
+        veHemi.createLockFor(amount, 2 * 365 days, alice, true, false);
+    }
+
     function testWithdraw() public {
         uint256 amount = 50 ether;
 

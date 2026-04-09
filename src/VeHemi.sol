@@ -809,7 +809,8 @@ contract VeHemi is
         if (forfeitable_) forfeitable[_tokenId] = true;
 
         _depositFor(_tokenId, amount_, unlockTime.toUint64(), locked[_tokenId]);
-        _delegate(_tokenId, account_);
+
+        _delegate(_tokenId, _resolveAutoDelegate(account_));
 
         address _sender = _msgSender();
 
@@ -889,12 +890,21 @@ contract VeHemi is
         }
     }
 
+    /// @dev Returns the auto-delegate target for an account, or the account itself
+    ///      if no auto-delegate is set. try/catch ensures backwards compatibility
+    ///      if voteDelegation hasn't been upgraded to support autoDelegate yet.
+    function _resolveAutoDelegate(address account_) internal view returns (address) {
+        try voteDelegation.autoDelegate(account_) returns (address result) {
+            if (result != address(0)) return result;
+        } catch {}
+        return account_;
+    }
+
     /// @dev Wrapped in try/catch for the same defensive reason as _reDelegate.
     function _delegate(uint256 delegator_, address delegatee_) internal {
-        // Delegation changes are effective only after 1 day. If lock is ending before that no need to delegate
-        // Example: User is increasing amount just few hours before lock ends.
-        // NFT is transferred just few hours before lock ends.
-        uint256 _newDelegationStarts = ((block.timestamp / 1 days) * 1 days) + 1 days;
+        // Delegation changes take effect at the next epoch boundary. If lock ends before that, skip delegation.
+        // Example: User is increasing amount or transferring just before lock ends.
+        uint256 _newDelegationStarts = ((block.timestamp / 1 hours) * 1 hours) + 1 hours;
         if (_newDelegationStarts < locked[delegator_].end) {
             try voteDelegation.delegate(delegator_, delegatee_) {} catch {
                 emit DelegationUpdateFailed(delegator_);
@@ -1202,7 +1212,7 @@ contract VeHemi is
         if (from_ != address(0)) {
             if (!isTransferable(tokenId_)) revert NotTransferable();
             _updateReward(tokenId_);
-            _delegate(tokenId_, to_);
+            _delegate(tokenId_, _resolveAutoDelegate(to_));
         }
 
         super.transferFrom(from_, to_, tokenId_);

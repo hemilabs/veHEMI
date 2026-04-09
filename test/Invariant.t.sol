@@ -53,10 +53,10 @@ contract InvariantTest is Test {
     }
 
     function invariant_votingPower() public {
-        // Warp to next day boundary (delegation takes effect at day boundaries),
+        // Warp to next hourly epoch boundary (delegation takes effect at hour boundaries),
         // then restore timestamp so we don't pollute handler state.
         uint256 savedTimestamp = block.timestamp;
-        vm.warp(((block.timestamp / 1 days) + 1) * 1 days);
+        vm.warp(((block.timestamp / 1 hours) * 1 hours) + 1 hours);
 
         uint256 sumOfBalances;
         uint256 sumOfVotes;

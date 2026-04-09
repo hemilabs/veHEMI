@@ -49,6 +49,11 @@ interface IVeHemiVoteDelegation {
      */
     event DelegateVotesChanged(address indexed delegatee, uint256 previousVotes, uint256 newVotes);
 
+    /**
+     * @dev Emitted when the trusted adapter is changed via setTrustedAdapter.
+     */
+    event TrustedAdapterUpdated(address indexed oldAdapter, address indexed newAdapter);
+
     function delegate(uint256 delegator_, address delegatee_) external;
 
     function delegation(uint256 tokenId_) external view returns (Delegation memory);
@@ -56,4 +61,15 @@ interface IVeHemiVoteDelegation {
     function getVotes(address account_) external view returns (uint256);
 
     function getPastVotes(address account_, uint256 timestamp_) external view returns (uint256);
+
+    /// @notice Returns the auto-delegate address for an account. When set, new veHEMI
+    ///         positions created for this account will be automatically delegated to
+    ///         this address instead of self-delegating.
+    function autoDelegate(address account_) external view returns (address);
+
+    function clearAutoDelegate() external;
+
+    function refreshVotingPower(address delegatee_) external;
+
+    function refreshVotingPowerBatch(address[] calldata delegatees_) external;
 }

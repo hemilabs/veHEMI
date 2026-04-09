@@ -62,7 +62,7 @@ contract FuzzTest is Test {
     }
 
     function _getNextCheckpoint() private view returns (uint256) {
-        return ((block.timestamp / 1 days) * 1 days) + 1 days;
+        return ((block.timestamp / 1 hours) * 1 hours) + 1 hours;
     }
 
     function testFuzz_createLock(uint amount, uint duration, uint t_1, uint t_2) public {
