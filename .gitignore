@@ -29,3 +29,13 @@ coverage*
 
 # Hardhat Ignition default folder for deployments against a local node
 ignition/deployments/chain-31337
+
+# Delegation/restaking workstream files (separate branch, not part of Aragon/V2 PR)
+/*.sol
+/libraries/
+/types/
+/examples/
+/sdk/
+
+# Safe batch temp file
+multisig.batch.tmp.json

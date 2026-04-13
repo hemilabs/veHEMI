@@ -794,6 +794,45 @@ contract TestVeHemiVoteDelegation is Test {
         );
     }
 
+    function test_forfeit_cleansDelegationStruct() public {
+        // Regression test: after forfeit, delegation(tokenId) must return an
+        // all-zeros struct. Before the cleanup fix, the struct retained stale
+        // bias/slope/amount values from the now-burned position.
+        uint256 lockAmount = 11 ether;
+        address forfeitAdmin = address(0x5678);
+
+        vm.prank(address(this));
+        veHemi.updateForfeitAdmin(forfeitAdmin);
+
+        hemiToken.mint(BILL, lockAmount);
+        vm.startPrank(BILL);
+        hemiToken.approve(address(veHemi), lockAmount);
+        uint256 walterTokenId = veHemi.createLockFor(lockAmount, 4 * 365 days, WALTER, false, true);
+        vm.stopPrank();
+
+        // Confirm delegation is populated before forfeit
+        IVeHemiVoteDelegation.Delegation memory dBefore = hemiVoteDelegation.delegation(walterTokenId);
+        assertEq(dBefore.delegatee, WALTER, "pre-forfeit: delegatee should be WALTER");
+        assertGt(dBefore.bias, 0, "pre-forfeit: bias should be non-zero");
+        assertGt(dBefore.amount, 0, "pre-forfeit: amount should be non-zero");
+        assertGt(dBefore.slope, 0, "pre-forfeit: slope should be non-zero");
+        assertGt(dBefore.end, 0, "pre-forfeit: end should be non-zero");
+
+        vm.warp(block.timestamp + 90 days);
+
+        // Forfeit
+        vm.prank(forfeitAdmin);
+        veHemi.forfeit(walterTokenId);
+
+        // After forfeit, the delegation struct must be fully zeroed
+        IVeHemiVoteDelegation.Delegation memory dAfter = hemiVoteDelegation.delegation(walterTokenId);
+        assertEq(dAfter.delegatee, address(0), "post-forfeit: delegatee should be zero");
+        assertEq(dAfter.end, 0, "post-forfeit: end should be zero");
+        assertEq(dAfter.bias, 0, "post-forfeit: bias should be zero");
+        assertEq(dAfter.amount, 0, "post-forfeit: amount should be zero");
+        assertEq(dAfter.slope, 0, "post-forfeit: slope should be zero");
+    }
+
     function testDelegatedVotesAfterForfeit() public {
         // Given - Set up forfeit admin and create locks
         uint256 lockAmount = 11 ether;
@@ -1262,6 +1301,242 @@ contract TestVeHemiVoteDelegation is Test {
         hemiVoteDelegation.delegateBySig(aliceTokenId, BOB, 1, expiry, v, r, s);
     }
 
+    function testDelegateBySigReplay() public {
+        // Given - Alice signs a valid delegation
+        uint256 alicePrivateKey = 0xA11CE;
+        address alice = vm.addr(alicePrivateKey);
+        (uint256 aliceTokenId, ) = _createLock(alice, LOCK_AMOUNT, 30 days);
+        _createLock(BOB, LOCK_AMOUNT, 30 days);
+        uint256 expiry = block.timestamp + 3600;
+        bytes32 digest = _getTypesDataHash(aliceTokenId, BOB, 0, expiry);
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(alicePrivateKey, digest);
+
+        // When - First call succeeds
+        hemiVoteDelegation.delegateBySig(aliceTokenId, BOB, 0, expiry, v, r, s);
+
+        // Then - Replay with same signature reverts (nonce consumed)
+        vm.expectRevert(VeHemiVoteDelegation.InvalidNonce.selector);
+        hemiVoteDelegation.delegateBySig(aliceTokenId, BOB, 0, expiry, v, r, s);
+    }
+
+    function testDelegateBySigV1TypehashRejected() public {
+        // Verifies that signatures created with the old V1 DOMAIN_TYPEHASH (without version)
+        // are rejected. This pins down the EIP-712 breaking change behavior.
+        uint256 alicePrivateKey = 0xA11CE;
+        address alice = vm.addr(alicePrivateKey);
+        (uint256 aliceTokenId, ) = _createLock(alice, LOCK_AMOUNT, 30 days);
+        _createLock(BOB, LOCK_AMOUNT, 30 days);
+        uint256 expiry = block.timestamp + 3600;
+
+        // Build a digest using the OLD V1 typehash (3-field, no version)
+        bytes32 v1DomainTypehash = keccak256(
+            "EIP712Domain(string name,uint256 chainId,address verifyingContract)"
+        );
+        bytes32 v1DomainSeparator = keccak256(
+            abi.encode(
+                v1DomainTypehash,
+                keccak256(bytes("veHEMIDelegation")),
+                block.chainid,
+                address(hemiVoteDelegation)
+            )
+        );
+        bytes32 delegationTypehash = keccak256(
+            "Delegation(uint256 delegator,address delegatee,uint256 nonce,uint256 expiry)"
+        );
+        bytes32 structHash = keccak256(
+            abi.encode(delegationTypehash, aliceTokenId, BOB, 0, expiry)
+        );
+        bytes32 v1Digest = keccak256(abi.encodePacked("\x19\x01", v1DomainSeparator, structHash));
+
+        // Sign with V1 digest
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(alicePrivateKey, v1Digest);
+
+        // V1 signature should be rejected (recovers to wrong address)
+        vm.expectRevert(VeHemiVoteDelegation.NotOwner.selector);
+        hemiVoteDelegation.delegateBySig(aliceTokenId, BOB, 0, expiry, v, r, s);
+    }
+
+    function testDelegateBySigCanonicalDigest() public view {
+        // Verifies that the test helper's digest matches one built from the contract's
+        // own eip712Domain() output. This is NOT tautological — the helper uses hardcoded
+        // strings while this test reads the contract's live domain parameters, catching
+        // any drift between the two.
+        (
+            , // fields
+            string memory name,
+            string memory version,
+            uint256 chainId,
+            address verifyingContract,
+            , // salt
+              // extensions
+        ) = hemiVoteDelegation.eip712Domain();
+
+        // Build domain separator from the contract's reported domain
+        bytes32 domainTypehash = keccak256(
+            "EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)"
+        );
+        bytes32 domainSeparator = keccak256(
+            abi.encode(
+                domainTypehash,
+                keccak256(bytes(name)),
+                keccak256(bytes(version)),
+                chainId,
+                verifyingContract
+            )
+        );
+
+        // Fixed inputs
+        uint256 tokenId = 42;
+        address delegatee = address(0xBEEF);
+        uint256 nonce = 0;
+        uint256 expiry = 1_700_000_000;
+
+        bytes32 delegationTypehash = keccak256(
+            "Delegation(uint256 delegator,address delegatee,uint256 nonce,uint256 expiry)"
+        );
+        bytes32 structHash = keccak256(
+            abi.encode(delegationTypehash, tokenId, delegatee, nonce, expiry)
+        );
+        bytes32 contractDigest = keccak256(abi.encodePacked("\x19\x01", domainSeparator, structHash));
+
+        // Compare against the helper (which uses its own hardcoded strings)
+        bytes32 helperDigest = _getTypesDataHash(tokenId, delegatee, nonce, expiry);
+        assertEq(helperDigest, contractDigest, "Helper digest must match contract's EIP-712 domain");
+    }
+
+    function testEip712DomainValues() public view {
+        // Verify the contract's eip712Domain() returns the expected values
+        (
+            bytes1 fields,
+            string memory name,
+            string memory version,
+            uint256 chainId,
+            address verifyingContract,
+            bytes32 salt,
+            uint256[] memory extensions
+        ) = hemiVoteDelegation.eip712Domain();
+
+        assertEq(uint8(fields), 0x0f, "fields bitmap: name|version|chainId|verifyingContract");
+        assertEq(name, "veHEMIDelegation", "domain name");
+        assertEq(version, "1.0.0", "domain version");
+        assertEq(chainId, block.chainid, "chainId");
+        assertEq(verifyingContract, address(hemiVoteDelegation), "verifyingContract");
+        assertEq(salt, bytes32(0), "salt should be zero");
+        assertEq(extensions.length, 0, "no extensions");
+    }
+
+    // ── delegateBySig fuzz coverage ───────────────────────────────────────
+
+    function testFuzz_delegateBySig_happyPath(
+        uint248 privateKeyRaw_,
+        address delegatee_,
+        uint256 expirySkew_
+    ) public {
+        // Bound inputs to valid ranges
+        uint256 privateKey = uint256(privateKeyRaw_);
+        vm.assume(privateKey != 0);
+        vm.assume(privateKey < SECP256K1_N);
+        vm.assume(delegatee_ != address(0));
+        expirySkew_ = bound(expirySkew_, 1, 365 days);
+
+        address signer = vm.addr(privateKey);
+        vm.assume(signer != BOB); // Avoid collision with BOB's existing lock in other tests
+
+        (uint256 tokenId, ) = _createLock(signer, LOCK_AMOUNT, 30 days);
+        uint256 expiry = block.timestamp + expirySkew_;
+
+        bytes32 digest = _getTypesDataHash(tokenId, delegatee_, 0, expiry);
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(privateKey, digest);
+
+        hemiVoteDelegation.delegateBySig(tokenId, delegatee_, 0, expiry, v, r, s);
+
+        // Nonce should have incremented
+        assertEq(hemiVoteDelegation.nonces(signer), 1, "nonce should increment");
+
+        // Delegation should be recorded with the correct delegatee
+        assertEq(
+            hemiVoteDelegation.delegation(tokenId).delegatee,
+            delegatee_,
+            "delegatee should match"
+        );
+    }
+
+    function testFuzz_delegateBySig_wrongSigner_reverts(
+        uint248 signerKeyRaw_,
+        uint248 attackerKeyRaw_,
+        address delegatee_
+    ) public {
+        uint256 signerKey = uint256(signerKeyRaw_);
+        uint256 attackerKey = uint256(attackerKeyRaw_);
+        vm.assume(signerKey != 0 && signerKey < SECP256K1_N);
+        vm.assume(attackerKey != 0 && attackerKey < SECP256K1_N);
+        vm.assume(signerKey != attackerKey);
+        vm.assume(delegatee_ != address(0));
+
+        address signer = vm.addr(signerKey);
+        address attacker = vm.addr(attackerKey);
+        vm.assume(signer != attacker); // extremely unlikely collision
+
+        (uint256 tokenId, ) = _createLock(signer, LOCK_AMOUNT, 30 days);
+        uint256 expiry = block.timestamp + 3600;
+        bytes32 digest = _getTypesDataHash(tokenId, delegatee_, 0, expiry);
+
+        // Attacker signs the digest — should recover to attacker, not the NFT owner
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(attackerKey, digest);
+
+        vm.expectRevert(VeHemiVoteDelegation.NotOwner.selector);
+        hemiVoteDelegation.delegateBySig(tokenId, delegatee_, 0, expiry, v, r, s);
+    }
+
+    function testFuzz_delegateBySig_expiredSignature_reverts(
+        uint248 privateKeyRaw_,
+        address delegatee_,
+        uint256 warpOffset_
+    ) public {
+        uint256 privateKey = uint256(privateKeyRaw_);
+        vm.assume(privateKey != 0 && privateKey < SECP256K1_N);
+        vm.assume(delegatee_ != address(0));
+        warpOffset_ = bound(warpOffset_, 1, 30 days);
+
+        address signer = vm.addr(privateKey);
+        (uint256 tokenId, ) = _createLock(signer, LOCK_AMOUNT, 60 days);
+
+        uint256 expiry = block.timestamp + 3600;
+        bytes32 digest = _getTypesDataHash(tokenId, delegatee_, 0, expiry);
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(privateKey, digest);
+
+        // Warp past expiry
+        vm.warp(expiry + warpOffset_);
+
+        vm.expectRevert(VeHemiVoteDelegation.SignatureExpired.selector);
+        hemiVoteDelegation.delegateBySig(tokenId, delegatee_, 0, expiry, v, r, s);
+    }
+
+    function testFuzz_delegateBySig_wrongNonce_reverts(
+        uint248 privateKeyRaw_,
+        address delegatee_,
+        uint256 nonce_
+    ) public {
+        uint256 privateKey = uint256(privateKeyRaw_);
+        vm.assume(privateKey != 0 && privateKey < SECP256K1_N);
+        vm.assume(delegatee_ != address(0));
+        vm.assume(nonce_ != 0); // current nonce is 0
+
+        address signer = vm.addr(privateKey);
+        (uint256 tokenId, ) = _createLock(signer, LOCK_AMOUNT, 30 days);
+
+        uint256 expiry = block.timestamp + 3600;
+        bytes32 digest = _getTypesDataHash(tokenId, delegatee_, nonce_, expiry);
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(privateKey, digest);
+
+        vm.expectRevert(VeHemiVoteDelegation.InvalidNonce.selector);
+        hemiVoteDelegation.delegateBySig(tokenId, delegatee_, nonce_, expiry, v, r, s);
+    }
+
+    /// @dev Secp256k1 curve order — private keys must be in [1, n-1].
+    uint256 private constant SECP256K1_N =
+        0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141;
+
     function _getTypesDataHash(
         uint256 delegator_,
         address delegatee_,
@@ -1269,7 +1544,7 @@ contract TestVeHemiVoteDelegation is Test {
         uint256 expiry_
     ) internal view returns (bytes32) {
         bytes32 DOMAIN_TYPEHASH = keccak256(
-            "EIP712Domain(string name,uint256 chainId,address verifyingContract)"
+            "EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)"
         );
         bytes32 DELEGATION_TYPEHASH = keccak256(
             "Delegation(uint256 delegator,address delegatee,uint256 nonce,uint256 expiry)"

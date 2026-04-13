@@ -16,6 +16,24 @@ import {VeHemiStorageV2} from "./storage/VeHemiStorageV2.sol";
 /**
  * @title VeHemi
  * @notice Vesting and yield system based on Curve's veCRV and AERO voting escrow mechanism. Users lock HEMI for up to 4 years.
+ * @dev V2 adds parallel locked + forfeitable subcurves tracking non-transferable and
+ *      forfeitable stake weight alongside the global curve. The subcurves are gated
+ *      behind `lockedSeedingFinalized`, which is a ONE-WAY latch:
+ *
+ *        - `lockedSeedingFinalized == false` (V1 behavior): `_checkpoint` skips all
+ *          subcurve accumulation. Contract is bytecode-upgradeable from V1 with
+ *          zero behavioral divergence until seeding runs.
+ *        - `seedAndFinalizeLockedPositions(tokenIds)` (one-shot, owner-only): computes
+ *          aggregate bias/slope for all existing non-transferable positions in memory,
+ *          writes the locked + forfeitable LockedPoints, then flips the latch to true.
+ *        - `lockedSeedingFinalized == true` (V2 behavior): subcurve logic is live.
+ *          There is NO un-finalize path. A missed position at seeding time permanently
+ *          understates the locked subcurve with no on-chain recovery.
+ *
+ *      V2 checkpoint math is strictly additive: the global curve produces identical
+ *      values pre- and post-seeding. Only the NEW subcurve reads (supplyBreakdown,
+ *      nonTransferableTotalVeHemiSupply, forfeitableTotalVeHemiSupply) depend on
+ *      seeding having run.
  */
 contract VeHemi is
     ERC721EnumerableUpgradeable,
@@ -33,7 +51,14 @@ contract VeHemi is
 
     // --- Constants ---
     uint256 private constant YEAR = 365.25 days;
-    uint256 private constant SIX_DAYS = YEAR / (12 * 5); // 1 year = 12 month, 1 month = 30 day
+    /// @dev SIX_DAYS is the week-ish epoch bucket used by all time rounding
+    ///      (lock.end, transferableAfter, slope-change grid). Despite the name,
+    ///      it equals `YEAR / 60` = 525,960 seconds ≈ 6.0875 days — chosen so
+    ///      there are exactly 60 buckets per Julian year (120 per 2 years,
+    ///      240 per 4-year MAX_TIME). This matches the Curve veCRV convention
+    ///      of "60 periods per year" even though each period is slightly longer
+    ///      than 6 calendar days.
+    uint256 private constant SIX_DAYS = YEAR / (12 * 5);
     uint256 private constant MAX_TIME = 4 * YEAR; // 4 years
     uint256 private constant MULTIPLIER = 1 ether;
     uint256 private constant MIN_LOCK_AMOUNT = 10e18; // 10 HEMI — prevents dust lock griefing
@@ -412,6 +437,18 @@ contract VeHemi is
      *      All subcurve tracking is gated on `lockedSeedingFinalized` to prevent corruption
      *      during the seeding window.
      *
+     *      V1-COMPATIBILITY INVARIANT: the global-curve computations (Point arithmetic,
+     *      `slopeChanges`, `globalPointHistory`, `userPointHistory`, `epoch`) are byte-for-byte
+     *      identical to the V1 implementation. The V2 additions are strictly additive:
+     *          (a) compute `_curveFlags` from `transferableAfter` / `forfeitable` — side-effect free,
+     *          (b) compute `_oldSubcurveBias` / `_newSubcurveBias` using `min(lock.end, transferableAfter)`,
+     *          (c) write to `lockedGlobalPointHistory` / `forfeitableGlobalPointHistory` /
+     *              `lockedSlopeChanges` / `forfeitableSlopeChanges` — disjoint storage from V1,
+     *          (d) every subcurve branch is guarded by `lockedSeedingFinalized`, so pre-seeding
+     *              this function is a pure V1 checkpoint.
+     *      This means upgrading the implementation (before seeding) cannot alter the global
+     *      curve's view of any historical or future timestamp.
+     *
      *      Stack depth is managed by:
      *        - Moving `_initialLastPoint`, `_blockSlope`, `_lastCheckpoint` into the
      *          catchup loop's scoping block (they are only used inside the loop).
@@ -678,6 +715,17 @@ contract VeHemi is
      *      window — the subcurve slope change fires at transferableAfter (when the position
      *      exits the subcurve), not at lock.end.
      *
+     *      Flag encoding (per nibble): 0 = transferable (global only, no subcurves),
+     *                                  1 = non-transferable (global + locked subcurve),
+     *                                  2 = non-transferable + forfeitable (all three curves).
+     *      The packing uses: `[newFlags:4..7][oldFlags:0..3]`. Old flags describe what
+     *      subcurves the position WAS tracked in (what to unwind); new flags describe
+     *      what subcurves it is tracked in NOW (what to apply). The transitions are
+     *      monotonically non-increasing over a position's lifetime:
+     *        - 2 (forfeitable) → 1 (non-transferable) via `forfeit`
+     *        - 1 or 2 → 0 when `block.timestamp >= transferableAfter` (subcurve exit,
+     *          global weight retained until lock.end)
+     *
      * @param curveFlags_ Packed old/new flags: [newFlags:4..7][oldFlags:0..3]
      */
     function _scheduleSlopeChanges(
@@ -923,6 +971,19 @@ contract VeHemi is
      *      (so subcurve logic is skipped), then writes both LockedPoints.
      *      Forfeitable positions are those where forfeitable[tokenId] == true.
      *      Callable once. Gas: ~4-7M depending on forfeitable count.
+     *
+     *      Slope-write timing: `lockedSlopeChanges[_subEnd]` and `forfeitableSlopeChanges[_subEnd]`
+     *      are written during Phase 1 at each position's effective subcurve end
+     *      (`min(lock.end, transferableAfter)`), which is always >= block.timestamp (positions
+     *      with `_ta <= block.timestamp` are skipped). The Phase 3 LockedPoint is written at
+     *      `block.timestamp`, NOT at a SIX_DAYS-rounded timestamp. This is safe because
+     *      `_subcurveSupplyAt` reads the most recent LockedPoint at or before the query
+     *      timestamp and walks forward on the SIX_DAYS grid, picking up the just-written
+     *      future slope changes without revisiting `block.timestamp`.
+     *
+     *      Input constraints: `tokenIds_` MUST be strictly ascending and contain every
+     *      active non-transferable position. Missed positions permanently understate the
+     *      locked subcurve (no retroactive seeding path).
      * @param tokenIds_ Array of non-transferrable token IDs (must not be empty)
      */
     function seedAndFinalizeLockedPositions(uint256[] calldata tokenIds_) external onlyOwner {
@@ -1045,6 +1106,19 @@ contract VeHemi is
     /**
      * @notice Combined supply breakdown avoiding redundant binary searches.
      * @dev Invariant: forfeitable_ <= locked_ <= total (enforced by defensive caps).
+     *      In normal operation the three curves are accumulated from the same set of
+     *      positions and can never violate the ordering. The defensive caps exist as a
+     *      belt-and-suspenders guard against:
+     *        (a) integer-rounding skew between curves (subcurves use min(end, transferableAfter)
+     *            and a separate slope-changes mapping, so their truncation behavior under
+     *            the linear-decay formula can drift by a few wei),
+     *        (b) the period before `seedAndFinalizeLockedPositions` runs, where the locked
+     *            and forfeitable LockedPoints are unwritten (timestamp == 0) and therefore
+     *            return 0 — without the cap a subsequent off-by-one in seeding could surface
+     *            as `locked > total` to downstream consumers,
+     *        (c) any future bug that violates the algebraic invariant; the caps keep the
+     *            return shape sane (`transferable = total - locked` underflows otherwise).
+     *      Consumers should treat the caps as defense-in-depth, not as authoritative reconciliation.
      * @return total Total veHEMI supply
      * @return locked_ Non-transferrable veHEMI supply (capped at total)
      * @return forfeitable_ Forfeitable non-transferrable veHEMI supply (capped at locked_)
@@ -1204,11 +1278,25 @@ contract VeHemi is
         emit Withdraw(_sender, tokenId_, _amount, block.timestamp);
     }
 
+    /**
+     * @notice ERC721 transfer override with veHEMI-specific semantics.
+     * @dev Transfer re-delegation: the NFT's delegation is reset on every transfer via
+     *      `_resolveAutoDelegate(to_)`. If the recipient has set an auto-delegate target
+     *      via `VeHemiVoteDelegation.delegateAllFor` (typically through the Aragon
+     *      adapter's `delegate(address)`), the position is delegated to that target;
+     *      otherwise it self-delegates to the recipient. This means a transfer into an
+     *      account that has already chosen a governance delegatee does NOT silently
+     *      re-point voting power at the new owner — it tracks their declared delegate.
+     *
+     *      Mints (from_ == address(0)) skip both the transferability check and the
+     *      re-delegation step; initial delegation for minted positions happens inside
+     *      the mint flow (`createLock` / `createLockFor`) via `_resolveAutoDelegate`.
+     */
     function transferFrom(
         address from_,
         address to_,
         uint256 tokenId_
-    ) public override(ERC721Upgradeable, IERC721) {
+    ) public override(ERC721Upgradeable, IERC721) nonReentrant {
         if (from_ != address(0)) {
             if (!isTransferable(tokenId_)) revert NotTransferable();
             _updateReward(tokenId_);

@@ -90,6 +90,15 @@ contract VeHemiAragonAdapter {
     /// @dev Iterates the account's NFTs and sums locked amounts. This provides a
     ///      meaningful "token balance" for the Aragon member detail page rather than
     ///      the raw NFT position count.
+    ///
+    ///      ASYMMETRY WITH `totalSupply()`: `balanceOf(account)` returns the raw locked
+    ///      HEMI amount, while `totalSupply()` returns aggregate decayed stake weight.
+    ///      The two are deliberately different quantities — `balanceOf` is a stable,
+    ///      user-recognizable "how much HEMI did I lock" number (matches the member
+    ///      detail page's expectation), while `totalSupply` matches the value space of
+    ///      `getVotes` / `getPastVotes` so Aragon's voting-threshold arithmetic is
+    ///      consistent with delegated voting power. They will NOT sum to a single
+    ///      meaningful total; do not compare them directly.
     function balanceOf(address account) external view returns (uint256 total) {
         uint256 count = _veHemi.balanceOf(account);
         for (uint256 i; i < count;) {
@@ -100,10 +109,21 @@ contract VeHemiAragonAdapter {
         }
     }
 
+    /// @notice Fixed at 18 to match HEMI's ERC20 decimals.
+    /// @dev Aragon's TokenVoting UI reads `decimals()` to render voting-power values.
+    ///      HEMI is an 18-decimal ERC20; the `balanceOf` sum above and `totalVeHemiSupply`
+    ///      are both denominated in 18-decimal wei. Hardcoded rather than proxied through
+    ///      VeHemi so this view is pure and cannot revert.
     function decimals() external pure returns (uint8) {
         return 18;
     }
 
+    /// @notice Returns the global aggregate stake weight (decayed voting power) across
+    ///         all veHEMI positions. This matches the value space of `getVotes` /
+    ///         `getPastVotes`, so Aragon's quorum/support threshold arithmetic stays
+    ///         consistent with the sum of all delegate voting powers.
+    /// @dev See the `balanceOf` NatSpec for the rationale behind the intentional
+    ///      asymmetry between `balanceOf` (locked HEMI) and `totalSupply` (stake weight).
     function totalSupply() external view returns (uint256) {
         return _veHemi.totalVeHemiSupply();
     }
@@ -150,6 +170,19 @@ contract VeHemiAragonAdapter {
         _delegation().delegateAllFor(msg.sender, delegatee);
     }
 
+    /// @notice Always reverts. Use `VeHemiVoteDelegation.delegateBySig` directly.
+    /// @dev The standard IVotes `delegateBySig(address delegatee, uint256 nonce, ...)`
+    ///      signs over an account-wide delegatee. veHEMI's native delegation is per-tokenId,
+    ///      so there is no transparent way to forward this signature — a naive "delegate
+    ///      all my positions" translation would produce a different digest than the one
+    ///      the user signed, which is unsafe. Signers must instead use
+    ///      `VeHemiVoteDelegation.delegateBySig(tokenId, delegatee, ...)` whose EIP-712
+    ///      typehash explicitly includes the tokenId.
+    ///
+    ///      The function is still declared (reverting) so `supportsInterface(IVotes)` is
+    ///      truthful at the ABI level — Aragon's ERC-165 probe sees the full IVotes
+    ///      surface — while at runtime the unsupported signature path produces an
+    ///      unambiguous revert string rather than silent misbehavior.
     function delegateBySig(address, uint256, uint256, uint8, bytes32, bytes32) external pure {
         revert("Use VeHemiVoteDelegation.delegateBySig");
     }
@@ -187,6 +220,16 @@ contract VeHemiAragonAdapter {
     ///         events) and relays the event back to this adapter via notifyVotesChanged.
     ///         This avoids the timestamp mismatch that occurs when using getVotes()
     ///         (which uses block.timestamp) directly.
+    ///
+    ///         Permissionless by design: any address can call this to nudge the subgraph.
+    ///         The function does not mutate delegation state — it only re-emits an event
+    ///         with values that are already readable on-chain. A griefer who spammed
+    ///         `refreshVotingPower` for random addresses would pay gas to emit redundant
+    ///         events that the subgraph would fold into identical already-stored values;
+    ///         no griefing surface on the core contract (beyond ordinary event spam,
+    ///         which the subgraph is built to absorb). The intended caller is an off-chain
+    ///         keeper that periodically walks the active delegate set to keep voting
+    ///         power displays in sync with linear decay.
     function refreshVotingPower(address delegatee) external {
         _delegation().refreshVotingPower(delegatee);
     }
@@ -194,7 +237,8 @@ contract VeHemiAragonAdapter {
     /// @notice Batch version of refreshVotingPower for multiple delegatees in a
     ///         single transaction.
     /// @dev    Delegates to VeHemiVoteDelegation.refreshVotingPowerBatch for
-    ///         timestamp-consistent event emission.
+    ///         timestamp-consistent event emission. Same permissionless-by-design
+    ///         rationale as `refreshVotingPower`; caller pays gas linear in array length.
     function refreshVotingPowerBatch(address[] calldata delegatees) external {
         _delegation().refreshVotingPowerBatch(delegatees);
     }

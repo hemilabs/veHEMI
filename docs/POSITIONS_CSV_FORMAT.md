@@ -54,7 +54,7 @@ The `duration` field must be in **seconds**.
 
 ## 🚨 **Important Notes**
 
-1. **No Header Row**: The script expects the first row to be data, not headers
+1. **Header Row Required**: The first row MUST be the column header `wallet,amount,duration,transferable,forfeitable` (the script uses `csv-parse` with `columns: true` and treats the first row as headers, not data)
 2. **Exact Column Order**: Columns must be in the exact order shown
 3. **No Spaces**: Avoid spaces around values
 4. **Valid Addresses**: All wallet addresses must be valid Ethereum addresses

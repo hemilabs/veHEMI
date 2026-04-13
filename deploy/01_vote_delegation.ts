@@ -57,4 +57,5 @@ const func: DeployFunction = async function (hre) {
 };
 
 func.tags = [VOTE_DELEGATION];
+func.dependencies = [VE_HEMI];
 export default func;

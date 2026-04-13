@@ -17,14 +17,16 @@ pragma solidity ^0.8.29;
  *        - `lockedSlopeChanges` mirrors `slopeChanges` for the locked-only subset.
  *        - `lockedSeedingFinalized` gates all locked-curve logic in `_checkpoint`.
  *          Before finalization, `_checkpoint` skips locked tracking entirely.
- *        - Slots 0-1 are reserved for future use (restaking upgrade path).
+ *        - Slots 0-1 are reserved for future use (preserves storage layout for any
+ *          field that should logically sit between the V1 boundary and the subcurve
+ *          state — e.g., a future V3 extension).
  *        - A storage gap is reserved for future extensions.
  */
 abstract contract VeHemiStorageV2 {
-    /// @dev Reserved slot for future restaking upgrade (preserves storage layout).
+    /// @dev Reserved slot for future extensions (preserves storage layout).
     uint256 private __reservedSlot0;
 
-    /// @dev Reserved slot for future restaking upgrade (preserves storage layout).
+    /// @dev Reserved slot for future extensions (preserves storage layout).
     uint256 private __reservedSlot1;
 
     /// @notice Reduced-size point for locked-only global curve.

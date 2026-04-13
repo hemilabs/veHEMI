@@ -4,6 +4,7 @@ pragma solidity 0.8.29;
 import {ReentrancyGuardTransientUpgradeable} from "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardTransientUpgradeable.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
+import {IERC5267} from "@openzeppelin/contracts/interfaces/IERC5267.sol";
 import {IVeHemi} from "./interfaces/IVeHemi.sol";
 import {VeHemiDelegationStorageV1} from "./storage/VeHemiDelegationStorageV1.sol";
 import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
@@ -26,23 +27,33 @@ interface IAdapterNotify {
  * boundary and expire when the delegator's lock expires.
  * @dev Based on veFXS and veCRV delegation mechanism with adaptations for veHemi
  */
-contract VeHemiVoteDelegation is ReentrancyGuardTransientUpgradeable, VeHemiDelegationStorageV1 {
+contract VeHemiVoteDelegation is ReentrancyGuardTransientUpgradeable, VeHemiDelegationStorageV1, IERC5267 {
     using SafeCast for uint256;
     using SafeCast for int128;
     using SafeCast for int256;
 
     // --- Constants ---
     uint256 private constant YEAR = 365.25 days;
+    /// @dev SIX_DAYS is the week-ish expiration bucket that must match VeHemi's
+    ///      rounding grid exactly: YEAR / 60 = 525,960 seconds ≈ 6.0875 days.
+    ///      MONTH is only used as an intermediate to make that division explicit.
     uint256 private constant MONTH = YEAR / 12;
     uint256 private constant SIX_DAYS = MONTH / 5;
     uint256 private constant MAX_LOCK_DURATION = 4 * YEAR;
+    /// @dev Delegation checkpoints land on hour boundaries to give a responsive
+    ///      governance UX while preventing same-block flash-delegation.
     uint256 private constant CHECKPOINT_INTERVAL = 1 hours;
     uint256 private constant EPOCH_OFFSET = 0;
 
-    /// @notice The EIP-712 typehash for the contract's domain
+    /// @notice The EIP-712 domain name for this contract.
+    string private constant EIP712_NAME = "veHEMIDelegation";
+    /// @notice The EIP-712 domain version. Changing this invalidates all outstanding off-chain signatures.
+    string private constant EIP712_VERSION = "1.0.0";
+
+    /// @notice The EIP-712 typehash for the contract's domain (4-field form with version per EIP-712).
     bytes32 private constant DOMAIN_TYPEHASH =
-        keccak256("EIP712Domain(string name,uint256 chainId,address verifyingContract)");
-    /// @notice The EIP-712 typehash for the delegation struct used by the contract
+        keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)");
+    /// @notice The EIP-712 typehash for the delegation struct used by the contract.
     bytes32 private constant DELEGATION_TYPEHASH =
         keccak256("Delegation(uint256 delegator,address delegatee,uint256 nonce,uint256 expiry)");
 
@@ -83,7 +94,6 @@ contract VeHemiVoteDelegation is ReentrancyGuardTransientUpgradeable, VeHemiDele
 
     function initialize() external initializer {}
 
-
     /**
      * @dev Clock used for flagging checkpoints.
      */
@@ -98,13 +108,41 @@ contract VeHemiVoteDelegation is ReentrancyGuardTransientUpgradeable, VeHemiDele
         return "mode=timestamp";
     }
 
+    /// @inheritdoc IERC5267
+    function eip712Domain()
+        external
+        view
+        returns (
+            bytes1 fields,
+            string memory name,
+            string memory version,
+            uint256 chainId,
+            address verifyingContract,
+            bytes32 salt,
+            uint256[] memory extensions
+        )
+    {
+        return (
+            hex"0f", // fields bitmap: name (0x01) | version (0x02) | chainId (0x04) | verifyingContract (0x08)
+            EIP712_NAME,
+            EIP712_VERSION,
+            block.chainid,
+            address(this),
+            bytes32(0),
+            new uint256[](0)
+        );
+    }
+
     /**
-     * @notice Delegate voting power from one token to another
-     * @dev Delegations take effect at the next epoch boundary. The delegator loses
-     * their voting power and the delegatee gains it. Delegations expire when the delegator's
-     * lock expires. Delegating to self (same tokenId) is equivalent to no delegation.
-     * @param delegator_ The token ID to delegate from (must be owned by msg.sender)
-     * @param delegatee_ The wallet address to delegate to (0 for no delegation, same as delegator_ for self-delegation)
+     * @notice Delegate the voting power of a single veHEMI position to an address.
+     * @dev Delegations take effect at the next hourly epoch boundary. The delegator's
+     *      voting power is moved to the delegatee and expires when the delegator's
+     *      lock expires. To self-delegate, pass the NFT owner's address as delegatee_.
+     *      External callers cannot pass address(0) — that path reverts with
+     *      InvalidDelegatee. The internal forfeit path (called by VeHemi) uses
+     *      address(0) to clean up delegations of burned positions.
+     * @param delegator_ The veHEMI NFT token ID to delegate from (caller must be the NFT owner)
+     * @param delegatee_ The address that will receive this token's voting power (non-zero)
      */
     function delegate(
         uint256 delegator_,
@@ -149,6 +187,7 @@ contract VeHemiVoteDelegation is ReentrancyGuardTransientUpgradeable, VeHemiDele
         address delegatee_
     ) external nonReentrant {
         if (msg.sender != trustedAdapter) revert NotTrustedAdapter();
+        if (delegatee_ == address(0)) revert InvalidDelegatee();
 
         // Set auto-delegate so future positions created for this owner
         // are automatically delegated to the same address.
@@ -189,8 +228,8 @@ contract VeHemiVoteDelegation is ReentrancyGuardTransientUpgradeable, VeHemiDele
         bytes32 domainSeparator = keccak256(
             abi.encode(
                 DOMAIN_TYPEHASH,
-                keccak256(bytes("veHEMIDelegation")),
-                keccak256(bytes("1.0.0")),
+                keccak256(bytes(EIP712_NAME)),
+                keccak256(bytes(EIP712_VERSION)),
                 block.chainid,
                 address(this)
             )
@@ -271,11 +310,13 @@ contract VeHemiVoteDelegation is ReentrancyGuardTransientUpgradeable, VeHemiDele
     }
 
     /**
-     * @notice Calculate all expired delegations for an account since the last checkpoint
-     * @dev Can be used in tandem with writeNewCheckpointForExpirations() to write a new checkpoint
-     * @dev Long time periods between checkpoints can increase gas costs for delegate() and castVote()
-     * @param delegatee_ delegatee_
-     * @return _calculatedCheckpoint A new DelegateCheckpoint to write based on expirations since previous checkpoint
+     * @notice Calculate all expired delegations for an account since the last checkpoint.
+     * @dev Can be used in tandem with writeNewCheckpointForExpiredDelegations() to
+     *      write a new checkpoint. Long time periods between checkpoints can increase
+     *      gas costs for delegate() because the catch-up walk must iterate more
+     *      SIX_DAYS expiration buckets.
+     * @param delegatee_ The delegatee whose expirations should be calculated
+     * @return _calculatedCheckpoint A new DelegateCheckpoint to write based on expirations since the previous checkpoint
      */
     function calculateExpiredDelegations(
         address delegatee_
@@ -321,9 +362,11 @@ contract VeHemiVoteDelegation is ReentrancyGuardTransientUpgradeable, VeHemiDele
     }
 
     /**
-     * @notice Write a new checkpoint if any weight has expired since the previous checkpoint
-     * @dev Long time periods between checkpoints can increase gas costs for delegate() and castVote()
-     * @param delegatee_ delegatee
+     * @notice Write a new checkpoint if any weight has expired since the previous checkpoint.
+     * @dev Long time periods between checkpoints can increase gas costs for subsequent
+     *      delegate() calls because the catch-up walk must iterate more SIX_DAYS
+     *      expiration buckets. Anyone can call this to amortize that cost.
+     * @param delegatee_ The delegatee whose expired delegations should be materialized in storage
      */
     function writeNewCheckpointForExpiredDelegations(address delegatee_) external nonReentrant {
         uint256 _checkpointTimestamp = (((block.timestamp - EPOCH_OFFSET) / CHECKPOINT_INTERVAL) * CHECKPOINT_INTERVAL) + CHECKPOINT_INTERVAL + EPOCH_OFFSET;
@@ -560,13 +603,21 @@ contract VeHemiVoteDelegation is ReentrancyGuardTransientUpgradeable, VeHemiDele
             checkpointTimestamp_: _checkpointTimestamp
         });
 
-        delegations[delegator_] = Delegation({
-            delegatee: delegatee_,
-            end: _normalizedVeLockInfo.end.toUint48(),
-            bias: _normalizedVeLockInfo.bias.toUint96(),
-            amount: _normalizedVeLockInfo.amount.toUint96(),
-            slope: _normalizedVeLockInfo.slope.toUint64()
-        });
+        // When delegatee_ is address(0) (forfeit cleanup), delete the struct
+        // entirely instead of writing stale bias/slope/amount values for a
+        // token that is about to be burned. The only path that reaches here
+        // with address(0) is VeHemi.forfeit → _delegate(tokenId, address(0)).
+        if (delegatee_ == address(0)) {
+            delete delegations[delegator_];
+        } else {
+            delegations[delegator_] = Delegation({
+                delegatee: delegatee_,
+                end: _normalizedVeLockInfo.end.toUint48(),
+                bias: _normalizedVeLockInfo.bias.toUint96(),
+                amount: _normalizedVeLockInfo.amount.toUint96(),
+                slope: _normalizedVeLockInfo.slope.toUint64()
+            });
+        }
 
         emit DelegateChanged({
             delegator: delegator_,

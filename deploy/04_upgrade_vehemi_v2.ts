@@ -3,27 +3,39 @@ import { Addresses } from "../helpers/addresses";
 import { saveForSafeBatchExecution } from "../helpers/safe";
 
 const VE_HEMI = "VeHemi";
+const VOTE_DELEGATION = "VeHemiVoteDelegation";
 
 // ── Deployment documentation ───────────────────────────────────────────────
-// This script upgrades VeHemi from V1 to V2. Two transactions are batched
-// for the Gnosis Safe:
+// This script upgrades the veHEMI system to V2 (subcurves + Aragon support).
+// It bundles three transactions for the Gnosis Safe, executed atomically:
 //
-//   1. upgradeAndCall(proxy, newImpl, "") - upgrades the proxy to the new
-//      implementation with NO initializer call. The V2 locked-curve
-//      functionality is gated behind `lockedSeedingFinalized` which
-//      defaults to false, so the upgrade itself is a no-op — the
-//      contract behaves identically to V1 until seeding occurs.
+//   1. upgrade(VeHemiVoteDelegation proxy, new delegation impl) - upgrades the
+//      delegation contract to add hourly checkpoints, autoDelegate /
+//      delegateAllFor / clearAutoDelegate, and the trusted-adapter hook
+//      consumed by the Aragon adapter (script 05). NO initializer call —
+//      reusing initialize() would revert because of the `initializer` modifier.
 //
-//   2. seedAndFinalizeLockedPositions(tokenIds) - seeds all 126
-//      active non-transferable positions and enables locked-curve tracking.
+//   2. upgrade(VeHemi proxy, new VeHemi V2 impl) - upgrades VeHemi to the V2
+//      implementation. NO initializer call. The V2 locked-curve functionality
+//      is gated behind `lockedSeedingFinalized` (defaults to false), so the
+//      contract behaves identically to V1 until step 3 runs.
 //
-// Both transactions are saved to the Safe batch file so they execute in a
-// single multisig proposal. The seeding is atomic: no multi-step window,
-// no deadline management, no risk of partial state.
+//   3. seedAndFinalizeLockedPositions(tokenIds) - seeds all active
+//      non-transferable positions and enables locked-curve tracking. One-shot
+//      and irreversible: the function reverts on subsequent calls.
+//
+// All three transactions are saved to the Safe batch file so they execute in
+// a single multisig proposal. Steps 1 and 2 are independently safe (the
+// delegation upgrade adds new functions without removing old ones; the VeHemi
+// V2 upgrade is dormant until seeding) but they are executed together to keep
+// the operational story simple. The recommended order is delegation first,
+// then VeHemi, then seeding — VeHemi's try/catch on autoDelegate() means the
+// reverse order is also safe but redundant work would be needed to recover.
 //
 // IMPORTANT: The tokenIds array MUST include ALL active non-transferable
-// positions. Omitted positions would permanently understate the locked
-// supply. Verify the calldata against on-chain state before execution.
+// positions. Omitted positions would permanently understate the locked supply
+// with no recovery path other than a full V3 upgrade. Verify the calldata
+// against on-chain state before governance execution.
 
 // 126 active non-transferable token IDs as of block ~2026-04-08.
 // Sourced from on-chain query: transferableAfter != 0, lock.end > block.timestamp, amount > 0.
@@ -48,7 +60,7 @@ const LOCKED_TOKEN_IDS: number[] = [
 
 const func: DeployFunction = async function (hre) {
     const { deployments, getNamedAccounts, network } = hre;
-    const { deploy, catchUnknownSigner, execute } = deployments;
+    const { deploy, catchUnknownSigner, execute, get, read } = deployments;
     const { deployer } = await getNamedAccounts();
 
     // Only run on Hemi mainnet or localhost
@@ -58,9 +70,82 @@ const func: DeployFunction = async function (hre) {
         );
     }
 
-    // Step 1: Deploy the new VeHemi V2 implementation and upgrade the proxy.
-    // No initializer call — V2 locked-curve is dormant until seeding.
-    const deployFunction = () =>
+    // ── Pre-flight checks ──────────────────────────────────────────────────
+    // Validate the on-chain state of both proxies before queueing any
+    // upgrade transactions. Failing here is much cheaper than catching a
+    // bad upgrade after the Safe has already executed it.
+    console.log("=== Pre-flight checks ===");
+
+    const { address: veHemiAddress } = await get(VE_HEMI);
+    const { address: voteDelegationAddress } = await get(VOTE_DELEGATION);
+    console.log("VeHemi proxy:           ", veHemiAddress);
+    console.log("VoteDelegation proxy:   ", voteDelegationAddress);
+
+    // 1. VeHemi must reference the expected VoteDelegation proxy.
+    const currentVoteDelegation = (await read(VE_HEMI, "voteDelegation")) as string;
+    if (currentVoteDelegation.toLowerCase() !== voteDelegationAddress.toLowerCase()) {
+        throw new Error(
+            `VeHemi.voteDelegation() mismatch: expected ${voteDelegationAddress}, got ${currentVoteDelegation}`
+        );
+    }
+    console.log("VeHemi.voteDelegation:   OK (matches deployment)");
+
+    // 2. VeHemi must already hold real positions — guards against running on
+    //    a fresh proxy where seeding would silently produce a zero subcurve.
+    const totalSupply = (await read(VE_HEMI, "totalVeHemiSupply")) as bigint;
+    if (totalSupply === 0n) {
+        throw new Error("VeHemi.totalVeHemiSupply() is zero — wrong network or fresh proxy?");
+    }
+    console.log("VeHemi.totalSupply:      ", totalSupply.toString());
+
+    // 3. VeHemi.owner() must be the Gnosis Safe (required for step 3 +
+    //    setTrustedAdapter in script 05).
+    const veHemiOwner = (await read(VE_HEMI, "owner")) as string;
+    if (veHemiOwner.toLowerCase() !== Addresses.Hemi.GNOSIS_SAFE.toLowerCase()) {
+        throw new Error(
+            `VeHemi.owner() mismatch: expected ${Addresses.Hemi.GNOSIS_SAFE}, got ${veHemiOwner}`
+        );
+    }
+    console.log("VeHemi.owner:            OK (matches Safe)");
+
+    // 4. VeHemiVoteDelegation must already point at the same VeHemi proxy.
+    const delegationVeHemi = (await read(VOTE_DELEGATION, "veHemi")) as string;
+    if (delegationVeHemi.toLowerCase() !== veHemiAddress.toLowerCase()) {
+        throw new Error(
+            `VeHemiVoteDelegation.veHemi() mismatch: expected ${veHemiAddress}, got ${delegationVeHemi}`
+        );
+    }
+    console.log("Delegation.veHemi:       OK (matches VeHemi proxy)");
+
+    console.log("");
+
+    // ── Step 1: Upgrade VeHemiVoteDelegation ───────────────────────────────
+    // Bare upgrade — no initializer call. hardhat-deploy detects the
+    // bytecode change and queues `ProxyAdmin.upgrade(proxy, newImpl)`.
+    // Adding `execute.init` here would make hardhat-deploy queue
+    // `upgradeAndCall(proxy, newImpl, initialize())` which reverts because
+    // initialize() carries the `initializer` modifier.
+    const upgradeDelegationFunction = () =>
+        deploy(VOTE_DELEGATION, {
+            from: deployer,
+            log: true,
+            args: [veHemiAddress],
+            proxy: {
+                owner: Addresses.Hemi.GNOSIS_SAFE,
+                proxyContract: "OpenZeppelinTransparentProxy",
+            }
+        });
+
+    const multiSigDelegationUpgradeTx = await catchUnknownSigner(upgradeDelegationFunction, { log: true });
+
+    if (multiSigDelegationUpgradeTx) {
+        await saveForSafeBatchExecution(multiSigDelegationUpgradeTx);
+    }
+
+    // ── Step 2: Upgrade VeHemi to V2 ───────────────────────────────────────
+    // Same pattern: bare upgrade with no initializer call. The V2
+    // locked-curve logic is dormant until step 3 (seedAndFinalizeLockedPositions).
+    const upgradeVeHemiFunction = () =>
         deploy(VE_HEMI, {
             from: deployer,
             log: true,
@@ -71,14 +156,14 @@ const func: DeployFunction = async function (hre) {
             }
         });
 
-    const multiSigUpgradeTx = await catchUnknownSigner(deployFunction, { log: true });
+    const multiSigVeHemiUpgradeTx = await catchUnknownSigner(upgradeVeHemiFunction, { log: true });
 
-    if (multiSigUpgradeTx) {
-        await saveForSafeBatchExecution(multiSigUpgradeTx);
+    if (multiSigVeHemiUpgradeTx) {
+        await saveForSafeBatchExecution(multiSigVeHemiUpgradeTx);
     }
 
-    // Step 2: Seed and finalize all non-transferable positions.
-    // This activates locked-curve tracking.
+    // ── Step 3: Seed and finalize all non-transferable positions ───────────
+    // Activates locked-curve tracking. One-shot and irreversible.
     const seedFunction = () =>
         execute(VE_HEMI, { from: deployer, log: true }, "seedAndFinalizeLockedPositions", LOCKED_TOKEN_IDS);
 
@@ -90,5 +175,5 @@ const func: DeployFunction = async function (hre) {
 };
 
 func.tags = ["VeHemiV2Upgrade"];
-func.dependencies = [VE_HEMI];
+func.dependencies = [VE_HEMI, VOTE_DELEGATION];
 export default func;

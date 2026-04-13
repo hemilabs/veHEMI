@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.29;
 
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {IERC721Enumerable} from "@openzeppelin/contracts/token/ERC721/extensions/IERC721Enumerable.sol";
 import {IVeHemiVoteDelegation} from "./IVeHemiVoteDelegation.sol";
 import {IRewardDistributor} from "./IRewardDistributor.sol";
@@ -83,6 +84,7 @@ interface IVeHemi is IERC721Enumerable {
     // SeedingAlreadyFinalized, TokenDoesNotExist, UnsortedOrDuplicateTokenIds
 
     // --- External/Public Functions ---
+    function HEMI() external view returns (IERC20);
     function initialize(address owner) external;
     function checkpoint() external;
     function createLock(uint256 amount, uint256 lockDuration) external returns (uint256 tokenId);

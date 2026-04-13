@@ -409,6 +409,104 @@ contract VeHemiAragonAdapterTest is Test {
         assertEq(adapter.delegates(ALICE), CAROL);
     }
 
+    // ─── clearAutoDelegate regression tests ──────────────────────────────
+
+    function test_clearAutoDelegate_clearsCallerMapping() public {
+        // ALICE sets autoDelegate to BOB via adapter
+        _createLock(ALICE, 15e18, YEAR);
+        vm.prank(ALICE);
+        adapter.delegate(BOB);
+        assertEq(delegation.autoDelegate(ALICE), BOB, "autoDelegate should be set to BOB");
+
+        // ALICE clears their autoDelegate
+        vm.prank(ALICE);
+        delegation.clearAutoDelegate();
+
+        // The mapping should now be address(0)
+        assertEq(delegation.autoDelegate(ALICE), address(0), "autoDelegate should be cleared");
+    }
+
+    function test_clearAutoDelegate_onlyClearsCallersOwnMapping() public {
+        // Both ALICE and BOB set their own autoDelegate
+        _createLock(ALICE, 15e18, YEAR);
+        _createLock(BOB, 15e18, YEAR);
+
+        vm.prank(ALICE);
+        adapter.delegate(CAROL);
+        vm.prank(BOB);
+        adapter.delegate(CAROL);
+
+        assertEq(delegation.autoDelegate(ALICE), CAROL);
+        assertEq(delegation.autoDelegate(BOB), CAROL);
+
+        // ALICE clears — should NOT affect BOB's autoDelegate
+        vm.prank(ALICE);
+        delegation.clearAutoDelegate();
+
+        assertEq(delegation.autoDelegate(ALICE), address(0), "ALICE cleared");
+        assertEq(delegation.autoDelegate(BOB), CAROL, "BOB unaffected");
+    }
+
+    function test_clearAutoDelegate_doesNotAffectExistingPositions() public {
+        // ALICE delegates all to BOB
+        uint256 tokenId = _createLock(ALICE, 15e18, YEAR);
+        vm.prank(ALICE);
+        adapter.delegate(BOB);
+
+        // Verify position is delegated to BOB
+        assertEq(delegation.delegation(tokenId).delegatee, BOB, "position delegated to BOB");
+
+        // ALICE clears autoDelegate
+        vm.prank(ALICE);
+        delegation.clearAutoDelegate();
+
+        // The existing position's delegation is UNCHANGED — clearAutoDelegate
+        // only affects future positions, not existing ones
+        assertEq(delegation.delegation(tokenId).delegatee, BOB, "existing position still delegated to BOB");
+    }
+
+    function test_clearAutoDelegate_newLockSelfDelegatesAfterClear() public {
+        // ALICE sets autoDelegate to BOB
+        _createLock(ALICE, 15e18, YEAR);
+        vm.prank(ALICE);
+        adapter.delegate(BOB);
+
+        // ALICE clears
+        vm.prank(ALICE);
+        delegation.clearAutoDelegate();
+
+        // ALICE creates a new lock — should self-delegate (no autoDelegate)
+        uint256 newTokenId = _createLock(ALICE, 10e18, 2 * YEAR);
+        assertEq(delegation.delegation(newTokenId).delegatee, ALICE, "new lock should self-delegate after clear");
+    }
+
+    function test_clearAutoDelegate_canBeCalledWithoutPriorAutoDelegate() public {
+        // ALICE has never set autoDelegate — clearing should be a no-op (not revert)
+        assertEq(delegation.autoDelegate(ALICE), address(0), "starts at zero");
+
+        vm.prank(ALICE);
+        delegation.clearAutoDelegate();
+
+        assertEq(delegation.autoDelegate(ALICE), address(0), "still zero after clear");
+    }
+
+    function test_clearAutoDelegate_canBeRecalledAfterClearing() public {
+        // ALICE sets autoDelegate to BOB
+        _createLock(ALICE, 15e18, YEAR);
+        vm.prank(ALICE);
+        adapter.delegate(BOB);
+
+        // Clear it
+        vm.prank(ALICE);
+        delegation.clearAutoDelegate();
+        assertEq(delegation.autoDelegate(ALICE), address(0));
+
+        // Set it again to a different address
+        vm.prank(ALICE);
+        adapter.delegate(CAROL);
+        assertEq(delegation.autoDelegate(ALICE), CAROL, "can re-set after clearing");
+    }
+
     // ─── Event relay (Aragon subgraph compatibility) ──────────────────
 
     event DelegateVotesChanged(address indexed delegate, uint256 previousVotes, uint256 newVotes);
@@ -1071,8 +1169,8 @@ contract VeHemiAragonAdapterTest is Test {
         _createLock(ALICE, 11e18, YEAR);
 
         // Delegating to address(0) via the adapter calls delegateAllFor,
-        // which calls _delegate with delegatee_=address(0).
-        // _delegate reverts because msg.sender (the adapter) != address(veHemi).
+        // which rejects address(0) at the top-level guard before iterating
+        // positions or writing to the autoDelegate mapping.
         vm.prank(ALICE);
         vm.expectRevert(VeHemiVoteDelegation.InvalidDelegatee.selector);
         adapter.delegate(address(0));
@@ -1892,6 +1990,83 @@ contract VeHemiAragonAdapterTest is Test {
         // Each voter's power should be less than total (sanity check)
         assertLt(alicePower, totalAtSnapshot, "ALICE power should be < total");
         assertLt(bobPower, totalAtSnapshot, "BOB power should be < total");
+    }
+
+    // =========================================================================
+    // delegateAllFor gas scaling
+    // =========================================================================
+
+    function test_delegateAllFor_gasWithManyPositions() public {
+        // Creates 50 positions for a single user, then calls delegate() through the
+        // adapter (which calls delegateAllFor). Verifies the call succeeds within a
+        // reasonable gas budget. This establishes an upper-bound regression test.
+        uint256 positionCount = 50;
+        uint256 lockAmount = 11 ether; // above MIN_LOCK_AMOUNT
+        uint256 lockDuration = 2 * YEAR;
+
+        for (uint256 i; i < positionCount; ++i) {
+            _createLock(ALICE, lockAmount, lockDuration);
+        }
+
+        assertEq(veHemi.balanceOf(ALICE), positionCount, "ALICE should have all positions");
+
+        // Warp to next epoch so delegations can take effect
+        uint256 nextEpoch = ((block.timestamp / CHECKPOINT_INTERVAL) * CHECKPOINT_INTERVAL) + CHECKPOINT_INTERVAL;
+        vm.warp(nextEpoch);
+
+        // Delegate all positions to BOB via the adapter
+        uint256 gasBefore = gasleft();
+        vm.prank(ALICE);
+        adapter.delegate(BOB);
+        uint256 gasUsed = gasBefore - gasleft();
+
+        // Verify delegation succeeded — BOB should have votes from all 50 positions.
+        // Each position: 11 ether locked for 2 years → bias ≈ 11e18 * 2yr/4yr ≈ 5.5e18.
+        // 50 positions → minimum ~275e18 even with minor decay. Use 100 ether as a
+        // conservative floor that catches partial-delegation bugs.
+        uint256 nextNextEpoch = ((block.timestamp / CHECKPOINT_INTERVAL) * CHECKPOINT_INTERVAL) + CHECKPOINT_INTERVAL;
+        vm.warp(nextNextEpoch);
+        uint256 bobVotes = delegation.getVotes(BOB);
+        assertGt(bobVotes, 100 ether, "BOB should have votes from all 50 positions");
+
+        // ALICE should have no remaining votes (all delegated to BOB)
+        uint256 aliceVotes = delegation.getVotes(ALICE);
+        assertEq(aliceVotes, 0, "ALICE should have 0 votes after full delegation to BOB");
+
+        // Gas budget: 50 positions at ~66K gas each ≈ 3.3M. Allow up to 15M for safety.
+        assertLt(gasUsed, 15_000_000, "delegateAllFor gas should stay under 15M for 50 positions");
+    }
+
+    function testFuzz_delegateAllFor_gasScales(uint8 positionCount_) public {
+        // Verifies that delegateAllFor gas scales linearly with position count within
+        // the supported range. Budget per position is 300K gas, which comfortably
+        // envelops the observed ~66K per-position cost while leaving headroom for
+        // future checkpoint/expiration work.
+        uint256 positionCount = bound(uint256(positionCount_), 1, 100);
+
+        for (uint256 i; i < positionCount; ++i) {
+            _createLock(ALICE, 11 ether, 2 * YEAR);
+        }
+
+        assertEq(veHemi.balanceOf(ALICE), positionCount);
+
+        uint256 nextEpoch = ((block.timestamp / CHECKPOINT_INTERVAL) * CHECKPOINT_INTERVAL) + CHECKPOINT_INTERVAL;
+        vm.warp(nextEpoch);
+
+        uint256 gasBefore = gasleft();
+        vm.prank(ALICE);
+        adapter.delegate(BOB);
+        uint256 gasUsed = gasBefore - gasleft();
+
+        // Gas ceiling scales with position count — generous per-position allowance.
+        uint256 budget = 500_000 + positionCount * 300_000;
+        assertLt(gasUsed, budget, "delegateAllFor gas should scale linearly");
+
+        // Delegation actually happened — BOB has votes, ALICE has none
+        uint256 nextNextEpoch = ((block.timestamp / CHECKPOINT_INTERVAL) * CHECKPOINT_INTERVAL) + CHECKPOINT_INTERVAL;
+        vm.warp(nextNextEpoch);
+        assertGt(delegation.getVotes(BOB), 0, "BOB should have votes");
+        assertEq(delegation.getVotes(ALICE), 0, "ALICE should have 0 votes");
     }
 }
 

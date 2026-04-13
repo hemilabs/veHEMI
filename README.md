@@ -174,6 +174,58 @@ forge build  # build contracts
 forge test   # run tests
 ```
 
+### Coverage
+
+`forge coverage` at default settings takes ~15 minutes on this codebase because
+it disables the Solidity optimizer (for accurate source-line mapping) and then
+runs all 131,072 invariant mutations × 6 invariants × unoptimized bytecode,
+plus 1,000-run fuzz tests. Fork tests are NOT a cause — they self-skip
+in microseconds when RPC URLs are unset.
+
+**Fast coverage (~5 seconds, audit-quality)** — override the fuzz/invariant
+run counts via env vars:
+
+```sh
+FOUNDRY_FUZZ_RUNS=1 FOUNDRY_INVARIANT_RUNS=1 FOUNDRY_INVARIANT_DEPTH=1 \
+  forge coverage --report summary --report lcov
+```
+
+Produces per-contract coverage of:
+- `src/VeHemi.sol`: **97.89%** lines, 81.38% branches, 95.56% functions
+- `src/VeHemiVoteDelegation.sol`: **98.10%** lines, 88.64% branches, **100%** functions
+- `src/adapter/VeHemiAragonAdapter.sol`: **100%** lines, branches, functions
+- `src/utils/PositionFactory.sol`: **100%** lines, branches, functions
+
+The reduced run counts affect input-space exploration depth but not which
+branches of production code get hit (the deterministic test suite already
+reaches them all). Full fuzz/invariant exploration remains available by
+running `forge test` separately at default settings.
+
+**Full coverage (~15 minutes, default config)**:
+```sh
+forge coverage --report summary --report lcov
+```
+
+**`--ir-minimum` does NOT work** on this codebase — fails with a Yul
+stack-too-deep error on VeHemi.sol's curve math. `--via-ir` is silently
+ignored by `forge coverage` (Foundry issue #6592).
+
+Additional test-quality signals beyond line coverage:
+
+- **Shadow-accounting stress tests** (`test/VeHemiStressTest.t.sol`) prove
+  algebraic equivalence between contract aggregates and an independent
+  calculator at every mutation.
+- **Invariant suite** (`test/Invariant.t.sol`) with 6 invariants:
+  `invariant_tokenConservation`, `invariant_veHemiSupply`, `invariant_votingPower`,
+  `invariant_subcurveOrdering`, `invariant_supplyBreakdownConsistency`, and
+  `invariant_epochMonotonicity`. Runs 131,072 mutations per invariant per run.
+- **Fork tests** — 92 in `test/ForkUpgradeLockedCurve.t.sol` (against Hemi
+  mainnet state via `HEMI_RPC_URL`) and 14 in `test/adapter/VeHemiAragonAdapterFork.t.sol`
+  (against Ethereum mainnet Aragon OSx via `ETH_RPC_URL`).
+- **100% declared-error coverage** — every custom error is exercised by at
+  least one `expectRevert` test.
+- **Fuzz tests** (32 `testFuzz_*` across the suite) with 1,000 runs per test.
+
 ## Deployment
 
 ### Preparation
@@ -197,13 +249,16 @@ npx hardhat deploy --network hemi
 
 ### V1 → V2 Upgrade
 
-The V2 upgrade introduces parallel locked/forfeitable subcurves and the Aragon adapter. Two deploy scripts handle this:
+The V2 upgrade introduces parallel locked/forfeitable subcurves, hourly delegation epochs, and the Aragon adapter. Two deploy scripts handle this:
 
-1. **`deploy/04_upgrade_vehemi_v2.ts`** — upgrades the VeHemi proxy to the V2 implementation and seeds the locked subcurve. This script batches two transactions for the Gnosis Safe:
-   - `upgradeAndCall(proxy, newImpl, "")` — upgrades the proxy. The V2 locked-curve logic is gated by `lockedSeedingFinalized`, so the contract behaves identically to V1 until seeding completes.
+1. **`deploy/04_upgrade_vehemi_v2.ts`** — bundles three transactions for the Gnosis Safe:
+   - `upgrade(VeHemiVoteDelegation proxy, new delegation impl)` — upgrades the delegation contract to add hourly checkpoints, `autoDelegate`/`delegateAllFor`/`clearAutoDelegate`, and the trusted-adapter hook consumed by the Aragon adapter.
+   - `upgrade(VeHemi proxy, new VeHemi V2 impl)` — upgrades VeHemi to the V2 implementation. The V2 locked-curve logic is gated by `lockedSeedingFinalized`, so the contract behaves identically to V1 until seeding completes.
    - `seedAndFinalizeLockedPositions(tokenIds)` — initializes the locked + forfeitable subcurves with the aggregate bias/slope of all existing non-transferable positions.
 
-2. **`deploy/05_aragon_adapter.ts`** — deploys the immutable `VeHemiAragonAdapter` and calls `setTrustedAdapter(adapter)` on `VeHemiVoteDelegation` (owner-only, batched for the Gnosis Safe).
+   Both upgrades use bare `upgrade()` (not `upgradeAndCall`) — no initializer is called because the `initializer` modifier would revert on already-initialized proxies.
+
+2. **`deploy/05_aragon_adapter.ts`** — deploys the immutable `VeHemiAragonAdapter` and calls `setTrustedAdapter(adapter)` on `VeHemiVoteDelegation` (owner-only, batched for the Gnosis Safe). Includes pre-flight checks (`voteDelegation() != address(0)`, `totalVeHemiSupply() > 0`) and post-deploy ERC-165 verification (`IVotes`, `ERC165`, `ERC6372`).
 
 ⚠️ **`seedAndFinalizeLockedPositions` is one-shot and irreversible.** The function can only be called once (gated by `lockedSeedingFinalized`). The `tokenIds` array MUST include ALL active non-transferable positions, sorted strictly ascending. If any position is missed, the locked subcurve will permanently understate its supply with no recovery path other than a full V3 upgrade. Until seeding completes, `nonTransferableTotalVeHemiSupply()` and `forfeitableTotalVeHemiSupply()` return zero.
 

@@ -8,6 +8,9 @@ import "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import "../src/interfaces/IVeHemiVoteDelegation.sol";
 import "./mocks/MockERC20.sol";
 import "./mocks/MockHemiVoteDelegation.sol";
+import "./mocks/RevertingVoteDelegation.sol";
+import "./mocks/RevertingRewardDistributor.sol";
+import "./mocks/RecordingRewardDistributor.sol";
 
 contract VeHemiTest is Test {
     MockERC20 hemi;
@@ -1278,5 +1281,318 @@ contract VeHemiTest is Test {
         IVeHemi.LockedBalance memory lockedBalance = veHemi.getLockedBalance(tokenId);
         assertEq(uint256(uint128(lockedBalance.amount)), 0, "Lock not cleared");
         assertEq(lockedBalance.end, 0, "Lock end not cleared");
+    }
+
+    // =========================================================================
+    // Negative input-validation tests
+    // -------------------------------------------------------------------------
+    // Each of these covers a single revert path that was previously unreachable
+    // by the existing test suite. Grouped here so future refactors that widen
+    // the input domain trip an obvious failure instead of silently dropping the
+    // guard.
+    // =========================================================================
+
+    function test_constructor_revertsOnZeroHemi() public {
+        vm.expectRevert(VeHemi.AddressIsNull.selector);
+        new VeHemi(address(0));
+    }
+
+    function test_initialize_revertsOnZeroOwner() public {
+        // Deploy a fresh logic + uninitialized proxy so initialize() is callable.
+        VeHemi logic = new VeHemi(address(hemi));
+        ERC1967Proxy freshProxy = new ERC1967Proxy(address(logic), "");
+        vm.expectRevert(VeHemi.OwnerIsZero.selector);
+        VeHemi(address(freshProxy)).initialize(address(0));
+    }
+
+    function test_createLockFor_revertsOnZeroAccount() public {
+        vm.prank(user);
+        vm.expectRevert(VeHemi.AddressIsNull.selector);
+        veHemi.createLockFor(11 ether, 2 * 365 days, address(0), true, false);
+    }
+
+    function test_createLock_revertsOnZeroAmount() public {
+        vm.prank(user);
+        vm.expectRevert(VeHemi.AmountIsZero.selector);
+        veHemi.createLock(0, 2 * 365 days);
+    }
+
+    function test_createLock_revertsOnDurationTooShort() public {
+        // 2 * SIX_DAYS is the minimum lock duration. Anything below reverts.
+        uint256 tooShort = 2 * SIX_DAYS - 1;
+        vm.prank(user);
+        vm.expectRevert(VeHemi.LockDurationTooShort.selector);
+        veHemi.createLock(11 ether, tooShort);
+    }
+
+    function test_createLock_revertsOnDurationTooLong() public {
+        // MAX_TIME is the maximum. Pad past one SIX_DAYS bucket so the
+        // floor-rounding cannot save us.
+        uint256 tooLong = MAX_TIME + 2 * SIX_DAYS;
+        vm.prank(user);
+        vm.expectRevert(VeHemi.LockDurationTooLong.selector);
+        veHemi.createLock(11 ether, tooLong);
+    }
+
+    function test_createLockFor_revertsWhenTransferableAndForfeitable() public {
+        // A position cannot be both transferable AND forfeitable: forfeit()
+        // would otherwise be unreachable on a transferable position because
+        // transferableAfter == 0 makes the forfeit-window guard always trip.
+        vm.prank(user);
+        vm.expectRevert(VeHemi.InvalidConfiguration.selector);
+        veHemi.createLockFor(11 ether, 2 * 365 days, alice, true, true);
+    }
+
+    function test_increaseAmount_revertsOnZeroAmount() public {
+        (uint256 tokenId, , ) = createLock(user, 11 ether, 2 * 365 days);
+        vm.prank(user);
+        vm.expectRevert(VeHemi.AmountIsZero.selector);
+        veHemi.increaseAmount(tokenId, 0);
+    }
+
+    function test_increaseUnlockTime_revertsOnDurationTooLong() public {
+        (uint256 tokenId, , ) = createLock(user, 11 ether, 2 * 365 days);
+        // Pad past one SIX_DAYS bucket so the floor-rounding cannot save us.
+        uint256 tooLong = MAX_TIME + 2 * SIX_DAYS;
+        vm.prank(user);
+        vm.expectRevert(VeHemi.LockDurationTooLong.selector);
+        veHemi.increaseUnlockTime(tokenId, tooLong);
+    }
+
+    function test_updateVoteDelegation_revertsOnZeroAddress() public {
+        // Owner is address(this) per setUp().
+        vm.expectRevert(VeHemi.AddressIsNull.selector);
+        veHemi.updateVoteDelegation(IVeHemiVoteDelegation(address(0)));
+    }
+
+    function test_withdraw_revertsWhenCallerNotOwner() public {
+        (uint256 tokenId, , ) = createLock(user, 11 ether, 2 weeks);
+        vm.warp(block.timestamp + 2 weeks + 1); // make withdraw otherwise valid
+        vm.prank(alice);
+        vm.expectRevert(VeHemi.NotOwner.selector);
+        veHemi.withdraw(tokenId);
+    }
+
+    function test_withdraw_revertsBeforeLockExpiry() public {
+        (uint256 tokenId, , ) = createLock(user, 11 ether, 2 * 365 days);
+        vm.prank(user);
+        vm.expectRevert(VeHemi.LockNotExpired.selector);
+        veHemi.withdraw(tokenId);
+    }
+
+    // =========================================================================
+    // External-contract failure isolation
+    // -------------------------------------------------------------------------
+    // VeHemi wraps every call to the vote delegation contract and the reward
+    // distributor in try/catch. The whole point of those wrappers is to keep
+    // user-facing operations (createLock, increaseAmount, transferFrom, …) live
+    // even when an external dependency is broken or upgraded to an incompatible
+    // ABI. The tests below install reverting mocks and assert that:
+    //   1. The user-facing call still succeeds.
+    //   2. The contract emits the documented "*UpdateFailed" event so an
+    //      operator/keeper can detect the broken dependency.
+    // =========================================================================
+
+    function _swapInRevertingDelegation() internal returns (RevertingVoteDelegation revertingDelegation) {
+        revertingDelegation = new RevertingVoteDelegation();
+        // Owner is address(this) per setUp().
+        veHemi.updateVoteDelegation(IVeHemiVoteDelegation(address(revertingDelegation)));
+    }
+
+    function test_createLock_succeedsWhenDelegationReverts() public {
+        _swapInRevertingDelegation();
+
+        // We expect DelegationUpdateFailed for the new tokenId. The first lock
+        // mints tokenId 1, so we can predict the indexed delegator value.
+        uint256 expectedTokenId = 1;
+        vm.expectEmit(true, false, false, false);
+        emit IVeHemi.DelegationUpdateFailed(expectedTokenId);
+
+        vm.prank(user);
+        uint256 tokenId = veHemi.createLock(11 ether, 2 * 365 days);
+
+        assertEq(tokenId, expectedTokenId, "createLock should mint despite reverting delegation");
+        assertEq(veHemi.ownerOf(tokenId), user, "lock should be owned by caller");
+    }
+
+    function test_increaseAmount_succeedsWhenDelegationReverts() public {
+        // Create the lock with a working delegation, then swap in a reverting one.
+        (uint256 tokenId, , ) = createLock(user, 11 ether, 2 * 365 days);
+        _swapInRevertingDelegation();
+
+        // _depositFor → _reDelegate (catches delegation()) → _delegate (catches delegate()).
+        // Both catches emit DelegationUpdateFailed; we just verify the first.
+        vm.expectEmit(true, false, false, false);
+        emit IVeHemi.DelegationUpdateFailed(tokenId);
+
+        vm.prank(user);
+        veHemi.increaseAmount(tokenId, 5 ether);
+
+        IVeHemi.LockedBalance memory bal = veHemi.getLockedBalance(tokenId);
+        assertEq(uint256(uint128(bal.amount)), 16 ether, "increaseAmount should still apply");
+    }
+
+    function test_transfer_succeedsWhenDelegationReverts() public {
+        (uint256 tokenId, , ) = createLock(user, 11 ether, 2 * 365 days);
+        _swapInRevertingDelegation();
+
+        // ERC721 transferFrom triggers the delegation update via _update → _delegate.
+        vm.expectEmit(true, false, false, false);
+        emit IVeHemi.DelegationUpdateFailed(tokenId);
+
+        vm.prank(user);
+        veHemi.transferFrom(user, alice, tokenId);
+
+        assertEq(veHemi.ownerOf(tokenId), alice, "transfer should still update ownership");
+    }
+
+    function test_createLock_succeedsWhenRewardDistributorReverts() public {
+        RevertingRewardDistributor revertingDistributor = new RevertingRewardDistributor();
+        veHemi.updateRewardDistributor(IRewardDistributor(address(revertingDistributor)));
+
+        // Predicted tokenId — first lock minted in the suite.
+        uint256 expectedTokenId = 1;
+        vm.expectEmit(true, false, false, false);
+        emit IVeHemi.RewardUpdateFailed(expectedTokenId);
+
+        vm.prank(user);
+        uint256 tokenId = veHemi.createLock(11 ether, 2 * 365 days);
+
+        assertEq(tokenId, expectedTokenId, "createLock should mint despite reverting distributor");
+    }
+
+    function test_increaseAmount_succeedsWhenRewardDistributorReverts() public {
+        // Create with no distributor, then install the reverting one.
+        (uint256 tokenId, , ) = createLock(user, 11 ether, 2 * 365 days);
+        RevertingRewardDistributor revertingDistributor = new RevertingRewardDistributor();
+        veHemi.updateRewardDistributor(IRewardDistributor(address(revertingDistributor)));
+
+        vm.expectEmit(true, false, false, false);
+        emit IVeHemi.RewardUpdateFailed(tokenId);
+
+        vm.prank(user);
+        veHemi.increaseAmount(tokenId, 5 ether);
+
+        IVeHemi.LockedBalance memory bal = veHemi.getLockedBalance(tokenId);
+        assertEq(uint256(uint128(bal.amount)), 16 ether, "increaseAmount should still apply");
+    }
+
+    function test_rewardDistributor_isCalledOnDeposit() public {
+        // Happy path: prove VeHemi actually invokes the distributor when one is
+        // configured. Without this, line 1164 (`if (rewardDistributor != address(0))`)
+        // is never taken in the test suite — the integration shape is only
+        // exercised on the fork.
+        RecordingRewardDistributor recording = new RecordingRewardDistributor();
+        veHemi.updateRewardDistributor(IRewardDistributor(address(recording)));
+
+        (uint256 tokenId, , ) = createLock(user, 11 ether, 2 * 365 days);
+
+        assertEq(recording.callCount(), 1, "distributor should be called exactly once on createLock");
+        assertEq(recording.lastTokenId(), tokenId, "distributor should be called with the new tokenId");
+        assertEq(recording.callsForToken(tokenId), 1, "per-token call counter should match");
+
+        // A second deposit on the same lock should call the distributor again.
+        vm.warp(block.timestamp + 1 days);
+        vm.prank(user);
+        veHemi.increaseAmount(tokenId, 5 ether);
+
+        assertEq(recording.callCount(), 2, "distributor should be called again on increaseAmount");
+        assertEq(recording.callsForToken(tokenId), 2, "per-token counter should increment");
+    }
+
+    // =========================================================================
+    // Binary search inner-loop coverage
+    // -------------------------------------------------------------------------
+    // _getPastUserPointIndex and _getPastGlobalPointIndex contain three-way
+    // branches inside their while loops (== / < / else). All public callers
+    // typically hit the early-return path at the top of the function because
+    // tests query "current" timestamps. The tests below build a *deterministic*
+    // multi-checkpoint history and query at points that force the binary search
+    // loop to iterate, covering both the exact-match and step-right branches.
+    //
+    // Construction strategy: three operations spaced exactly SIX_DAYS apart
+    // produces a history where the binary search converges in one or two steps
+    // and the _center value is predictable. SIX_DAYS spacing also ensures the
+    // catch-up loop in _checkpoint produces global points at exactly the same
+    // timestamps the user points are written at, so the global binary search
+    // mirrors the user binary search structure.
+    // =========================================================================
+
+    function test_binarySearch_userPointHistory_exactAndStepRight() public {
+        // Snap to a SIX_DAYS boundary so the user point timestamps and the
+        // catch-up loop's global timestamps line up cleanly.
+        uint256 t0 = ((block.timestamp + SIX_DAYS) / SIX_DAYS) * SIX_DAYS;
+        vm.warp(t0);
+
+        // Three checkpoints at t0, t0+SIX_DAYS, t0+2*SIX_DAYS → user epochs 1, 2, 3.
+        (uint256 tokenId, , ) = createLock(user, 100 ether, 2 * 365 days);
+
+        vm.warp(t0 + SIX_DAYS);
+        vm.prank(user);
+        veHemi.increaseAmount(tokenId, 5 ether);
+
+        vm.warp(t0 + 2 * SIX_DAYS);
+        vm.prank(user);
+        veHemi.increaseAmount(tokenId, 5 ether);
+
+        // Warp forward so the latest user point (t0+2*SIX_DAYS) is strictly in
+        // the past — otherwise the early return at line 386 would short-circuit
+        // the binary search loop.
+        vm.warp(t0 + 4 * SIX_DAYS);
+
+        // === exact-match branch (line 395) ===
+        // Querying at t0+SIX_DAYS hits user epoch 2 directly. Trace:
+        //   _upper=3, _lower=0 → _center=2 → userPointHistory[2].timestamp == target → return 2.
+        uint256 balExact = veHemi.balanceOfNFTAt(tokenId, t0 + SIX_DAYS);
+        assertGt(balExact, 0, "balanceOfNFTAt at exact checkpoint should be > 0");
+
+        // === step-right branch (line 397) ===
+        // Querying just past epoch 2 forces the loop to step right then converge. Trace:
+        //   _upper=3, _lower=0 → _center=2, ts=t0+SIX_DAYS, < target → _lower=2 (line 397)
+        //   _upper=3, _lower=2 → _center=3, ts=t0+2*SIX_DAYS, > target → _upper=2 → exit, return 2.
+        uint256 balBetween = veHemi.balanceOfNFTAt(tokenId, t0 + SIX_DAYS + 1);
+        assertGt(balBetween, 0, "balanceOfNFTAt between checkpoints should be > 0");
+
+        // The two queries land on the same epoch (2), so the projected biases
+        // differ only by the slope * 1 second decay term — sanity check that
+        // the values are consistent.
+        assertGe(balExact, balBetween, "earlier query should not be smaller than later");
+    }
+
+    function test_binarySearch_globalPointHistory_exactAndStepRight() public {
+        // Same construction as the user-history test: three checkpoints exactly
+        // SIX_DAYS apart. The catch-up loop in _checkpoint writes one global
+        // point per SIX_DAYS boundary, so SIX_DAYS-aligned operations keep the
+        // global history small and predictable.
+        uint256 t0 = ((block.timestamp + SIX_DAYS) / SIX_DAYS) * SIX_DAYS;
+        vm.warp(t0);
+
+        (uint256 tokenId, , ) = createLock(user, 100 ether, 2 * 365 days);
+
+        vm.warp(t0 + SIX_DAYS);
+        vm.prank(user);
+        veHemi.increaseAmount(tokenId, 5 ether);
+
+        vm.warp(t0 + 2 * SIX_DAYS);
+        vm.prank(user);
+        veHemi.increaseAmount(tokenId, 5 ether);
+
+        // Warp past the latest global point so the early return at line 358
+        // does not short-circuit the binary search loop.
+        vm.warp(t0 + 4 * SIX_DAYS);
+
+        // === exact-match branch (line 367) ===
+        // The middle global checkpoint sits at t0+SIX_DAYS, which the binary
+        // search hits directly via _center on the first iteration.
+        uint256 supplyExact = veHemi.totalVeHemiSupplyAt(t0 + SIX_DAYS);
+        assertGt(supplyExact, 0, "totalVeHemiSupplyAt at exact checkpoint should be > 0");
+
+        // === step-right branch (line 369) ===
+        // Querying just past the middle checkpoint forces the loop to step right.
+        uint256 supplyBetween = veHemi.totalVeHemiSupplyAt(t0 + SIX_DAYS + 1);
+        assertGt(supplyBetween, 0, "totalVeHemiSupplyAt between checkpoints should be > 0");
+
+        // Sanity: the supply curve decays monotonically; later query <= earlier query.
+        assertGe(supplyExact, supplyBetween, "supply should decay monotonically");
     }
 }

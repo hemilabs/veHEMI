@@ -5,8 +5,12 @@ import {IVeHemi} from "../interfaces/IVeHemi.sol";
 import {IRewardDistributor} from "../interfaces/IRewardDistributor.sol";
 import {IVeHemiVoteDelegation} from "../interfaces/IVeHemiVoteDelegation.sol";
 
+/// @dev FROZEN — do not add, remove, or reorder fields. VeHemiStorageV2
+///      starts immediately after slot 13 (forfeitable). Any modification
+///      here shifts V2's storage layout and corrupts the proxy on upgrade.
+///      See test/VeHemiStorageLayout.t.sol for the slot-level assertions.
 abstract contract VeHemiStorageV1 is IVeHemi {
-    // --- State ---
+    // --- State (slots 0–13) ---
     uint256 public totalLocked;
     uint256 public epoch;
     uint256 public nextTokenId;

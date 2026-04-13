@@ -90,6 +90,35 @@ contract InvariantTest is Test {
         assertLe(locked, total, "locked > total");
     }
 
+    /// @dev The global epoch counter must only increase, and globalPointHistory timestamps
+    ///      must be non-decreasing. The binary search in _getPastGlobalPointIndex relies on
+    ///      this ordering invariant. Checks a sliding window of the most recent epochs to
+    ///      keep invariant runs fast while still catching regressions.
+    function invariant_epochMonotonicity() public view {
+        uint256 currentEpoch = veHemi.epoch();
+        if (currentEpoch < 2) return;
+
+        // Sample the most recent 8 epochs (or fewer if epoch < 8)
+        uint256 start = currentEpoch > 8 ? currentEpoch - 8 : 1;
+        uint256 prevTimestamp = veHemi.getGlobalPoint(start).timestamp;
+        for (uint256 i = start + 1; i <= currentEpoch; ++i) {
+            uint256 ts = veHemi.getGlobalPoint(i).timestamp;
+            assertGe(ts, prevTimestamp, "globalPointHistory timestamps must be non-decreasing");
+            prevTimestamp = ts;
+        }
+    }
+
+    /// @dev Token conservation: the HEMI balance held by VeHemi must equal totalLocked.
+    ///      If these diverge, either HEMI has leaked out or totalLocked is miscounted.
+    ///      This is the most fundamental safety invariant — any violation is critical.
+    function invariant_tokenConservation() public view {
+        assertEq(
+            hemi.balanceOf(address(veHemi)),
+            veHemi.totalLocked(),
+            "HEMI.balanceOf(veHemi) must equal totalLocked"
+        );
+    }
+
     /// @dev V2: supplyBreakdown must be internally consistent AND match individual functions.
     function invariant_supplyBreakdownConsistency() public view {
         if (!handler.seeded()) return;
