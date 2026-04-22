@@ -1,4 +1,5 @@
 import { DeployFunction } from "hardhat-deploy/types";
+import { execSync } from "child_process";
 import { Addresses } from "../helpers/addresses";
 import { saveForSafeBatchExecution } from "../helpers/safe";
 
@@ -116,6 +117,26 @@ const func: DeployFunction = async function (hre) {
         );
     }
     console.log("Delegation.veHemi:       OK (matches VeHemi proxy)");
+
+    // 5. Storage layout pre-flight. The new implementation's storage layout
+    //    MUST match the committed golden fixture under test/fixtures/storage-layouts/.
+    //    Any drift here would silently corrupt the live proxy on upgrade.
+    //    The check script normalizes AST IDs (which change on any source edit)
+    //    and diffs the resulting layout against the golden file.
+    //
+    //    Regenerating the golden (after an intentional layout change):
+    //      ./scripts/update-storage-layouts.sh
+    //    Then commit the fixture diff alongside the source change.
+    console.log("Running storage layout pre-flight...");
+    try {
+        execSync("./scripts/check-storage-layouts.sh", { stdio: "inherit" });
+        console.log("Storage layouts:         OK (match golden fixtures)");
+    } catch {
+        throw new Error(
+            "Storage layout regression detected. Aborting upgrade. " +
+                "Run ./scripts/check-storage-layouts.sh for details."
+        );
+    }
 
     console.log("");
 

@@ -295,4 +295,11 @@ contract InvariantHandler is Test {
 
         maxWarp -= time;
     }
+
+    /// @dev Permissionless bare-checkpoint path. Exercises `_checkpoint(0, ...)`
+    ///      which writes to globalPointHistory / lockedGlobalPointHistory /
+    ///      forfeitableGlobalPointHistory without an accompanying user mutation.
+    function checkpoint() public {
+        veHemi.checkpoint();
+    }
 }

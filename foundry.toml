@@ -9,6 +9,11 @@ via_ir = false
 evm_version = "cancun"  # Required for EIP-1153 transient storage (ReentrancyGuardTransient)
 block_timestamp = 1_738_368_000 # Feb 1, 2025 at 00:00 GMT
 
+# Allow reading the committed storage-layout goldens in test/fixtures/.
+# Needed by test/StorageLayoutGolden.t.sol to validate the fixtures directly
+# inside `forge test` (the CI shell gate is independent).
+fs_permissions = [{ access = "read", path = "test/fixtures/" }]
+
 # Dependencies with specific versions for reproducible builds
 # NOTE: Actual OZ contracts resolve via node_modules (see remappings.txt).
 # These versions must match package.json to avoid confusion.

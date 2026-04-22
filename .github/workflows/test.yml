@@ -40,6 +40,12 @@ jobs:
                   forge build --sizes
               id: build
 
+            - name: Check storage layouts against golden fixtures
+              run: |
+                  chmod +x scripts/check-storage-layouts.sh
+                  scripts/check-storage-layouts.sh
+              id: storage-layout-gate
+
             - name: Run Forge tests
               run: |
                   forge test -vvv

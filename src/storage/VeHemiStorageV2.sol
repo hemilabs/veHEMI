@@ -1,14 +1,18 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.29;
 
+import {VeHemiStorageV1} from "./VeHemiStorageV1.sol";
+
 /**
  * @title VeHemiStorageV2
  * @notice Storage extension for VeHemi V2 (non-transferrable position weight tracking via locked
  *         and forfeitable subcurves).
  *
- * @dev Appended after VeHemiStorageV1 in the inheritance chain.
- *      Does NOT inherit from anything -- it is mixed into VeHemi's linearized
- *      inheritance alongside VeHemiStorageV1.
+ * @dev Inherits VeHemiStorageV1 to enforce the V1-before-V2 slot ordering at the
+ *      inheritance level. VeHemi inherits only VeHemiStorageV2, which transitively
+ *      includes V1. This is the standard upgradeable-storage chain pattern used by
+ *      OpenZeppelin, Aave, Synthetix, Pendle, and Compound — it removes the risk of
+ *      a future edit to VeHemi's base list accidentally reordering V1 and V2.
  *
  *      Design decisions:
  *        - `lockedGlobalPointHistory` tracks aggregate (bias, slope) for
@@ -17,12 +21,12 @@ pragma solidity ^0.8.29;
  *        - `lockedSlopeChanges` mirrors `slopeChanges` for the locked-only subset.
  *        - `lockedSeedingFinalized` gates all locked-curve logic in `_checkpoint`.
  *          Before finalization, `_checkpoint` skips locked tracking entirely.
- *        - Slots 0-1 are reserved for future use (preserves storage layout for any
- *          field that should logically sit between the V1 boundary and the subcurve
- *          state — e.g., a future V3 extension).
+ *        - Slots 0-1 (V2-relative) are reserved for future use (preserves storage
+ *          layout for any field that should logically sit between the V1 boundary
+ *          and the subcurve state — e.g., a future V3 extension).
  *        - A storage gap is reserved for future extensions.
  */
-abstract contract VeHemiStorageV2 {
+abstract contract VeHemiStorageV2 is VeHemiStorageV1 {
     /// @dev Reserved slot for future extensions (preserves storage layout).
     uint256 private __reservedSlot0;
 

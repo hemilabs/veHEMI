@@ -610,6 +610,168 @@ contract ForkUpgradeLockedCurveTest is Test {
     }
 
     // ═════════════════════════════════════════════════════════════════════
+    //  RAW STORAGE SLOT PRESERVATION — defense in depth for the chain
+    //  inheritance refactor. These tests read raw storage via vm.load on
+    //  the live mainnet proxy both BEFORE and AFTER the upgrade, and assert
+    //  that every V1 slot (0–13) is bit-for-bit preserved. If a storage
+    //  inheritance reorder ever silently shifts slots, these tests fail
+    //  even when getter-based tests would not.
+    // ═════════════════════════════════════════════════════════════════════
+
+    /// @notice Snapshot every V1 value-type slot (0–5) pre-upgrade, upgrade,
+    ///         then re-read each and assert bit-equality. Catches any slot
+    ///         shift in the V1 frozen layout.
+    function testForkRawSlotPreservation() public onlyFork {
+        // Capture raw bytes at V1 slots 0–13 (value types + mapping bases) AND
+        // V2 slots 14–63 (subcurve state + reserved + __gapV2). Mapping base
+        // slots themselves contain no data (derived slots do), so reading them
+        // just asserts the base offset is unused by anything else — i.e. the
+        // mapping isn't repurposed into a value. The V2 region is also
+        // captured pre-upgrade (expected zero on mainnet pre-seeding) so the
+        // post-upgrade assertion is a true pre/post round-trip rather than a
+        // post-only zero check.
+        bytes32[64] memory pre;
+        for (uint256 i = 0; i < 64; ++i) {
+            pre[i] = vm.load(VEHEMI_PROXY, bytes32(i));
+        }
+
+        // Pre-upgrade: V2 region (14–63) must already be zero. A non-zero
+        // value here would indicate something weird on mainnet (and would also
+        // make the post-upgrade preservation check vacuous).
+        for (uint256 i = 14; i < 64; ++i) {
+            assertEq(
+                pre[i],
+                bytes32(0),
+                string.concat("V2 slot ", vm.toString(i), " non-zero pre-upgrade (mainnet)")
+            );
+        }
+
+        _upgradeProxy();
+
+        // Post-upgrade: every slot in the full 0–63 range must match pre.
+        // Covers V1 (bit-exact preservation), V2 (stays zero pre-seeding),
+        // and the full __gapV2[43] region (21–63).
+        for (uint256 i = 0; i < 64; ++i) {
+            bytes32 post = vm.load(VEHEMI_PROXY, bytes32(i));
+            assertEq(
+                post,
+                pre[i],
+                string.concat("slot ", vm.toString(i), " changed during upgrade")
+            );
+        }
+    }
+
+    /// @notice Verify each admin-controlled address slot (voteDelegation=3,
+    ///         rewardDistributor=4, forfeitAdmin=5) returns the EXACT same
+    ///         value before and after the upgrade.
+    function testForkAdminSlotsPreservedPreVsPost() public onlyFork {
+        address voteDelBefore = address(veHemi.voteDelegation());
+        address rewardBefore = address(veHemi.rewardDistributor());
+        address forfeitBefore = veHemi.forfeitAdmin();
+
+        // At least one of the admin slots MUST be non-zero on mainnet, else
+        // the pre == post equality below is vacuously true and the test
+        // wouldn't catch a real slot shift. voteDelegation is set during
+        // initialization and cannot be zero on a live proxy.
+        assertTrue(
+            voteDelBefore != address(0),
+            "voteDelegation unexpectedly zero pre-upgrade - test would be vacuous"
+        );
+
+        _upgradeProxy();
+
+        assertEq(
+            address(veHemi.voteDelegation()),
+            voteDelBefore,
+            "voteDelegation (slot 3) changed across upgrade"
+        );
+        assertEq(
+            address(veHemi.rewardDistributor()),
+            rewardBefore,
+            "rewardDistributor (slot 4) changed across upgrade"
+        );
+        assertEq(
+            veHemi.forfeitAdmin(),
+            forfeitBefore,
+            "forfeitAdmin (slot 5) changed across upgrade"
+        );
+    }
+
+    /// @notice Verify the base slot of each V1 mapping is stable across the
+    ///         upgrade by picking live tokenIds/timestamps from on-chain state
+    ///         and confirming the getter output is identical before vs after.
+    function testForkMappingBaseSlotSentinels() public onlyFork {
+        // Find the first live tokenId inside the known-active LOCKED range
+        // used by the production deploy script (28660–28805). We scan rather
+        // than hardcode 28660 so the test keeps working if that specific
+        // token is later forfeited/withdrawn. Falls back to failing loudly
+        // if no token in the range has a non-zero amount.
+        uint256 sampleTokenId = type(uint256).max;
+        for (uint256 candidate = 28660; candidate <= 28805; ++candidate) {
+            IVeHemi.LockedBalance memory candidateLock = veHemi.getLockedBalance(candidate);
+            if (uint256(uint128(candidateLock.amount)) > 0) {
+                sampleTokenId = candidate;
+                break;
+            }
+        }
+        assertTrue(
+            sampleTokenId != type(uint256).max,
+            "no active LOCKED token found in 28660-28805 range - mainnet state unexpected"
+        );
+        IVeHemi.LockedBalance memory lbPre = veHemi.getLockedBalance(sampleTokenId);
+        assertGt(
+            uint256(uint128(lbPre.amount)),
+            0,
+            "sample tokenId has zero amount - pre/post comparison would be vacuous"
+        );
+
+        uint256 upePre = veHemi.userPointEpoch(sampleTokenId);
+        address provPre = veHemi.provider(sampleTokenId);
+        uint256 taPre = veHemi.transferableAfter(sampleTokenId);
+        bool forfPre = veHemi.forfeitable(sampleTokenId);
+        int128 scPre = veHemi.slopeChanges(uint256(lbPre.end));
+
+        // Sample a userPointHistory entry at a populated epoch.
+        IVeHemi.UserPoint memory upPre = veHemi.getUserPoint(sampleTokenId, upePre);
+
+        // Sample a globalPointHistory entry at the current head epoch.
+        IVeHemi.Point memory gpPre = veHemi.getGlobalPoint(preEpoch);
+
+        _upgradeProxy();
+
+        // Slot 10: LockedBalance — both fields.
+        IVeHemi.LockedBalance memory lbPost = veHemi.getLockedBalance(sampleTokenId);
+        assertEq(lbPost.amount, lbPre.amount, "locked[t].amount (slot 10) changed");
+        assertEq(lbPost.end, lbPre.end, "locked[t].end (slot 10) changed");
+
+        // Slots 8, 9, 11, 12, 13: scalar/address/bool mappings.
+        assertEq(veHemi.userPointEpoch(sampleTokenId), upePre, "userPointEpoch (slot 8) changed");
+        assertEq(veHemi.slopeChanges(uint256(lbPre.end)), scPre, "slopeChanges (slot 9) changed");
+        assertEq(veHemi.provider(sampleTokenId), provPre, "provider (slot 11) changed");
+        assertEq(veHemi.transferableAfter(sampleTokenId), taPre, "transferableAfter (slot 12) changed");
+        assertEq(veHemi.forfeitable(sampleTokenId), forfPre, "forfeitable (slot 13) changed");
+
+        // Slot 7: UserPoint — owner + all 6 Point fields.
+        IVeHemi.UserPoint memory upPost = veHemi.getUserPoint(sampleTokenId, upePre);
+        assertEq(upPost.owner, upPre.owner, "userPointHistory[t][e].owner (slot 7) changed");
+        assertEq(upPost.point.bias, upPre.point.bias, "userPointHistory bias changed");
+        assertEq(upPost.point.slope, upPre.point.slope, "userPointHistory slope changed");
+        assertEq(upPost.point.timestamp, upPre.point.timestamp, "userPointHistory timestamp changed");
+        assertEq(upPost.point.blockNumber, upPre.point.blockNumber, "userPointHistory blockNumber changed");
+        assertEq(upPost.point.amount, upPre.point.amount, "userPointHistory amount changed");
+        assertEq(upPost.point.fixedBias, upPre.point.fixedBias, "userPointHistory fixedBias changed");
+
+        // Slot 6: Point — all 6 fields.
+        IVeHemi.Point memory gpPost = veHemi.getGlobalPoint(preEpoch);
+        assertEq(gpPost.bias, gpPre.bias, "globalPointHistory bias (slot 6) changed");
+        assertEq(gpPost.slope, gpPre.slope, "globalPointHistory slope (slot 6) changed");
+        assertEq(gpPost.timestamp, gpPre.timestamp, "globalPointHistory timestamp changed");
+        assertEq(gpPost.blockNumber, gpPre.blockNumber, "globalPointHistory blockNumber changed");
+        assertEq(gpPost.amount, gpPre.amount, "globalPointHistory amount changed");
+        assertEq(gpPost.fixedBias, gpPre.fixedBias, "globalPointHistory fixedBias changed");
+    }
+
+    // ═════════════════════════════════════════════════════════════════════
     //  17. LOCKED CURVE DECAYS ACROSS SIX_DAYS BOUNDARIES
     // ═════════════════════════════════════════════════════════════════════
 

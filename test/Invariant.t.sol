@@ -130,9 +130,84 @@ contract InvariantTest is Test {
         assertLe(locked_, total, "breakdown: locked > total");
         assertEq(transferable, total - locked_, "breakdown: transferable != total - locked");
 
-        // Cross-check against individual supply functions
-        assertApproxEqRel(total, veHemi.totalVeHemiSupply(), 0.001e18, "breakdown total != totalVeHemiSupply");
-        assertApproxEqRel(locked_, veHemi.nonTransferableTotalVeHemiSupply(), 0.001e18, "breakdown locked != nonTransferableTotalVeHemiSupply");
-        assertApproxEqRel(forfeitable_, veHemi.forfeitableTotalVeHemiSupply(), 0.001e18, "breakdown forfeitable != forfeitableTotalVeHemiSupply");
+        // Cross-check against individual supply functions. These MUST be
+        // exactly equal — supplyBreakdown and the individual getters read the
+        // same underlying curves at the same timestamp. Any tolerance would
+        // mask a real accounting divergence.
+        assertEq(total, veHemi.totalVeHemiSupply(), "breakdown total != totalVeHemiSupply");
+        assertEq(locked_, veHemi.nonTransferableTotalVeHemiSupply(), "breakdown locked != nonTransferableTotalVeHemiSupply");
+        assertEq(forfeitable_, veHemi.forfeitableTotalVeHemiSupply(), "breakdown forfeitable != forfeitableTotalVeHemiSupply");
+    }
+
+    /// @dev Storage-layout anchor invariant: assert that critical V1 value-type slots still
+    ///      read through their public getters, and the V2 `__gapV2` region remains zeroed.
+    ///      Catches any exotic sequence of handler operations that somehow corrupts the
+    ///      mapping between public getters and their expected storage slots.
+    ///      The slots checked here are the same ones asserted in VeHemiStorageLayout.t.sol,
+    ///      but the invariant runner exercises them under fuzz-driven state transitions.
+    function invariant_storageLayoutAnchors() public view {
+        // Slot 0: totalLocked must equal the getter.
+        assertEq(
+            uint256(vm.load(address(veHemi), bytes32(uint256(0)))),
+            veHemi.totalLocked(),
+            "slot 0 (totalLocked) decoupled from getter"
+        );
+        // Slot 1: epoch.
+        assertEq(
+            uint256(vm.load(address(veHemi), bytes32(uint256(1)))),
+            veHemi.epoch(),
+            "slot 1 (epoch) decoupled from getter"
+        );
+        // Slot 2: nextTokenId.
+        assertEq(
+            uint256(vm.load(address(veHemi), bytes32(uint256(2)))),
+            veHemi.nextTokenId(),
+            "slot 2 (nextTokenId) decoupled from getter"
+        );
+        // Slot 5: forfeitAdmin (address at offset 0). The handler mutates
+        // forfeit but never re-points forfeitAdmin, so this slot should
+        // remain set to the value installed during handler construction.
+        assertEq(
+            address(uint160(uint256(vm.load(address(veHemi), bytes32(uint256(5)))))),
+            veHemi.forfeitAdmin(),
+            "slot 5 (forfeitAdmin) decoupled from getter"
+        );
+        // Slot 18: lockedSeedingFinalized (bool at offset 0, low byte only).
+        // Masking to the low byte makes this assertion robust to a future
+        // pack that adds another small field into the same slot.
+        bool rawSeedFlag = (uint256(vm.load(address(veHemi), bytes32(uint256(18)))) & 0xff) != 0;
+        assertEq(rawSeedFlag, veHemi.lockedSeedingFinalized(), "slot 18 (lockedSeedingFinalized) decoupled");
+    }
+
+    /// @dev V2 reserved slots 14 and 15 (`__reservedSlot0/1`) are declared
+    ///      private and never written by any code path. Under arbitrary
+    ///      handler sequences they MUST remain zero — a non-zero value here
+    ///      indicates a write ran off the end of a V1 field or through a
+    ///      misaligned mapping.
+    function invariant_reservedSlotsZero() public view {
+        assertEq(
+            vm.load(address(veHemi), bytes32(uint256(14))),
+            bytes32(0),
+            "V2 reserved slot 14 corrupted"
+        );
+        assertEq(
+            vm.load(address(veHemi), bytes32(uint256(15))),
+            bytes32(0),
+            "V2 reserved slot 15 corrupted"
+        );
+    }
+
+    /// @dev Storage-gap integrity: V2's `__gapV2[43]` occupies slots 21–63. They must remain
+    ///      zero under all handler operations. Any non-zero slot in this range indicates a
+    ///      write ran off the end of a named field (would happen if a struct size calculation
+    ///      were wrong or storage was written beyond a mapping's expected layout).
+    function invariant_gapSlotsZero() public view {
+        for (uint256 i = 21; i <= 63; ++i) {
+            assertEq(
+                vm.load(address(veHemi), bytes32(i)),
+                bytes32(0),
+                string.concat("V2 gap slot ", vm.toString(i), " corrupted")
+            );
+        }
     }
 }
