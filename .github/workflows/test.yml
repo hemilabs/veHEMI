@@ -15,6 +15,13 @@ jobs:
 
         name: Foundry project
         runs-on: ubuntu-latest
+        env:
+            HEMI_RPC_URL: ${{ secrets.HEMI_RPC_URL }}
+            # Optional reproducible fork block. Leave unset in CI to let the
+            # fork tests that don't require determinism use `latest`; set to a
+            # specific Hemi block in a variable or dispatch input when you
+            # want bit-reproducible state-preservation runs.
+            HEMI_FORK_BLOCK: ${{ vars.HEMI_FORK_BLOCK }}
         steps:
             - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
               with:
@@ -50,3 +57,26 @@ jobs:
               run: |
                   forge test -vvv
               id: test
+
+            - name: Run Hemi-fork tests (optional — requires HEMI_RPC_URL secret)
+              if: env.HEMI_RPC_URL != ''
+              timeout-minutes: 10
+              # --threads 1 serializes test execution to keep the per-minute
+              # RPC burst under Hemi's public-RPC 300-req/min cap (parallel
+              # workers across 90+ fork tests otherwise trip HTTP 429).
+              # --fork-block-number pins the fork to a reproducible block
+              # when HEMI_FORK_BLOCK is set as a repo variable; unset leaves
+              # the fork at latest. Block pinning enables Foundry's on-disk
+              # RPC cache to absorb repeated reads across reruns.
+              run: |
+                  EXTRA_ARGS=""
+                  if [ -n "$HEMI_FORK_BLOCK" ]; then
+                      EXTRA_ARGS="--fork-block-number $HEMI_FORK_BLOCK"
+                  fi
+                  forge test \
+                    --match-contract "ForkUpgradeVoteDelegation|ForkUpgradeLockedCurve" \
+                    --fork-url hemi \
+                    --threads 1 \
+                    $EXTRA_ARGS \
+                    -vvv
+              id: fork-test

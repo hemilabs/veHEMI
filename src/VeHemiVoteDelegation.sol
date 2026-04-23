@@ -6,7 +6,7 @@ import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 import {IERC5267} from "@openzeppelin/contracts/interfaces/IERC5267.sol";
 import {IVeHemi} from "./interfaces/IVeHemi.sol";
-import {VeHemiDelegationStorageV1} from "./storage/VeHemiDelegationStorageV1.sol";
+import {VeHemiDelegationStorageV2} from "./storage/VeHemiDelegationStorageV2.sol";
 import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
 
 /// @dev Minimal interface for reading VeHemi's Ownable2Step owner.
@@ -27,7 +27,7 @@ interface IAdapterNotify {
  * boundary and expire when the delegator's lock expires.
  * @dev Based on veFXS and veCRV delegation mechanism with adaptations for veHemi
  */
-contract VeHemiVoteDelegation is ReentrancyGuardTransientUpgradeable, VeHemiDelegationStorageV1, IERC5267 {
+contract VeHemiVoteDelegation is ReentrancyGuardTransientUpgradeable, VeHemiDelegationStorageV2, IERC5267 {
     using SafeCast for uint256;
     using SafeCast for int128;
     using SafeCast for int256;

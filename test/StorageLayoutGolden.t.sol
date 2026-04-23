@@ -310,7 +310,7 @@ contract StorageLayoutGoldenTest is Test {
         _assertDelegationEntry(3, "3", "nonces");
         _assertDelegationEntry(4, "4", "autoDelegate");
         _assertDelegationEntry(5, "5", "trustedAdapter");
-        _assertDelegationEntry(6, "6", "__gap");
+        _assertDelegationEntry(6, "6", "__gapV2");
     }
 
     /// @dev Pin the critical types for the Aragon-added slots. A narrowing of
@@ -329,28 +329,30 @@ contract StorageLayoutGoldenTest is Test {
         );
     }
 
-    /// @dev Pin VeHemiVoteDelegation's __gap size to uint256[44]. A shrink here
-    ///      during a future V2 delegation upgrade would silently lose gap slots.
+    /// @dev Pin VeHemiVoteDelegation's __gapV2 size to uint256[44]. A shrink
+    ///      here during a future V3 delegation upgrade would silently lose
+    ///      gap slots. The gap lives in VeHemiDelegationStorageV2 (post-PR#69
+    ///      split) following the chain-inheritance pattern.
     function test_VeHemiVoteDelegation_GapIsExactly44Slots() public view {
         assertEq(
             vm.parseJsonString(delegationJson, ".storage[6].type"),
             "t_array(t_uint256)44_storage",
-            "__gap must be uint256[44]"
+            "__gapV2 must be uint256[44]"
         );
         assertEq(
             vm.parseJsonString(delegationJson, ".types.[\"t_array(t_uint256)44_storage\"].label"),
             "uint256[44]",
-            "__gap type label"
+            "__gapV2 type label"
         );
         assertEq(
             vm.parseJsonString(delegationJson, ".types.[\"t_array(t_uint256)44_storage\"].numberOfBytes"),
             "1408",
-            "__gap numberOfBytes (44 * 32)"
+            "__gapV2 numberOfBytes (44 * 32)"
         );
         assertEq(
             vm.parseJsonString(delegationJson, ".types.[\"t_array(t_uint256)44_storage\"].base"),
             "t_uint256",
-            "__gap element type"
+            "__gapV2 element type"
         );
     }
 
@@ -425,7 +427,7 @@ contract StorageLayoutGoldenTest is Test {
     function test_VeHemiVoteDelegation_TotalSlotsExactly7() public {
         uint256 count = _countStorageEntries(delegationJson, 16);
         assertEq(count, 7, "VeHemiVoteDelegation must have exactly 7 storage entries");
-        _assertDelegationEntry(6, "6", "__gap");
+        _assertDelegationEntry(6, "6", "__gapV2");
     }
 
     function _assertDelegationEntry(
@@ -439,5 +441,87 @@ contract StorageLayoutGoldenTest is Test {
         string memory gotLabel = vm.parseJsonString(delegationJson, labelKey);
         assertEq(gotSlot, expectedSlot, string.concat("delegation slot mismatch at ", vm.toString(i)));
         assertEq(gotLabel, expectedLabel, string.concat("delegation label mismatch at ", vm.toString(i)));
+    }
+
+    // ─── Forge-layer type pinning (NA-3) ────────────────────────────────────
+    //
+    // The shell gate in scripts/check-storage-layouts.sh already catches any
+    // change to the `.type` field (it diffs the full normalized JSON). These
+    // tests are a belt-and-suspenders second layer that runs in `forge test`
+    // alone, so a CI environment that accidentally dropped the shell step
+    // still catches mapping-key or value-type swaps at `forge test` time.
+
+    /// @dev Pin the exact type string for every mapping in VeHemi storage.
+    ///      A key-type swap (e.g., `mapping(uint256 => …)` → `mapping(address => …)`
+    ///      at the same slot) preserves slot/label/offset but shifts every
+    ///      keccak-derived child address — silently corrupting the proxy. The
+    ///      encoded type string is the only layout-level signal of this change.
+    function test_VeHemi_MappingKeyValueTypesArePinned() public view {
+        _assertVeHemiType(6,  "t_mapping(t_uint256,t_struct(Point)_storage)");
+        _assertVeHemiType(7,  "t_mapping(t_uint256,t_array(t_struct(UserPoint)_storage)1000000000_storage)");
+        _assertVeHemiType(8,  "t_mapping(t_uint256,t_uint256)");
+        _assertVeHemiType(9,  "t_mapping(t_uint256,t_int128)");
+        _assertVeHemiType(10, "t_mapping(t_uint256,t_struct(LockedBalance)_storage)");
+        _assertVeHemiType(11, "t_mapping(t_uint256,t_address)");
+        _assertVeHemiType(12, "t_mapping(t_uint256,t_uint256)");
+        _assertVeHemiType(13, "t_mapping(t_uint256,t_bool)");
+        // V2 mappings (slots 14-15 are __reservedSlotN of type t_uint256, already pinned above).
+        _assertVeHemiType(16, "t_mapping(t_uint256,t_int128)");
+        _assertVeHemiType(17, "t_mapping(t_uint256,t_struct(LockedPoint)_storage)");
+        _assertVeHemiType(18, "t_bool"); // lockedSeedingFinalized — not a mapping, but pin the type.
+        _assertVeHemiType(19, "t_mapping(t_uint256,t_int128)");
+        _assertVeHemiType(20, "t_mapping(t_uint256,t_struct(LockedPoint)_storage)");
+    }
+
+    /// @dev Pin the exact type string for every delegation mapping + trustedAdapter.
+    function test_VeHemiVoteDelegation_MappingKeyValueTypesArePinned() public view {
+        _assertDelegationType(0, "t_mapping(t_uint256,t_struct(Delegation)_storage)");
+        _assertDelegationType(1, "t_mapping(t_address,t_array(t_struct(DelegateCheckpoint)_storage)dyn_storage)");
+        _assertDelegationType(2, "t_mapping(t_address,t_mapping(t_uint256,t_struct(Expiration)_storage))");
+        _assertDelegationType(3, "t_mapping(t_address,t_uint256)");
+        _assertDelegationType(4, "t_mapping(t_address,t_address)");
+        _assertDelegationType(5, "t_address");
+    }
+
+    /// @dev Pin the `.encoding` field (one of `inplace`, `mapping`, `dynamic_array`,
+    ///      `bytes`) for the key types in both layouts. A solc bump that silently
+    ///      changed mapping encoding would break every proxy read; this pin guards
+    ///      against that at forge-test time.
+    function test_VeHemi_StorageEncodings() public view {
+        _assertTypeEncoding(veHemiJson, "t_uint256", "inplace");
+        _assertTypeEncoding(veHemiJson, "t_address", "inplace");
+        _assertTypeEncoding(veHemiJson, "t_bool", "inplace");
+        _assertTypeEncoding(veHemiJson, "t_int128", "inplace");
+        _assertTypeEncoding(veHemiJson, "t_mapping(t_uint256,t_uint256)", "mapping");
+        _assertTypeEncoding(veHemiJson, "t_mapping(t_uint256,t_int128)", "mapping");
+        _assertTypeEncoding(veHemiJson, "t_mapping(t_uint256,t_address)", "mapping");
+        _assertTypeEncoding(veHemiJson, "t_mapping(t_uint256,t_bool)", "mapping");
+        _assertTypeEncoding(veHemiJson, "t_array(t_uint256)43_storage", "inplace");
+        _assertTypeEncoding(veHemiJson, "t_struct(Point)_storage", "inplace");
+        _assertTypeEncoding(veHemiJson, "t_struct(LockedPoint)_storage", "inplace");
+
+        _assertTypeEncoding(delegationJson, "t_address", "inplace");
+        _assertTypeEncoding(delegationJson, "t_mapping(t_address,t_address)", "mapping");
+        _assertTypeEncoding(delegationJson, "t_mapping(t_address,t_uint256)", "mapping");
+        _assertTypeEncoding(delegationJson, "t_mapping(t_uint256,t_struct(Delegation)_storage)", "mapping");
+        _assertTypeEncoding(delegationJson, "t_array(t_uint256)44_storage", "inplace");
+    }
+
+    function _assertVeHemiType(uint256 i, string memory expectedType) internal view {
+        string memory got = vm.parseJsonString(veHemiJson, string.concat(".storage[", vm.toString(i), "].type"));
+        assertEq(got, expectedType, string.concat("VeHemi type mismatch at entry ", vm.toString(i)));
+    }
+
+    function _assertDelegationType(uint256 i, string memory expectedType) internal view {
+        string memory got = vm.parseJsonString(delegationJson, string.concat(".storage[", vm.toString(i), "].type"));
+        assertEq(got, expectedType, string.concat("delegation type mismatch at entry ", vm.toString(i)));
+    }
+
+    function _assertTypeEncoding(string memory json, string memory typeKey, string memory expectedEncoding)
+        internal
+        view
+    {
+        string memory got = vm.parseJsonString(json, string.concat(".types.[\"", typeKey, "\"].encoding"));
+        assertEq(got, expectedEncoding, string.concat("encoding mismatch for type ", typeKey));
     }
 }

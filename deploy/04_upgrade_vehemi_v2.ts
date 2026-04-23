@@ -118,6 +118,27 @@ const func: DeployFunction = async function (hre) {
     }
     console.log("Delegation.veHemi:       OK (matches VeHemi proxy)");
 
+    // 4a. VeHemi.HEMI() immutable must match the value this script will pass to
+    //     the new implementation's constructor. `immutable` lives in bytecode,
+    //     not storage; if a future edit renamed the constructor arg or reordered
+    //     the base list, a mismatched new impl would return the wrong HEMI
+    //     address on every call. Caught here, not post-upgrade.
+    //
+    //     Sanity-check the constant itself first: a misconfigured Addresses file
+    //     with HEMI_TOKEN == address(0) would make the equality check below
+    //     silently pass if the live HEMI were also zero (it isn't, but belt-and-
+    //     suspenders against a future config slip).
+    if (Addresses.Hemi.HEMI_TOKEN === "0x0000000000000000000000000000000000000000") {
+        throw new Error("Addresses.Hemi.HEMI_TOKEN is zero — refusing to upgrade");
+    }
+    const currentHemi = (await read(VE_HEMI, "HEMI")) as string;
+    if (currentHemi.toLowerCase() !== Addresses.Hemi.HEMI_TOKEN.toLowerCase()) {
+        throw new Error(
+            `VeHemi.HEMI() mismatch: expected ${Addresses.Hemi.HEMI_TOKEN}, got ${currentHemi}`
+        );
+    }
+    console.log("VeHemi.HEMI:             OK (matches new impl constructor arg)");
+
     // 5. Storage layout pre-flight. The new implementation's storage layout
     //    MUST match the committed golden fixture under test/fixtures/storage-layouts/.
     //    Any drift here would silently corrupt the live proxy on upgrade.

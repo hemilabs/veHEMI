@@ -14,6 +14,24 @@ block_timestamp = 1_738_368_000 # Feb 1, 2025 at 00:00 GMT
 # inside `forge test` (the CI shell gate is independent).
 fs_permissions = [{ access = "read", path = "test/fixtures/" }]
 
+# RPC aliases for fork tests.
+#
+# Use `--fork-url hemi` (the alias) rather than the raw URL so Foundry's
+# rate-limit-aware retry kicks in when public Hemi RPC returns HTTP 429.
+# `retries` = attempts per request (in addition to the first try); `retry_backoff`
+# is the initial delay in ms, doubled per retry. Values sized to absorb a short
+# burst of throttling without masking a sustained outage.
+#
+# Block pinning is opt-in via the HEMI_FORK_BLOCK env var: fork tests that want
+# a reproducible snapshot read `vm.envOr("HEMI_FORK_BLOCK", uint256(0))` and
+# call `vm.createSelectFork("hemi", pinnedBlock)` from setUp when non-zero.
+[rpc_endpoints]
+# retries + retry_backoff sized so the cumulative retry window
+# (1s + 2s + 4s + 8s + 16s + 32s = 63s) exceeds Hemi's 60s rate-limit
+# reset window, guaranteeing that a throttled request sees a cleared
+# budget on the final retry.
+hemi = { endpoint = "${HEMI_RPC_URL}", retries = 6, retry_backoff = 1000 }
+
 # Dependencies with specific versions for reproducible builds
 # NOTE: Actual OZ contracts resolve via node_modules (see remappings.txt).
 # These versions must match package.json to avoid confusion.

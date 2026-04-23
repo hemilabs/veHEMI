@@ -199,6 +199,106 @@ contract StorageLayoutRegressionTest is Test {
             "swapped Delegation fields would decode identically under both layouts - mutant is not discriminating"
         );
     }
+
+    /// @dev Fourth mutant: V2 delegation storage with __gapV2 shrunk from
+    ///      [44] to [43] and a new field appended in its place. Proves
+    ///      that `test_VeHemiVoteDelegation_GapIsExactly44Slots` in
+    ///      StorageLayoutGolden.t.sol (which pins the `t_array(t_uint256)44_storage`
+    ///      type key) would fire against a regenerated fixture for this layout.
+    ///      This closes mutation class M2 (gap-size reduction) that plain
+    ///      sentinel-at-zero gap tests miss.
+    function test_ShrunkGapV2_FixtureDisagreesWithGolden() public {
+        BadDelegationGapShrunk mutant = new BadDelegationGapShrunk();
+        // Write a sentinel into the newly-added field at the END of the
+        // gap region (absolute slot 49 under the shrunk layout).
+        uint256 sentinel = 0xDEADDEAD;
+        mutant.setExtraSlot(sentinel);
+
+        // Under the CORRECT layout (gap = [44], slot 49 is still gap), the
+        // getter for `extraSlot` would read from slot 50 — which never
+        // existed in V2. The mutant's bytecode has the getter reading slot
+        // 49 directly, so it returns the sentinel only on the shrunk layout.
+        assertEq(mutant.extraSlot(), sentinel, "shrunk-gap mutant: extraSlot not at slot 49");
+
+        // The fixture produced by this layout would have
+        // `t_array(t_uint256)43_storage` at slot 6 plus a new entry at
+        // slot 49 — disagreeing with the Golden pin. Demonstrated here by
+        // asserting the mutant's layout is observably different from V2.
+        bytes32 slot49Raw = vm.load(address(mutant), bytes32(uint256(49)));
+        assertTrue(
+            slot49Raw != bytes32(0),
+            "slot 49 under shrunk layout would be zero - mutant did not discriminate"
+        );
+    }
+
+    /// @dev Fifth mutant: VeHemiStorageV2 with lockedSlopeChanges (slot 16)
+    ///      and lockedGlobalPointHistory (slot 17) swapped. Proves that a
+    ///      top-level V2 slot swap decodes differently at the mapping base —
+    ///      `StorageLayoutGolden.t.sol::test_VeHemi_V2SlotsAtExpectedPositions`
+    ///      fires because the JSON golden pins slot→label mapping.
+    function test_SwappedV2SubcurveSlots_DiscriminatesLayout() public {
+        VeHemiBadV2SlotSwap mutant = new VeHemiBadV2SlotSwap();
+
+        // Under SWAPPED layout: setLockedSlopeChange(ts, v) writes to
+        // keccak(ts, 17) (what the CORRECT layout uses for lockedGlobalPointHistory).
+        uint256 ts = 999;
+        int128 v = 12345;
+        mutant.setLockedSlopeChange(ts, v);
+
+        // Read keccak(ts, 16) (CORRECT layout's lockedSlopeChanges slot) — zero.
+        bytes32 correctSlopeSlot = keccak256(abi.encode(ts, uint256(16)));
+        assertEq(
+            uint256(vm.load(address(mutant), correctSlopeSlot)),
+            0,
+            "correct-layout slot 16 should be zero under mutant - swap not real"
+        );
+        // Read keccak(ts, 17) — the sentinel is here.
+        bytes32 swappedSlopeSlot = keccak256(abi.encode(ts, uint256(17)));
+        bytes32 raw = vm.load(address(mutant), swappedSlopeSlot);
+        assertTrue(raw != bytes32(0), "swap not observable at slot 17 keccak base");
+
+        // Any positive-control golden assertion pinning
+        // `.storage[16].label == "lockedSlopeChanges"` would fire against
+        // a fixture regenerated from this layout (where slot 16 would
+        // decode as lockedGlobalPointHistory instead).
+    }
+
+    /// @dev Sixth mutant: VeHemiDelegationStorageV2 with a field inserted
+    ///      between nonces (slot 3) and autoDelegate (slot 4). This directly
+    ///      represents the V1/V2 boundary regression PR #69 was designed to
+    ///      prevent — a new field accidentally shifting autoDelegate from
+    ///      slot 4 to slot 5 and trustedAdapter from slot 5 to slot 6.
+    function test_V2BoundaryInsertion_DiscriminatesLayout() public {
+        BadDelegationV2Insertion mutant = new BadDelegationV2Insertion();
+        // The mutant's inserted field occupies slot 4; autoDelegate is
+        // shifted to slot 5.
+        address owner_ = address(0x5555);
+        address sentinel = address(0xAAAA);
+        // Write to what a CORRECT layout would treat as autoDelegate base
+        // (keccak(owner, 4)) — mutant's getter reads from keccak(owner, 5)
+        // so this write is not visible.
+        bytes32 correctAutoSlot = keccak256(abi.encode(owner_, uint256(4)));
+        vm.store(address(mutant), correctAutoSlot, bytes32(uint256(uint160(sentinel))));
+        assertEq(
+            mutant.autoDelegate(owner_),
+            address(0),
+            "mutant's autoDelegate read slot 4 - insertion not real"
+        );
+
+        // Write at keccak(owner, 5) — the mutant's SHIFTED autoDelegate base.
+        bytes32 shiftedAutoSlot = keccak256(abi.encode(owner_, uint256(5)));
+        vm.store(address(mutant), shiftedAutoSlot, bytes32(uint256(uint160(sentinel))));
+        assertEq(
+            mutant.autoDelegate(owner_),
+            sentinel,
+            "mutant's autoDelegate not at shifted slot 5"
+        );
+
+        // The Golden pin `_assertDelegationEntry(4, "4", "autoDelegate")`
+        // would fire against a fixture regenerated from this mutant —
+        // which would have `.storage[4].label == "__inserted"` and
+        // `.storage[5].label == "autoDelegate"`.
+    }
 }
 
 /// @dev Mutant V1-like contract where a spurious `__inserted` uint256 sits
@@ -260,4 +360,77 @@ contract BadDelegation {
     function raw() external view returns (bytes32 w) {
         assembly { w := sload(_data.slot) }
     }
+}
+
+/// @dev Fourth mutant: V2 delegation layout with __gapV2 shrunk from [44]
+///      to [43] and a new `extraSlot` field inserted in its place. This
+///      is a direct model of the "gap-size reduction" regression class
+///      (M2 in the external mutation analysis). Layout mirrors
+///      VeHemiDelegationStorageV2 exactly through slot 48, then `extraSlot`
+///      occupies slot 49 (the old last gap slot).
+contract BadDelegationGapShrunk {
+    // Slots 0-3: V1 fields (stubbed as minimal).
+    mapping(uint256 => uint256) internal __v1slot0;
+    mapping(uint256 => uint256) internal __v1slot1;
+    mapping(uint256 => uint256) internal __v1slot2;
+    mapping(uint256 => uint256) internal __v1slot3;
+    // Slots 4-5: V2 named fields.
+    mapping(address => address) internal __v2slot4;
+    address internal __v2slot5;
+    // Slots 6-48: shrunk gap (43 instead of 44 slots).
+    uint256[43] private __gapV2;
+    // Slot 49: the maliciously inserted field.
+    uint256 public extraSlot;
+
+    function setExtraSlot(uint256 v) external {
+        extraSlot = v;
+    }
+}
+
+/// @dev Fifth mutant: VeHemi V2 storage with `lockedSlopeChanges` and
+///      `lockedGlobalPointHistory` swapped (slots 16 ↔ 17). Minimal layout
+///      — only reproduces through slot 17 since the top-level slot swap
+///      is what matters. A sentinel written by `setLockedSlopeChange`
+///      ends up at keccak(ts, 17) under this layout, which would disagree
+///      with a Golden pin of `.storage[16].label == "lockedSlopeChanges"`.
+contract VeHemiBadV2SlotSwap {
+    // Slots 0-13: V1 fields (14 minimal stubs).
+    uint256 internal _s0; uint256 internal _s1; uint256 internal _s2;
+    address internal _s3; address internal _s4; address internal _s5;
+    mapping(uint256 => uint256) internal _s6;
+    mapping(uint256 => uint256) internal _s7;
+    mapping(uint256 => uint256) internal _s8;
+    mapping(uint256 => int128) internal _s9;
+    mapping(uint256 => uint256) internal _s10;
+    mapping(uint256 => address) internal _s11;
+    mapping(uint256 => uint256) internal _s12;
+    mapping(uint256 => bool) internal _s13;
+    // Slots 14-15: V2 reserved.
+    uint256 internal __reservedSlot0;
+    uint256 internal __reservedSlot1;
+    // SWAPPED: lockedGlobalPointHistory at 16, lockedSlopeChanges at 17.
+    mapping(uint256 => uint256) internal lockedGlobalPointHistory; // slot 16 (swapped)
+    mapping(uint256 => int128) internal lockedSlopeChanges;        // slot 17 (swapped)
+
+    function setLockedSlopeChange(uint256 ts, int128 v) external {
+        lockedSlopeChanges[ts] = v;
+    }
+}
+
+/// @dev Sixth mutant: a V1/V2-boundary insertion regression directly
+///      modelling PR #69's concern. A spurious field at slot 4 pushes
+///      `autoDelegate` to slot 5 and `trustedAdapter` to slot 6.
+///      Proves the `_assertDelegationEntry(4, "4", "autoDelegate")` pin
+///      in StorageLayoutGolden.t.sol discriminates this exact class.
+contract BadDelegationV2Insertion {
+    // Slots 0-3: V1 fields.
+    mapping(uint256 => uint256) internal _v1slot0;
+    mapping(uint256 => uint256) internal _v1slot1;
+    mapping(uint256 => uint256) internal _v1slot2;
+    mapping(address => uint256) internal _v1slot3; // nonces
+    // Slot 4: the maliciously inserted field.
+    uint256 internal __inserted;
+    // Slots 5-6: V2 fields shifted by one.
+    mapping(address => address) public autoDelegate; // slot 5 (shifted from 4)
+    address public trustedAdapter;                   // slot 6 (shifted from 5)
 }

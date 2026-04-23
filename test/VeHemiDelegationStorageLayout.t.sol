@@ -15,14 +15,16 @@ import "./mocks/MockERC20.sol";
 ///
 ///         Slot map (sequential storage; OZ v5 bases use ERC-7201):
 ///
-///         ── VeHemiDelegationStorageV1 (slots 0–49) ──
+///         ── VeHemiDelegationStorageV1 (slots 0–3) ──
 ///           0: delegations         mapping(uint256 => Delegation)
 ///           1: delegateCheckpoints mapping(address => DelegateCheckpoint[])
 ///           2: expiredDelegations  mapping(address => mapping(uint256 => Expiration))
 ///           3: nonces              mapping(address => uint256)
-///           4: autoDelegate        mapping(address => address)  [NEW: Aragon]
-///           5: trustedAdapter      address                      [NEW: Aragon]
-///           6–49: __gap[44]
+///
+///         ── VeHemiDelegationStorageV2 (slots 4–49) ──
+///           4: autoDelegate        mapping(address => address)
+///           5: trustedAdapter      address
+///           6–49: __gapV2[44]
 contract VeHemiDelegationStorageLayoutTest is Test {
     VeHemiVoteDelegation delegation;
     address delegationProxy;
@@ -107,6 +109,76 @@ contract VeHemiDelegationStorageLayoutTest is Test {
     }
 
     // =========================================================================
+    // Slot 1: delegateCheckpoints — mapping(address => DelegateCheckpoint[])
+    // Dynamic-array mapping. The length slot lives at keccak(addr, 1); the
+    // first element starts at keccak(keccak(addr, 1)) and occupies 2 slots
+    // (DelegateCheckpoint packs {uint128 normalizedBias, uint128 fixedBias}
+    // in word 0 and {uint128 totalAmount, uint64 normalizedSlope,
+    // uint64 timestamp} in word 1).
+    // =========================================================================
+
+    function test_slot1_delegateCheckpoints() public {
+        address delegatee = address(0x1111);
+        // Set the dynamic-array length to 1 so element 0 is accessible via
+        // the indexed getter.
+        bytes32 lengthSlot = keccak256(abi.encode(delegatee, uint256(1)));
+        vm.store(delegationProxy, lengthSlot, bytes32(uint256(1)));
+
+        // Element 0 base slot = keccak(lengthSlot). Pack sentinels into
+        // word 0: normalizedBias at bits [0..127], fixedBias at [128..255].
+        bytes32 elementSlot0 = keccak256(abi.encode(lengthSlot));
+        uint128 biasSentinel = 0xBBBBBBBBBBBBBBBB;
+        uint128 fixedSentinel = 0xFFFFFFFFFFFFFFFF;
+        bytes32 packed0 = bytes32(
+            (uint256(fixedSentinel) << 128) | uint256(biasSentinel)
+        );
+        vm.store(delegationProxy, elementSlot0, packed0);
+
+        IVeHemiVoteDelegation.DelegateCheckpoint[] memory cps =
+            delegation.getDelegationCheckpoints(delegatee);
+        assertEq(cps.length, 1, "delegateCheckpoints length base is not at slot 1");
+        assertEq(
+            uint256(cps[0].normalizedBias),
+            uint256(biasSentinel),
+            "delegateCheckpoints element-0 normalizedBias mis-slotted"
+        );
+        assertEq(
+            uint256(cps[0].fixedBias),
+            uint256(fixedSentinel),
+            "delegateCheckpoints element-0 fixedBias mis-slotted"
+        );
+    }
+
+    // =========================================================================
+    // Slot 2: expiredDelegations — mapping(address => mapping(uint256 => Expiration))
+    // Nested mapping. The Expiration struct lives at
+    // keccak(innerKey, keccak(outerKey, 2)) and packs
+    // {uint96 bias, uint96 amount, uint64 slope} into 1 slot.
+    // =========================================================================
+
+    function test_slot2_expiredDelegations() public {
+        address delegatee = address(0x2222);
+        uint256 bucket = 0xCAFE;
+        bytes32 innerSlot = keccak256(abi.encode(delegatee, uint256(2)));
+        bytes32 structSlot = keccak256(abi.encode(bucket, innerSlot));
+
+        uint96 biasSentinel = 0xAAAAAAAAAAAAAAAAAAAAAAAA;
+        uint96 amtSentinel = 0xBBBBBBBBBBBBBBBBBBBBBBBB;
+        uint64 slopeSentinel = 0xCCCCCCCCCCCCCCCC;
+        bytes32 packed = bytes32(
+            (uint256(slopeSentinel) << 192) |
+            (uint256(amtSentinel) << 96) |
+            uint256(biasSentinel)
+        );
+        vm.store(delegationProxy, structSlot, packed);
+
+        (uint96 b, uint96 a, uint64 s) = delegation.expiredDelegations(delegatee, bucket);
+        assertEq(uint256(b), uint256(biasSentinel), "expiredDelegations.bias mis-slotted");
+        assertEq(uint256(a), uint256(amtSentinel), "expiredDelegations.amount mis-slotted");
+        assertEq(uint256(s), uint256(slopeSentinel), "expiredDelegations.slope mis-slotted");
+    }
+
+    // =========================================================================
     // V1 → V2 boundary: the original deployed V1 used slots 0–3.
     // The Aragon upgrade appends autoDelegate (slot 4) and trustedAdapter
     // (slot 5). Slots 4–5 were unoccupied on the V1 proxy and default
@@ -132,7 +204,7 @@ contract VeHemiDelegationStorageLayoutTest is Test {
     }
 
     // =========================================================================
-    // Gap integrity: __gap[44] occupies slots 6–49.
+    // Gap integrity: __gapV2[44] occupies slots 6–49.
     // =========================================================================
 
     function test_gap_isClean() public view {

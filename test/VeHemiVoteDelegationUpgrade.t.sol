@@ -4,6 +4,8 @@ pragma solidity ^0.8.29;
 import "forge-std/Test.sol";
 import "../src/VeHemiVoteDelegation.sol";
 import "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
+import {TransparentUpgradeableProxy, ITransparentUpgradeableProxy} from "@openzeppelin/contracts/proxy/transparent/TransparentUpgradeableProxy.sol";
+import {ProxyAdmin} from "@openzeppelin/contracts/proxy/transparent/ProxyAdmin.sol";
 
 /// @title VeHemiVoteDelegationUpgradeTest
 /// @notice Sentinel-based upgrade regression test for VeHemiVoteDelegation.
@@ -13,7 +15,7 @@ import "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 ///
 ///         This closes the coverage gap where the Aragon-adapter addition
 ///         (slots 4 = autoDelegate, 5 = trustedAdapter) had no upgrade
-///         regression test. The __gap[44] region is also verified.
+///         regression test. The __gapV2[44] region is also verified.
 contract VeHemiVoteDelegationUpgradeTest is Test {
     VeHemiVoteDelegation impl1;
     VeHemiVoteDelegation impl2;
@@ -158,11 +160,11 @@ contract VeHemiVoteDelegationUpgradeTest is Test {
         _assertSentinels();
     }
 
-    /// @dev The __gap[44] region occupies slots 6..49 — a fixed-size
+    /// @dev The __gapV2[44] region occupies slots 6..49 — a fixed-size
     ///      `uint256[44]` at base slot 6 uses slots [6, 6+44-1] = [6, 49].
     ///      Verify every gap slot remains zero pre and post upgrade. CRITICAL:
     ///      slot 6 is the first gap slot (not slot 7); an off-by-one here
-    ///      would miss regressions that consume __gap[0].
+    ///      would miss regressions that consume __gapV2[0].
     function test_GapSlotsRemainZeroAfterUpgrade() public {
         _writeSentinels();
         for (uint256 i = 6; i <= 49; ++i) {
@@ -215,5 +217,43 @@ contract VeHemiVoteDelegationUpgradeTest is Test {
         for (uint256 i = 6; i <= 49; ++i) {
             assertEq(vm.load(proxy, bytes32(i)), bytes32(0), "gap corrupted after round-trip");
         }
+    }
+
+    /// @dev Exercises the production upgrade codepath (TransparentUpgradeableProxy
+    ///      + ProxyAdmin.upgradeAndCall) rather than the raw IMPL_SLOT write used
+    ///      by the other tests. An atomic upgrade-plus-reinitialize attempt must
+    ///      revert — the `_initialized` flag set at V1 init is preserved across
+    ///      the impl swap, so any encoded call to `initialize()` after the new
+    ///      impl lands hits InvalidInitialization. Closes scenario #18 in the
+    ///      PR #69 review coverage table (atomic upgradeAndCall with reinit).
+    function test_UpgradeAndCallReinitializeReverts() public {
+        address admin = makeAddr("proxyAdminOwner");
+
+        // Build a fresh TransparentUpgradeableProxy + ProxyAdmin pair that
+        // mirrors the mainnet delegation proxy deployment.
+        VeHemiVoteDelegation tImpl1 = new VeHemiVoteDelegation(VE_HEMI);
+        VeHemiVoteDelegation tImpl2 = new VeHemiVoteDelegation(VE_HEMI);
+
+        vm.prank(admin);
+        TransparentUpgradeableProxy tProxy = new TransparentUpgradeableProxy(
+            address(tImpl1),
+            admin,
+            abi.encodeWithSelector(VeHemiVoteDelegation.initialize.selector)
+        );
+
+        bytes32 adminSlot = bytes32(uint256(keccak256("eip1967.proxy.admin")) - 1);
+        ProxyAdmin pAdmin = ProxyAdmin(address(uint160(uint256(vm.load(address(tProxy), adminSlot)))));
+
+        // Atomic upgradeAndCall with a reinitialize payload — must revert via
+        // the impl's InvalidInitialization, NOT via ProxyAdmin's onlyOwner
+        // (admin is the legitimate owner here, so the attack surface is the
+        // reinitializer-replay path on the new bytecode).
+        vm.prank(admin);
+        vm.expectRevert(abi.encodeWithSignature("InvalidInitialization()"));
+        pAdmin.upgradeAndCall(
+            ITransparentUpgradeableProxy(address(tProxy)),
+            address(tImpl2),
+            abi.encodeWithSelector(VeHemiVoteDelegation.initialize.selector)
+        );
     }
 }
