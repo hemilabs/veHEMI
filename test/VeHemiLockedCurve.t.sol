@@ -1156,7 +1156,7 @@ contract VeHemiLockedCurveTest is LockedCurveTestBase {
     }
 
     // ═════════════════════════════════════════════════════════════════════
-    //  ADDITIONAL TESTS (from review findings)
+    //  Additional seedAndFinalize edge-case tests
     // ═════════════════════════════════════════════════════════════════════
 
     /// @notice Unsorted (but non-duplicate) token IDs should revert.

@@ -182,8 +182,8 @@ runs all 131,072 invariant mutations × 6 invariants × unoptimized bytecode,
 plus 1,000-run fuzz tests. Fork tests are NOT a cause — they self-skip
 in microseconds when RPC URLs are unset.
 
-**Fast coverage (~5 seconds, audit-quality)** — override the fuzz/invariant
-run counts via env vars:
+**Fast coverage (~5 seconds, smoke-test quality)** — override the
+fuzz/invariant run counts via env vars:
 
 ```sh
 FOUNDRY_FUZZ_RUNS=1 FOUNDRY_INVARIANT_RUNS=1 FOUNDRY_INVARIANT_DEPTH=1 \

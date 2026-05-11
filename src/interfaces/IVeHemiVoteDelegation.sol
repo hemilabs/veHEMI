@@ -65,6 +65,18 @@ interface IVeHemiVoteDelegation {
      */
     event TrustedAdapterUpdated(address indexed oldAdapter, address indexed newAdapter);
 
+    /**
+     * @dev Emitted when an account's auto-delegate target changes via
+     *      setAutoDelegate, clearAutoDelegate, or delegateAllFor (which
+     *      sets it as a side effect). Indexers can reconstruct the
+     *      account → auto-delegate mapping from this event stream alone.
+     */
+    event AutoDelegateSet(
+        address indexed owner,
+        address indexed previousDelegate,
+        address indexed newDelegate
+    );
+
     function delegate(uint256 delegator_, address delegatee_) external;
 
     function delegation(uint256 tokenId_) external view returns (Delegation memory);
@@ -79,6 +91,19 @@ interface IVeHemiVoteDelegation {
     function autoDelegate(address account_) external view returns (address);
 
     function clearAutoDelegate() external;
+
+    /// @notice Set the caller's auto-delegate target without iterating their
+    ///         existing positions. New positions minted to the caller after
+    ///         this call will auto-delegate to `delegatee_`. Existing
+    ///         positions retain their current delegations until explicitly
+    ///         re-delegated (per-tokenId via `delegate`, or in bulk via the
+    ///         adapter's `delegate(address)` which proxies to `delegateAllFor`).
+    /// @dev Use case: users with too many positions to fit a `delegateAllFor`
+    ///      call within a block can still set their auto-delegate target so
+    ///      newly-minted positions go to the right place. Combine with
+    ///      per-tokenId `delegate()` calls to migrate existing positions
+    ///      incrementally.
+    function setAutoDelegate(address delegatee_) external;
 
     function refreshVotingPower(address delegatee_) external;
 

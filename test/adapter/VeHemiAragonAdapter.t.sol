@@ -1764,9 +1764,16 @@ contract VeHemiAragonAdapterTest is Test {
                     address delegator_ = address(uint160(uint256(entries[i].topics[1])));
                     address fromDelegate_ = address(uint160(uint256(entries[i].topics[2])));
                     address toDelegate_ = address(uint160(uint256(entries[i].topics[3])));
-                    assertEq(delegator_, ALICE, "DelegateChanged delegator should be ALICE");
-                    assertEq(fromDelegate_, ALICE, "DelegateChanged fromDelegate should be ALICE");
-                    assertEq(toDelegate_, BOB, "DelegateChanged toDelegate should be BOB");
+                    // VeHemi.transferFrom runs super.transferFrom BEFORE
+                    // _delegate, so the adapter's notify hook resolves
+                    // ownerOf(tokenId) to BOB (the new owner) and relays
+                    // DelegateChanged with BOB as the delegator rather than
+                    // ALICE (the seller). This produces faithful IVotes-
+                    // shaped events and prevents subgraphs from mis-
+                    // attributing the post-transfer delegation to the seller.
+                    assertEq(delegator_, BOB, "DelegateChanged delegator should be BOB (post-transfer owner)");
+                    assertEq(fromDelegate_, ALICE, "DelegateChanged fromDelegate should be ALICE (prior cached delegate)");
+                    assertEq(toDelegate_, BOB, "DelegateChanged toDelegate should be BOB (resolved auto-delegate of new owner)");
                     foundDc = true;
                 }
             }

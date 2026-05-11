@@ -1298,12 +1298,21 @@ contract VeHemi is
         if (from_ != address(0)) {
             if (!isTransferable(tokenId_)) revert NotTransferable();
             _updateReward(tokenId_);
-            _delegate(tokenId_, _resolveAutoDelegate(to_));
         }
 
+        // ERC721 ownership transfer happens BEFORE _delegate so that the
+        // notifyDelegateChanged hook (which resolves ownerOf(tokenId) inside
+        // VeHemiVoteDelegation._delegate) sees `to_` as the current owner.
+        // Without this ordering, the IVotes-shaped DelegateChanged event would
+        // incorrectly attribute the delegation change to the SELLER (from_),
+        // silently corrupting subgraphs that reconstruct delegation state from
+        // the event stream. Math is unaffected: locked[tokenId] is unchanged
+        // across the ERC721 transfer and the cached delegation values used by
+        // _delegate are identical pre- and post-super.transferFrom.
         super.transferFrom(from_, to_, tokenId_);
 
         if (from_ != address(0)) {
+            _delegate(tokenId_, _resolveAutoDelegate(to_));
             LockedBalance memory _locked = locked[tokenId_];
             _checkpoint(tokenId_, _locked, _locked);
         }

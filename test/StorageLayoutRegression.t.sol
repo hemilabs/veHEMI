@@ -265,9 +265,10 @@ contract StorageLayoutRegressionTest is Test {
 
     /// @dev Sixth mutant: VeHemiDelegationStorageV2 with a field inserted
     ///      between nonces (slot 3) and autoDelegate (slot 4). This directly
-    ///      represents the V1/V2 boundary regression PR #69 was designed to
-    ///      prevent — a new field accidentally shifting autoDelegate from
-    ///      slot 4 to slot 5 and trustedAdapter from slot 5 to slot 6.
+    ///      represents the V1/V2 boundary regression the chain-inheritance
+    ///      split is designed to prevent — a new field accidentally
+    ///      shifting autoDelegate from slot 4 to slot 5 and trustedAdapter
+    ///      from slot 5 to slot 6.
     function test_V2BoundaryInsertion_DiscriminatesLayout() public {
         BadDelegationV2Insertion mutant = new BadDelegationV2Insertion();
         // The mutant's inserted field occupies slot 4; autoDelegate is
@@ -417,11 +418,11 @@ contract VeHemiBadV2SlotSwap {
     }
 }
 
-/// @dev Sixth mutant: a V1/V2-boundary insertion regression directly
-///      modelling PR #69's concern. A spurious field at slot 4 pushes
-///      `autoDelegate` to slot 5 and `trustedAdapter` to slot 6.
-///      Proves the `_assertDelegationEntry(4, "4", "autoDelegate")` pin
-///      in StorageLayoutGolden.t.sol discriminates this exact class.
+/// @dev Sixth mutant: a V1/V2-boundary insertion regression. A spurious
+///      field at slot 4 pushes `autoDelegate` to slot 5 and
+///      `trustedAdapter` to slot 6. Proves the
+///      `_assertDelegationEntry(4, "4", "autoDelegate")` pin in
+///      StorageLayoutGolden.t.sol discriminates this exact class.
 contract BadDelegationV2Insertion {
     // Slots 0-3: V1 fields.
     mapping(uint256 => uint256) internal _v1slot0;

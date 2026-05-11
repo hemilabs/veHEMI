@@ -331,8 +331,8 @@ contract StorageLayoutGoldenTest is Test {
 
     /// @dev Pin VeHemiVoteDelegation's __gapV2 size to uint256[44]. A shrink
     ///      here during a future V3 delegation upgrade would silently lose
-    ///      gap slots. The gap lives in VeHemiDelegationStorageV2 (post-PR#69
-    ///      split) following the chain-inheritance pattern.
+    ///      gap slots. The gap lives in VeHemiDelegationStorageV2 following
+    ///      the V1/V2 chain-inheritance pattern.
     function test_VeHemiVoteDelegation_GapIsExactly44Slots() public view {
         assertEq(
             vm.parseJsonString(delegationJson, ".storage[6].type"),

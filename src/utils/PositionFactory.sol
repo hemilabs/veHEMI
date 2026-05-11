@@ -21,12 +21,13 @@ import {IVeHemi} from "../interfaces/IVeHemi.sol";
 ///           flips the entry to CREATED. Re-submitting the same tuple reverts with
 ///           `PositionCreatedAlready`.
 ///
-///      Idempotency key: `keccak256(abi.encodePacked(user, amount, duration))`. Because
-///      `transferable` and `forfeitable` are NOT included in the hash, a single
-///      whitelisted tuple locks in the owner-chosen values at `create` time — the caller
-///      does not choose them independently. Two whitelist entries with the same
-///      (user, amount, duration) but different transferability / forfeitability flags
-///      would collide and are unsupported.
+///      Idempotency key: `keccak256(abi.encodePacked(user, amount, duration,
+///      transferable, forfeitable))`. The transferability and forfeitability flags are
+///      part of the hash so the owner-chosen values are bound on-chain at whitelist
+///      time — a third-party caller cannot front-run a `PENDING` entry with spoofed
+///      flag values to bypass the protocol's intended non-transferability or forfeit
+///      terms. Two whitelist entries differing only in flags are independent slots,
+///      each requiring its own `create` call.
 ///
 ///      The `created` mapping uses three-valued logic: `NONE` (default, not whitelisted
 ///      — `create` reverts), `PENDING` (whitelisted, `create` will proceed), `CREATED`
@@ -51,11 +52,12 @@ contract PositionFactory is Ownable2Step, ReentrancyGuard {
         CREATED
     }
 
-    /// @notice Maps `keccak256(abi.encodePacked(user, amount, duration))` to lifecycle status.
+    /// @notice Maps `keccak256(abi.encodePacked(user, amount, duration, transferable, forfeitable))`
+    ///         to lifecycle status.
     /// @dev The key is `abi.encodePacked` — caller must use identical encoding to avoid
     ///      collisions. `user` is `address` (20 bytes), `amount` and `duration` are
-    ///      `uint256` (32 bytes each), giving a fixed 84-byte preimage with no
-    ///      dynamic-length ambiguity.
+    ///      `uint256` (32 bytes each), and each `bool` is 1 byte, giving a fixed 86-byte
+    ///      preimage with no dynamic-length ambiguity.
     mapping(bytes32 => Status) public created;
 
     event StatusUpdated(
@@ -63,6 +65,8 @@ contract PositionFactory is Ownable2Step, ReentrancyGuard {
         address indexed user_,
         uint256 amount_,
         uint256 duration_,
+        bool transferable_,
+        bool forfeitable_,
         Status status
     );
     event PositionCreated(
@@ -98,16 +102,18 @@ contract PositionFactory is Ownable2Step, ReentrancyGuard {
     ///      checks-effects-interactions), then pulls HEMI from `msg.sender`, approves
     ///      veHEMI via `forceApprove`, and calls `veHemi.createLockFor(...)`. The
     ///      recipient of the minted NFT is `user_`, not `msg.sender`.
-    ///      `transferable_` and `forfeitable_` are NOT part of the whitelist hash — the
-    ///      owner must coordinate these flag values out-of-band with the caller; see
-    ///      contract-level NatSpec for the rationale.
+    ///      `transferable_` and `forfeitable_` ARE part of the whitelist hash, so the
+    ///      caller must supply the same flag values the owner committed to at
+    ///      `updateStatus` time — any mismatch hashes to a different (unwhitelisted)
+    ///      slot and reverts with `PositionCreatedAlready`.
     /// @param user_ Beneficiary of the minted veHEMI NFT.
     /// @param amount_ HEMI amount to lock (must match the whitelisted value byte-for-byte).
     /// @param duration_ Lock duration in seconds (must match the whitelisted value).
     /// @param transferable_ Forwarded to `createLockFor`; false produces a locked position
-    ///        with `transferableAfter = unlockTime`.
+    ///        with `transferableAfter = unlockTime`. Must match the whitelisted value.
     /// @param forfeitable_ Forwarded to `createLockFor`; true allows the forfeit admin to
-    ///        claw the position back during its non-transferability window.
+    ///        claw the position back during its non-transferability window. Must match
+    ///        the whitelisted value.
     function create(
         address user_,
         uint256 amount_,
@@ -115,7 +121,9 @@ contract PositionFactory is Ownable2Step, ReentrancyGuard {
         bool transferable_,
         bool forfeitable_
     ) external nonReentrant {
-        bytes32 _hash = keccak256(abi.encodePacked(user_, amount_, duration_));
+        bytes32 _hash = keccak256(
+            abi.encodePacked(user_, amount_, duration_, transferable_, forfeitable_)
+        );
 
         Status _status = created[_hash];
 
@@ -143,9 +151,14 @@ contract PositionFactory is Ownable2Step, ReentrancyGuard {
     ///      entire transaction. Set false to deliberately flip a CREATED entry back to
     ///      PENDING (rare — only appropriate if the corresponding NFT was forfeited or
     ///      withdrawn and the owner wants to re-issue under the same key).
-    /// @param users_ Beneficiaries; parallel array with `amounts_` and `durations_`.
+    /// @param users_ Beneficiaries; parallel array with `amounts_`, `durations_`,
+    ///        `transferables_`, and `forfeitables_`.
     /// @param amounts_ HEMI amounts, one per entry.
     /// @param durations_ Lock durations in seconds, one per entry.
+    /// @param transferables_ Per-entry transferability flag, bound into the hash so the
+    ///        caller of `create` must supply the matching value.
+    /// @param forfeitables_ Per-entry forfeitability flag, bound into the hash so the
+    ///        caller of `create` must supply the matching value.
     /// @param status_ Target status to write for every entry in the batch.
     /// @param revertIfCreated_ If true, any already-CREATED hash in the batch reverts
     ///        the whole call — a defensive check against accidental double-issuance.
@@ -153,24 +166,53 @@ contract PositionFactory is Ownable2Step, ReentrancyGuard {
         address[] calldata users_,
         uint256[] calldata amounts_,
         uint256[] calldata durations_,
+        bool[] calldata transferables_,
+        bool[] calldata forfeitables_,
         Status status_,
         bool revertIfCreated_
     ) external onlyOwner {
         uint256 _length = users_.length;
 
-        if (_length != amounts_.length || _length != durations_.length) revert InvalidArrays();
+        if (
+            _length != amounts_.length ||
+            _length != durations_.length ||
+            _length != transferables_.length ||
+            _length != forfeitables_.length
+        ) revert InvalidArrays();
 
         for (uint256 i; i < _length; ++i) {
-            uint256 _amount = amounts_[i];
-            uint256 _duration = durations_[i];
-            address _user = users_[i];
-
-            bytes32 _hash = keccak256(abi.encodePacked(_user, _amount, _duration));
-            if (revertIfCreated_ && created[_hash] == Status.CREATED)
-                revert PositionCreatedAlready(_user, _amount, _duration);
-            created[_hash] = status_;
-
-            emit StatusUpdated(_hash, _user, _amount, _duration, status_);
+            _updateOne(
+                users_[i],
+                amounts_[i],
+                durations_[i],
+                transferables_[i],
+                forfeitables_[i],
+                status_,
+                revertIfCreated_
+            );
         }
+    }
+
+    /// @dev Per-entry helper extracted from `updateStatus` to keep that function's
+    ///      stack frame within the EVM's 16-slot local limit (the parameter count
+    ///      pushes the inlined version over). Marked `private` so it is not
+    ///      callable externally and so the compiler can inline as it sees fit.
+    function _updateOne(
+        address user_,
+        uint256 amount_,
+        uint256 duration_,
+        bool transferable_,
+        bool forfeitable_,
+        Status status_,
+        bool revertIfCreated_
+    ) private {
+        bytes32 _hash = keccak256(
+            abi.encodePacked(user_, amount_, duration_, transferable_, forfeitable_)
+        );
+        if (revertIfCreated_ && created[_hash] == Status.CREATED)
+            revert PositionCreatedAlready(user_, amount_, duration_);
+        created[_hash] = status_;
+
+        emit StatusUpdated(_hash, user_, amount_, duration_, transferable_, forfeitable_, status_);
     }
 }

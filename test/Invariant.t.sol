@@ -6,6 +6,8 @@ import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
 import {VeHemi} from "src/VeHemi.sol";
 import {MockERC20} from "./mocks/MockERC20.sol";
 import {VeHemiVoteDelegation} from "src/VeHemiVoteDelegation.sol";
+import {IVeHemi} from "src/interfaces/IVeHemi.sol";
+import {IVeHemiVoteDelegation} from "src/interfaces/IVeHemiVoteDelegation.sol";
 import {InvariantHandler} from "./InvariantHandler.sol";
 
 contract InvariantTest is Test {
@@ -207,6 +209,108 @@ contract InvariantTest is Test {
                 vm.load(address(veHemi), bytes32(i)),
                 bytes32(0),
                 string.concat("V2 gap slot ", vm.toString(i), " corrupted")
+            );
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Delegation behavior invariants
+    //
+    // These pin runtime properties of the VeHemi ↔ VeHemiVoteDelegation
+    // surface under fuzz-driven sequences of mints, transfers, forfeits,
+    // delegations, setAutoDelegate and clearAutoDelegate calls. Companion
+    // unit coverage lives in test/DelegationBehavior.t.sol; the invariants
+    // here exercise compositions the unit tests can't cover.
+    // -------------------------------------------------------------------------
+
+    /// @dev `getVotes(address(0))` and `getPastVotes(address(0), t)` must
+    ///      always read 0. Forfeit cleanup is the only path that drives the
+    ///      delegation contract's `_delegate(_, address(0))` helper, and
+    ///      that helper must not push a checkpoint or expirations entry
+    ///      under the zero-address key. The fuzz handler exercises
+    ///      `forfeit()` so this invariant catches any regression that
+    ///      re-introduces an address(0) checkpoint write via a side path.
+    function invariant_zeroAddressNeverAccrues() public view {
+        assertEq(delegation.getVotes(address(0)), 0, "getVotes(address(0)) must be 0");
+        if (block.timestamp > 0) {
+            assertEq(
+                delegation.getPastVotes(address(0), block.timestamp - 1), 0, "getPastVotes(address(0), t) must be 0"
+            );
+        }
+    }
+
+    /// @dev Direct storage probe: `delegateCheckpoints[address(0)]` must
+    ///      remain a length-0 array under all handler sequences. This
+    ///      catches the regression class where someone pushes a checkpoint
+    ///      under the zero-address key from a new code path even if
+    ///      `getVotes` still returns 0 at the moment of assertion (e.g.
+    ///      before decay catches up).
+    function invariant_zeroAddressCheckpointsEmpty() public view {
+        // delegateCheckpoints lives at slot 1 of VeHemiDelegationStorageV1.
+        // The dynamic-array length for `mapping(address => DelegateCheckpoint[])`
+        // is at keccak256(key, slot).
+        bytes32 lengthSlot = keccak256(abi.encode(address(0), uint256(1)));
+        uint256 len = uint256(vm.load(address(delegation), lengthSlot));
+        assertEq(len, 0, "delegateCheckpoints[address(0)].length must be 0");
+    }
+
+    /// @dev Every minted, live token must have a non-zero cached delegatee.
+    ///      Every mint path (createLock / createLockFor) and every transfer
+    ///      path runs `_delegate` against `_resolveAutoDelegate`, which
+    ///      falls back to the recipient itself when their autoDelegate is
+    ///      unset. The only legal way for `delegations[tokenId].delegatee`
+    ///      to be address(0) is on a burned tokenId (`ownerOf` reverts /
+    ///      returns 0 in that case).
+    function invariant_ownershipDelegateConsistency() public {
+        uint256 nextId = veHemi.nextTokenId();
+        for (uint256 id = 1; id < nextId; ++id) {
+            address tokenOwner = handler._ownerOf(id);
+            if (tokenOwner == address(0)) continue; // burned — delegations cleared by forfeit
+            IVeHemiVoteDelegation.Delegation memory d = delegation.delegation(id);
+            assertTrue(
+                d.delegatee != address(0), string.concat("live tokenId ", vm.toString(id), " has zero delegatee")
+            );
+        }
+    }
+
+    /// @dev Forfeit cleanup must zero out `delegations[tokenId]` entirely.
+    ///      The handler tracks forfeited tokenIds explicitly so this
+    ///      invariant asserts only on the forfeit path — natural
+    ///      `withdraw` cleanup is out of scope and intentionally not
+    ///      checked here. If withdraw cleanup is added later, widen this
+    ///      loop to scan all burned tokens via `_ownerOf`.
+    function invariant_forfeitClearsDelegations() public view {
+        uint256 n = handler.forfeitedTokenIdsLength();
+        for (uint256 i; i < n; ++i) {
+            uint256 id = handler.forfeitedTokenIds(i);
+            IVeHemiVoteDelegation.Delegation memory d = delegation.delegation(id);
+            assertEq(d.delegatee, address(0), "forfeited tokenId retains stale delegatee");
+            assertEq(uint256(d.bias), 0, "forfeited tokenId retains stale bias");
+            assertEq(uint256(d.amount), 0, "forfeited tokenId retains stale amount");
+            assertEq(uint256(d.slope), 0, "forfeited tokenId retains stale slope");
+        }
+    }
+
+    /// @dev `setAutoDelegate` must NEVER mutate any per-tokenId cached
+    ///      delegation — it only changes the account-level autoDelegate
+    ///      slot that future mints / transfers consult. We can't snapshot
+    ///      before every handler call, but we can pin a strictly weaker
+    ///      structural property: no live tokenId's
+    ///      `delegations[tokenId].delegatee` may equal address(0). (If
+    ///      `setAutoDelegate` ever erroneously cleared a per-tokenId cache,
+    ///      the cache would become 0 and this would fail.) Composes with
+    ///      `invariant_ownershipDelegateConsistency` above as
+    ///      defense-in-depth on the same property.
+    function invariant_autoDelegateDoesNotMutateExistingDelegations() public {
+        uint256 nextId = veHemi.nextTokenId();
+        for (uint256 id = 1; id < nextId; ++id) {
+            address tokenOwner = handler._ownerOf(id);
+            if (tokenOwner == address(0)) continue;
+            // Live token: delegatee must be non-zero (set at mint and only
+            // ever rewritten by delegate / transferFrom-induced _delegate).
+            IVeHemiVoteDelegation.Delegation memory d = delegation.delegation(id);
+            assertTrue(
+                d.delegatee != address(0), "live tokenId acquired a 0 delegatee - setAutoDelegate must not mutate cache"
             );
         }
     }

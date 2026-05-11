@@ -33,6 +33,17 @@ contract InvariantHandler is Test {
     uint256[] internal _lockedTokenIds;
     bool public seeded;
 
+    /// @dev Token IDs that have been cleared via `forfeit()`. Used by
+    ///      `invariant_forfeitClearsDelegations` to scope the cleanup
+    ///      check to the forfeit path specifically and avoid conflating
+    ///      it with natural-withdraw cleanup, which is intentionally out
+    ///      of scope for that invariant.
+    uint256[] public forfeitedTokenIds;
+
+    function forfeitedTokenIdsLength() external view returns (uint256) {
+        return forfeitedTokenIds.length;
+    }
+
     constructor(address admin_, address[5] memory _users) {
         users = _users;
         admin = admin_;
@@ -176,6 +187,7 @@ contract InvariantHandler is Test {
 
             vm.prank(veHemi.forfeitAdmin());
             veHemi.forfeit(id);
+            forfeitedTokenIds.push(id);
 
             maxWarp = MAX_ACCUMULATED_WARP;
 
@@ -285,6 +297,25 @@ contract InvariantHandler is Test {
 
             break;
         }
+    }
+
+    /// @dev Exercises the standalone setAutoDelegate path. The fuzz
+    ///      invariant checks then assert that this never mutates existing
+    ///      per-tokenId delegations and never causes address(0) state to
+    ///      accumulate.
+    function setAutoDelegate(uint256 rand, uint256 callerIdx) public {
+        address caller = users[callerIdx % users.length];
+        address target = users[rand % users.length];
+        vm.prank(caller);
+        delegation.setAutoDelegate(target);
+    }
+
+    /// @dev Companion to setAutoDelegate — exercises the clear path so the
+    ///      fuzzer can drive arbitrary set/clear/set sequences.
+    function clearAutoDelegate(uint256 callerIdx) public {
+        address caller = users[callerIdx % users.length];
+        vm.prank(caller);
+        delegation.clearAutoDelegate();
     }
 
     function warp(uint256 time) public {

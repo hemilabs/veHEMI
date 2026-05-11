@@ -170,7 +170,29 @@ contract VeHemiVoteDelegation is ReentrancyGuardTransientUpgradeable, VeHemiDele
      *      or adapter.delegate(self) to also re-delegate existing positions.
      */
     function clearAutoDelegate() external {
+        address _previous = autoDelegate[msg.sender];
+        if (_previous == address(0)) return;
         autoDelegate[msg.sender] = address(0);
+        emit AutoDelegateSet(msg.sender, _previous, address(0));
+    }
+
+    /**
+     * @notice Set the caller's auto-delegate target without iterating any
+     *         existing positions. New positions minted to the caller after
+     *         this call auto-delegate to `delegatee_`; existing positions
+     *         keep their current delegations until explicitly re-delegated.
+     * @dev Companion to `delegateAllFor` for users with too many positions
+     *      to fit a single bulk-delegate call within a block. Idempotent:
+     *      a no-op call (delegatee_ unchanged) returns without an SSTORE
+     *      or event emission.
+     * @param delegatee_ The address future positions should auto-delegate to.
+     *        Pass `address(0)` to clear (equivalent to `clearAutoDelegate`).
+     */
+    function setAutoDelegate(address delegatee_) external {
+        address _previous = autoDelegate[msg.sender];
+        if (_previous == delegatee_) return;
+        autoDelegate[msg.sender] = delegatee_;
+        emit AutoDelegateSet(msg.sender, _previous, delegatee_);
     }
 
     /**
@@ -190,8 +212,14 @@ contract VeHemiVoteDelegation is ReentrancyGuardTransientUpgradeable, VeHemiDele
         if (delegatee_ == address(0)) revert InvalidDelegatee();
 
         // Set auto-delegate so future positions created for this owner
-        // are automatically delegated to the same address.
-        autoDelegate[owner_] = delegatee_;
+        // are automatically delegated to the same address. Skip the SSTORE
+        // and the event when the value is already correct so indexers can
+        // treat AutoDelegateSet as an idempotent state-change marker.
+        address _previousAutoDelegate = autoDelegate[owner_];
+        if (_previousAutoDelegate != delegatee_) {
+            autoDelegate[owner_] = delegatee_;
+            emit AutoDelegateSet(owner_, _previousAutoDelegate, delegatee_);
+        }
 
         uint256 checkpointTs = (((block.timestamp - EPOCH_OFFSET) / CHECKPOINT_INTERVAL) * CHECKPOINT_INTERVAL) + CHECKPOINT_INTERVAL + EPOCH_OFFSET;
         uint256 count = veHemi.balanceOf(owner_);
@@ -597,19 +625,23 @@ contract VeHemiVoteDelegation is ReentrancyGuardTransientUpgradeable, VeHemiDele
             checkpointTimestamp_: _checkpointTimestamp
         });
 
-        _moveVotingPowerToNewDelegate({
-            newDelegatee_: delegatee_,
-            delegatorVeLockInfo_: _normalizedVeLockInfo,
-            checkpointTimestamp_: _checkpointTimestamp
-        });
-
-        // When delegatee_ is address(0) (forfeit cleanup), delete the struct
-        // entirely instead of writing stale bias/slope/amount values for a
-        // token that is about to be burned. The only path that reaches here
-        // with address(0) is VeHemi.forfeit → _delegate(tokenId, address(0)).
+        // When delegatee_ is address(0) (forfeit cleanup), skip the
+        // _moveVotingPowerToNewDelegate path entirely. Otherwise that helper
+        // would push a checkpoint into delegateCheckpoints[address(0)] and
+        // increment expiredDelegations[address(0)][end] every forfeit,
+        // accumulating non-trivial state at the zero address over the
+        // protocol's lifetime — making getVotes(address(0)) return real
+        // values, bloating storage, and inflating gas on any view that walks
+        // address(0)'s expirations. The only path that reaches here with
+        // address(0) is VeHemi.forfeit → _delegate(tokenId, address(0)).
         if (delegatee_ == address(0)) {
             delete delegations[delegator_];
         } else {
+            _moveVotingPowerToNewDelegate({
+                newDelegatee_: delegatee_,
+                delegatorVeLockInfo_: _normalizedVeLockInfo,
+                checkpointTimestamp_: _checkpointTimestamp
+            });
             delegations[delegator_] = Delegation({
                 delegatee: delegatee_,
                 end: _normalizedVeLockInfo.end.toUint48(),

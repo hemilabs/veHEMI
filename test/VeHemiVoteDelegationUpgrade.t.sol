@@ -224,8 +224,7 @@ contract VeHemiVoteDelegationUpgradeTest is Test {
     ///      by the other tests. An atomic upgrade-plus-reinitialize attempt must
     ///      revert — the `_initialized` flag set at V1 init is preserved across
     ///      the impl swap, so any encoded call to `initialize()` after the new
-    ///      impl lands hits InvalidInitialization. Closes scenario #18 in the
-    ///      PR #69 review coverage table (atomic upgradeAndCall with reinit).
+    ///      impl lands hits InvalidInitialization.
     function test_UpgradeAndCallReinitializeReverts() public {
         address admin = makeAddr("proxyAdminOwner");
 

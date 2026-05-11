@@ -20,12 +20,48 @@ const FILE_PATH = "POSITIONS.csv";
 const STATUS_BATCH_SIZE = 1000; // Each status update costs ~30k gas, so 1000 should fit in a block
 const RPC_URL = "https://rpc.hemi.network/rpc";
 const HEMI_TOKEN_ADDRESS = "0x99e3dE3817F6081B2568208337ef83295b7f591D";
-const POSITION_FACTORY_ADDRESS = "0xBFf8293Bafb943BE783d01f5C34d5382C2EeD90F";
+
+// PositionFactory address is read at runtime from deployments/hemi/PositionFactory.json
+// (written by hardhat-deploy after `deploy/02_position_factory.ts` runs).
+// Override via the POSITION_FACTORY_ADDRESS env var when running against a
+// different deployment.
+const HEMI_DEPLOYMENT_NETWORK = "hemi";
 
 const LOCAL_PRIVATE_KEY = "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"; // hardhat/anvil account[0]
 const LOCAL_RPC_URL = "http://localhost:8545";
 
-const { PRIVATE_KEY, NODE_ENV } = process.env;
+// In local mode the script forks Hemi mainnet (per `anvil --fork-url
+// https://rpc.hemi.network/rpc`), so PositionFactory's veHemi argument
+// must point at the live VeHemi proxy on Hemi.
+const LOCAL_VE_HEMI_ADDRESS = "0x371d3718D5b7F75EAb050FAe6Da7DF3092031c89";
+
+const { PRIVATE_KEY, NODE_ENV, POSITION_FACTORY_ADDRESS: POSITION_FACTORY_ADDRESS_OVERRIDE } = process.env;
+
+async function resolvePositionFactoryAddress(): Promise<string> {
+    if (POSITION_FACTORY_ADDRESS_OVERRIDE) {
+        if (!ethers.isAddress(POSITION_FACTORY_ADDRESS_OVERRIDE)) {
+            throw new Error(
+                `POSITION_FACTORY_ADDRESS env var is not a valid address: ${POSITION_FACTORY_ADDRESS_OVERRIDE}`
+            );
+        }
+        return POSITION_FACTORY_ADDRESS_OVERRIDE;
+    }
+    const deploymentPath = `deployments/${HEMI_DEPLOYMENT_NETWORK}/PositionFactory.json`;
+    try {
+        const raw = await fs.readFile(deploymentPath, "utf-8");
+        const parsed = JSON.parse(raw) as { address?: string };
+        if (!parsed.address || !ethers.isAddress(parsed.address)) {
+            throw new Error(`Missing/invalid 'address' field in ${deploymentPath}`);
+        }
+        return parsed.address;
+    } catch (err) {
+        throw new Error(
+            `Could not resolve PositionFactory address. Either run \`npx hardhat deploy\` ` +
+                `to populate ${deploymentPath}, or set POSITION_FACTORY_ADDRESS in the ` +
+                `environment. Underlying error: ${(err as Error).message}`
+        );
+    }
+}
 
 enum Status {
     NONE = 0,
@@ -80,7 +116,15 @@ const whitelist = async (rows: CsvRow[], factory: PositionFactory) => {
             forfeitables.push(forfeitable === "true");
         }
 
-        const tx = await factory.updateStatus(users, amounts, durations, Status.PENDING, true);
+        const tx = await factory.updateStatus(
+            users,
+            amounts,
+            durations,
+            transferables,
+            forfeitables,
+            Status.PENDING,
+            true
+        );
         console.log(`Batch ${i++} transaction hash: ${tx.hash}`);
         await tx.wait(1);
     }
@@ -96,8 +140,13 @@ const create = async (rows: CsvRow[], factory: PositionFactory, wallet: Wallet) 
 
     let i = 1;
     for (const { wallet, amount, duration, transferable, forfeitable } of rows) {
+        const transferableBool = transferable === "true";
+        const forfeitableBool = forfeitable === "true";
         const hash = ethers.keccak256(
-            ethers.solidityPacked(["address", "uint256", "uint256"], [wallet, BigInt(amount), BigInt(duration)])
+            ethers.solidityPacked(
+                ["address", "uint256", "uint256", "bool", "bool"],
+                [wallet, BigInt(amount), BigInt(duration), transferableBool, forfeitableBool]
+            )
         );
 
         console.log(
@@ -120,8 +169,8 @@ const create = async (rows: CsvRow[], factory: PositionFactory, wallet: Wallet) 
             wallet,
             BigInt(amount),
             BigInt(duration),
-            transferable === "true",
-            forfeitable === "true"
+            transferableBool,
+            forfeitableBool
         );
         console.log("Transaction hash:", tx.hash);
         await tx.wait(1);
@@ -155,7 +204,7 @@ const main = async () => {
         console.log("🔧 Running in LOCAL mode");
         provider = new ethers.JsonRpcProvider(LOCAL_RPC_URL);
         wallet = new ethers.Wallet(LOCAL_PRIVATE_KEY, provider);
-        factory = await new PositionFactory__factory(wallet).deploy(wallet);
+        factory = await new PositionFactory__factory(wallet).deploy(LOCAL_VE_HEMI_ADDRESS, wallet);
         const deploymentTx = factory.deploymentTransaction()!;
         await deploymentTx.wait(1); // Wait for 1 confirmation instead of 2
 
@@ -169,16 +218,18 @@ const main = async () => {
     } else {
         console.log("🌐 Running in PRODUCTION mode");
         console.log(`RPC_URL: ${RPC_URL}`);
-        console.log(`POSITION_FACTORY_ADDRESS: ${POSITION_FACTORY_ADDRESS}`);
 
         if (!PRIVATE_KEY) {
             throw new Error("PRIVATE_KEY environment variable is required for production mode");
         }
 
+        const factoryAddress = await resolvePositionFactoryAddress();
+        console.log(`POSITION_FACTORY_ADDRESS: ${factoryAddress}`);
+
         provider = new ethers.JsonRpcProvider(RPC_URL);
         wallet = new ethers.Wallet(PRIVATE_KEY!, provider);
         factory = new ethers.Contract(
-            POSITION_FACTORY_ADDRESS,
+            factoryAddress,
             PositionFactory__factory.abi,
             wallet
         ) as PositionFactory & Contract;

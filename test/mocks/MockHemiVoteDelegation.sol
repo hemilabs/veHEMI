@@ -33,6 +33,8 @@ contract MockHemiVoteDelegation is IVeHemiVoteDelegation {
 
     function clearAutoDelegate() external override {}
 
+    function setAutoDelegate(address) external override {}
+
     function refreshVotingPower(address) external override {}
 
     function refreshVotingPowerBatch(address[] calldata) external override {}
