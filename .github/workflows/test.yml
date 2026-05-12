@@ -47,6 +47,40 @@ jobs:
                   forge build --sizes
               id: build
 
+            - name: Enforce EIP-170 contract-size limit
+              # `forge build --sizes` only PRINTS sizes — it exits 0 even on
+              # overflow. Production-shipped contracts must fit the 24,576-byte
+              # runtime limit. Fail the build if any contract under src/ is
+              # within 64 bytes of the cliff, giving reviewers a chance to
+              # consider library extraction before a future PR pushes over.
+              # Use `forge inspect` per contract under src/ (excluding test/,
+              # script/, lib/, mocks/) to compute runtime size and compare.
+              run: |
+                  LIMIT=24576
+                  WARN=$((LIMIT - 64))
+                  OVERFLOW=0
+                  for f in $(find src -type f -name '*.sol'); do
+                      # Get every concrete contract name in the file (skip
+                      # interfaces and libraries — they don't deploy).
+                      contracts=$(grep -oE '^contract +[A-Za-z_][A-Za-z0-9_]*' "$f" | awk '{print $2}')
+                      for c in $contracts; do
+                          # `forge inspect <name> bytecode` returns deployment
+                          # bytecode; runtime is what's measured by EIP-170.
+                          runtime_hex=$(forge inspect "$c" deployedBytecode 2>/dev/null || true)
+                          [ -z "$runtime_hex" ] && continue
+                          # Strip "0x" prefix and count nibbles / 2.
+                          size=$(( (${#runtime_hex} - 2) / 2 ))
+                          if [ "$size" -gt "$LIMIT" ]; then
+                              echo "::error::$c runtime $size > EIP-170 limit $LIMIT"
+                              OVERFLOW=1
+                          elif [ "$size" -gt "$WARN" ]; then
+                              echo "::warning::$c runtime $size > $WARN (within 64B of EIP-170 cliff)"
+                          fi
+                      done
+                  done
+                  exit $OVERFLOW
+              id: size-gate
+
             - name: Check storage layouts against golden fixtures
               run: |
                   chmod +x scripts/check-storage-layouts.sh

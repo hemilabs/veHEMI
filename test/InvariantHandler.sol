@@ -33,6 +33,23 @@ contract InvariantHandler is Test {
     uint256[] internal _lockedTokenIds;
     bool public seeded;
 
+    /// @dev Counter incremented every time `seed()` is invoked WITH at least
+    ///      one eligible non-transferable position present. Read by
+    ///      `invariant_seedingAttemptCounterAndSeededLatchAreCoherent` in
+    ///      `Invariant.t.sol` to prove the `seed()` action is being
+    ///      exercised under fuzz AND completes cleanly (latch flips when
+    ///      the counter increments) — without this metric, a future
+    ///      regression that broke `markSeedingStarted` could leave every
+    ///      subcurve invariant vacuously satisfied (their `if (!seeded)
+    ///      return;` short-circuit) and the test suite would silently pass.
+    ///
+    ///      The invariant only fires once `seedAttempts > 0`, so runs whose
+    ///      fuzz sequence never picks `seed()` are tolerated. Empirically
+    ///      ~6% of handler ticks invoke `seed()` (per N4-A7 measurement),
+    ///      so at depth=128 the probability of a fully vacuous run is
+    ///      ~(1-0.06)^128 ≈ 0.04% — acceptable.
+    uint256 public seedAttempts;
+
     /// @dev Token IDs that have been cleared via `forfeit()`. Used by
     ///      `invariant_forfeitClearsDelegations` to scope the cleanup
     ///      check to the forfeit path specifically and avoid conflating
@@ -131,48 +148,105 @@ contract InvariantHandler is Test {
 
     // ── Seeding action ───────────────────────────────────────────────────
 
-    /// @dev Seeds the locked + forfeitable curves. Can only succeed once.
-    ///      Skipped if no locked/forfeitable positions exist yet.
-    ///      Filters out tokens that were burned (forfeited/withdrawn) before seeding.
+    /// @dev Seeds the locked + forfeitable curves via the 3-phase flow:
+    ///      markSeedingStarted → seedBatch(all) → finalizeSeeding. Can only
+    ///      succeed once. Skipped if no non-transferable positions exist yet
+    ///      (the seed would produce a zero-supply LockedPoint).
     function seed() public {
         if (seeded) return;
         if (_lockedTokenIds.length == 0) return;
 
-        // Filter to only existing, non-transferrable tokens
-        uint256 count;
-        uint256[] memory filtered = new uint256[](_lockedTokenIds.length);
+        // Confirm at least one tracked token survived (not burned) and has
+        // an active non-transferable lock. If everything has been forfeited
+        // or expired we skip — the new flow accepts an all-empty scan but
+        // existing tests assert post-seed totals, so we mirror the old
+        // skip-when-empty semantic.
+        bool anyEligible;
         for (uint256 i; i < _lockedTokenIds.length; i++) {
             uint256 id = _lockedTokenIds[i];
-            address owner = _ownerOf(id);
-            if (owner == address(0)) continue; // burned
-            if (veHemi.getLockedBalance(id).amount <= 0) continue; // empty
-            filtered[count++] = id;
+            if (_ownerOf(id) == address(0)) continue;
+            if (veHemi.getLockedBalance(id).amount <= 0) continue;
+            anyEligible = true;
+            break;
         }
+        if (!anyEligible) return;
 
-        if (count == 0) return; // nothing to seed
+        // Record that an eligible seeding attempt was made. Read by
+        // `invariant_seedingAttemptCounterAndSeededLatchAreCoherent` in
+        // Invariant.t.sol to defend against the vacuity-on-broken-seed
+        // regression class (MUT-Q7 in N4-A2's analysis).
+        seedAttempts += 1;
 
-        // Trim to actual count
-        uint256[] memory toSeed = new uint256[](count);
-        for (uint256 i; i < count; i++) {
-            toSeed[i] = filtered[i];
-        }
-
-        // Sort ascending (insertion sort, small array)
-        for (uint256 i = 1; i < toSeed.length; i++) {
-            uint256 key = toSeed[i];
-            uint256 j = i;
-            while (j > 0 && toSeed[j - 1] > key) {
-                toSeed[j] = toSeed[j - 1];
-                j--;
-            }
-            toSeed[j] = key;
-        }
-
-        vm.prank(admin);
-        veHemi.seedAndFinalizeLockedPositions(toSeed);
+        vm.startPrank(admin);
+        veHemi.markSeedingStarted();
+        veHemi.seedBatch(type(uint256).max);
+        veHemi.finalizeSeeding();
+        vm.stopPrank();
 
         seeded = true;
         maxWarp = MAX_ACCUMULATED_WARP;
+    }
+
+    /// @dev Adversarial seeding probe: split the 3-phase flow across two
+    ///      handler ticks so that `block.timestamp` advances between
+    ///      `markSeedingStarted` and the subsequent `seedBatch` /
+    ///      `finalizeSeeding`. The atomicity guard in `_requireSeedingActive`
+    ///      MUST revert both follow-up calls with `SeedingInProgress`. If a
+    ///      future refactor weakens the guard (e.g., relaxes the timestamp
+    ///      check to `<=` or drops the check entirely), this probe surfaces
+    ///      the regression under fuzz instead of leaving it as a unit-test-
+    ///      only invariant.
+    ///
+    ///      Side-effect-free: every path either no-ops or runs an expected
+    ///      revert and returns, so the handler's seeded/maxWarp state is
+    ///      untouched. The companion `seed()` path remains the only way to
+    ///      complete the flow legitimately.
+    function probeSeedingAtomicityRevert(uint256 mode) public {
+        if (seeded) return;
+        if (_lockedTokenIds.length == 0) return;
+
+        // Only run if at least one eligible non-transferable position exists,
+        // mirroring `seed()`'s pre-flight.
+        bool anyEligible;
+        for (uint256 i; i < _lockedTokenIds.length; i++) {
+            uint256 id = _lockedTokenIds[i];
+            if (_ownerOf(id) == address(0)) continue;
+            if (veHemi.getLockedBalance(id).amount <= 0) continue;
+            anyEligible = true;
+            break;
+        }
+        if (!anyEligible) return;
+
+        // Snapshot the entire VM state before the probe. Both
+        // `markSeedingStarted` (writes `seedingStarted` + `seedingStartedAt`)
+        // and the subsequent `vm.warp` would otherwise leak side-effects into
+        // later handler ticks — `seed()` would then revert at the next call
+        // because `block.timestamp != seedingStartedAt`. Snapshotting +
+        // reverting keeps the probe truly side-effect-free.
+        uint256 snap = vm.snapshotState();
+
+        vm.prank(admin);
+        veHemi.markSeedingStarted();
+
+        // Advance time to T + 1 (any positive delta breaks atomicity).
+        vm.warp(block.timestamp + 1);
+
+        // The cross-block guard MUST fire on whichever follow-up the fuzz
+        // mode selects. Both `seedBatch` and `finalizeSeeding` route through
+        // `_requireSeedingActive`, so both branches assert the same revert.
+        if (mode % 2 == 0) {
+            vm.prank(admin);
+            vm.expectRevert(VeHemi.SeedingInProgress.selector);
+            veHemi.seedBatch(type(uint256).max);
+        } else {
+            vm.prank(admin);
+            vm.expectRevert(VeHemi.SeedingInProgress.selector);
+            veHemi.finalizeSeeding();
+        }
+
+        // Roll back every state change the probe made. Subsequent handler
+        // ticks see the same world they would have without this probe.
+        vm.revertToState(snap);
     }
 
     // ── Mutation actions ─────────────────────────────────────────────────

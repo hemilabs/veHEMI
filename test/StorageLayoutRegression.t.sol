@@ -300,6 +300,126 @@ contract StorageLayoutRegressionTest is Test {
         // which would have `.storage[4].label == "__inserted"` and
         // `.storage[5].label == "autoDelegate"`.
     }
+
+    /// @dev Seventh mutant: VeHemi's `SeedingProgress` struct with
+    ///      `totalSlope` ↔ `totalBias` swapped within slot 24 (the packed
+    ///      int128 pair). Parallel to the `LockedBalance` and `Delegation`
+    ///      swap mutants — proves that the
+    ///      `test_VeHemi_SeedingProgressMemberLayout` golden pin
+    ///      (StorageLayoutGolden.t.sol:286-330) discriminates an intra-struct
+    ///      reorder of the seeding accumulator.
+    ///
+    ///      Why this matters at runtime: `finalizeSeeding` computes
+    ///      `_lockedBias = totalBias - totalSlope * block.timestamp`
+    ///      (see the `_lockedBias = ... - _totalSlope * _tsInt` and
+    ///      `_forfeitableBias = ... - _totalForfeitableSlope * _tsInt`
+    ///      computations in `finalizeSeeding`). A silent swap inside the struct would read
+    ///      `totalBias` from the `totalSlope` offset and vice versa, producing
+    ///      a wildly incorrect materialized LockedPoint at finalize. The
+    ///      golden fixture pins each member's `offset` field; a regenerated
+    ///      fixture from this swapped declaration would have `.members[1]`
+    ///      labeled `totalBias` at offset 0 (not `totalSlope`), failing the
+    ///      pin.
+    function test_SwappedSeedingProgress_DiscriminatesLayout() public {
+        // Pattern note: like mutants M3-M6 above (and unlike M1-M2 which
+        // use `vm.etch` onto a deployed proxy), this mutant is self-
+        // contained. The discriminator is the JSON fixture that
+        // `test_VeHemi_SeedingProgressMemberLayout` pins against, not
+        // runtime bytecode through a proxy. So we deploy the mutant
+        // standalone, exercise its setters/raw-readers, and prove the
+        // resulting storage layout disagrees with the canonical pin.
+        VeHemiBadSeedingProgressSwap mutant = new VeHemiBadSeedingProgressSwap();
+
+        // --- LOCKED pair (slot 24, struct-relative slot 1) ---
+        // Write sentinels via the mutant's setter: the swapped layout has
+        // `totalBias` at offset 0 and `totalSlope` at offset 16 (the reverse
+        // of the canonical layout).
+        int128 biasSentinel = 0x1111;
+        int128 slopeSentinel = 0x2222;
+        mutant.setSeedingPair(biasSentinel, slopeSentinel);
+
+        // Read the raw packed word at slot 1 (struct-relative). Decode under
+        // BOTH layouts — they must disagree.
+        bytes32 raw = mutant.rawSeedingPair();
+        int128 lowField = int128(uint128(uint256(raw)));         // offset 0
+        int128 highField = int128(uint128(uint256(raw) >> 128)); // offset 16
+
+        // Under the SWAPPED layout: lowField == biasSentinel, highField == slopeSentinel.
+        // Under the CORRECT layout: lowField would be totalSlope, highField totalBias.
+        assertEq(lowField, biasSentinel, "swapped locked layout: bias at offset 0");
+        assertEq(highField, slopeSentinel, "swapped locked layout: slope at offset 16");
+
+        // --- FORFEITABLE pair (slot 25, struct-relative slot 2) ---
+        // The canonical struct has totalForfeitableSlope at offset 0 and
+        // totalForfeitableBias at offset 16. The mutant swaps them. Same
+        // logic — verifies the golden pin's `members[3]` / `members[4]`
+        // assertions would catch a regenerated fixture from the swapped
+        // declaration. Without this parallel check, the comment in
+        // `test_VeHemi_SeedingProgressMemberLayout` claiming "EITHER pair
+        // swap would corrupt _lockedBias" is half-asserted.
+        int128 forfBiasSentinel = 0x3333;
+        int128 forfSlopeSentinel = 0x4444;
+        mutant.setSeedingForfeitablePair(forfBiasSentinel, forfSlopeSentinel);
+
+        bytes32 rawForf = mutant.rawSeedingForfeitablePair();
+        int128 lowForfField = int128(uint128(uint256(rawForf)));
+        int128 highForfField = int128(uint128(uint256(rawForf) >> 128));
+
+        assertEq(lowForfField, forfBiasSentinel, "swapped forfeitable layout: bias at offset 0");
+        assertEq(highForfField, forfSlopeSentinel, "swapped forfeitable layout: slope at offset 16");
+
+        // A fixture regenerated from this swapped declaration would have
+        // `.types.t_struct(SeedingProgress)_storage.members[1].label == "totalBias"`
+        // (not `totalSlope`) at offset 0 AND `.members[3].label == "totalForfeitableBias"`
+        // (not `totalForfeitableSlope`) at offset 0 — failing the golden pin in
+        // `test_VeHemi_SeedingProgressMemberLayout`.
+    }
+}
+
+/// @dev Seventh mutant: `SeedingProgress` with BOTH packed int128 pairs
+///      swapped (totalSlope ↔ totalBias at slot 1; totalForfeitableSlope ↔
+///      totalForfeitableBias at slot 2). Used to prove the golden member-
+///      layout pin discriminates this regression class for BOTH pairs.
+///      The mutant deliberately keeps the canonical 4-slot footprint and
+///      head/tail members (`lastProcessedId`, `count`) so the only
+///      observable difference is the intra-struct offset reorder.
+contract VeHemiBadSeedingProgressSwap {
+    struct SeedingProgressSwapped {
+        uint256 lastProcessedId;
+        int128 totalBias;                // offset 0 (swapped — should be totalSlope)
+        int128 totalSlope;               // offset 16 (swapped — should be totalBias)
+        int128 totalForfeitableBias;     // offset 0 (swapped — should be totalForfeitableSlope)
+        int128 totalForfeitableSlope;    // offset 16 (swapped — should be totalForfeitableBias)
+        uint256 count;
+    }
+
+    SeedingProgressSwapped internal _progress;
+
+    function setSeedingPair(int128 bias_, int128 slope_) external {
+        _progress.totalBias = bias_;
+        _progress.totalSlope = slope_;
+    }
+
+    function setSeedingForfeitablePair(int128 bias_, int128 slope_) external {
+        _progress.totalForfeitableBias = bias_;
+        _progress.totalForfeitableSlope = slope_;
+    }
+
+    function rawSeedingPair() external view returns (bytes32 word) {
+        // The locked int128 pair sits at struct-relative slot 1 (after the
+        // uint256 lastProcessedId at slot 0). The struct base is at slot 0
+        // of THIS contract, so the pair lives at absolute slot 1 here.
+        assembly {
+            word := sload(1)
+        }
+    }
+
+    function rawSeedingForfeitablePair() external view returns (bytes32 word) {
+        // The forfeitable int128 pair sits at struct-relative slot 2.
+        assembly {
+            word := sload(2)
+        }
+    }
 }
 
 /// @dev Mutant V1-like contract where a spurious `__inserted` uint256 sits

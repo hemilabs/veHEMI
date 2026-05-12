@@ -139,10 +139,16 @@ contract ForkUpgradeLockedCurveTest is Test {
     function _upgradeAndSeed() internal returns (uint256[] memory lockedIds) {
         _upgradeProxy();
         lockedIds = _findNonTransferablePositions();
-        if (lockedIds.length > 0) {
-            vm.prank(GNOSIS_SAFE);
-            veHemi.seedAndFinalizeLockedPositions(lockedIds);
-        }
+        // Run the 3-phase seeding flow: mark, batch-scan all IDs in one go,
+        // finalize. The on-chain scan ignores the `lockedIds` array (kept
+        // here for the return-value contract); it walks every minted ID and
+        // accepts only those passing the non-transferable + non-expired
+        // filter on-chain.
+        vm.startPrank(GNOSIS_SAFE);
+        veHemi.markSeedingStarted();
+        veHemi.seedBatch(type(uint256).max);
+        veHemi.finalizeSeeding();
+        vm.stopPrank();
     }
 
     /// @dev Warp time AND advance block number together.
@@ -465,7 +471,7 @@ contract ForkUpgradeLockedCurveTest is Test {
 
         vm.prank(GNOSIS_SAFE);
         vm.expectRevert(VeHemi.SeedingAlreadyFinalized.selector);
-        veHemi.seedAndFinalizeLockedPositions(lockedIds);
+        veHemi.markSeedingStarted();
     }
 
     // ═════════════════════════════════════════════════════════════════════
@@ -562,11 +568,14 @@ contract ForkUpgradeLockedCurveTest is Test {
         vm.prank(user);
         veHemi.withdraw(tokenId);
 
-        // Owner can still seed later
+        // Owner can still seed later via the 3-phase flow.
         uint256[] memory lockedIds = _findNonTransferablePositions();
         if (lockedIds.length > 0) {
-            vm.prank(GNOSIS_SAFE);
-            veHemi.seedAndFinalizeLockedPositions(lockedIds);
+            vm.startPrank(GNOSIS_SAFE);
+            veHemi.markSeedingStarted();
+            veHemi.seedBatch(type(uint256).max);
+            veHemi.finalizeSeeding();
+            vm.stopPrank();
             assertTrue(veHemi.lockedSeedingFinalized(), "seeding should work after delayed activation");
             assertGt(veHemi.nonTransferableTotalVeHemiSupply(), 0, "locked supply should be > 0 after delayed seed");
         }
@@ -576,15 +585,19 @@ contract ForkUpgradeLockedCurveTest is Test {
     //  15. GAS COST MEASUREMENT
     // ═════════════════════════════════════════════════════════════════════
 
-    /// @notice Measure actual gas cost of seeding with real positions.
+    /// @notice Measure actual gas cost of the full 3-phase seeding flow
+    ///         with real positions (markSeedingStarted + one seedBatch + finalizeSeeding).
     function testSeedingGasCost() public onlyFork {
         _upgradeProxy();
         uint256[] memory lockedIds = _findNonTransferablePositions();
         assertGt(lockedIds.length, 0, "Mainnet must have active non-transferable positions");
 
         uint256 gasBefore = gasleft();
-        vm.prank(GNOSIS_SAFE);
-        veHemi.seedAndFinalizeLockedPositions(lockedIds);
+        vm.startPrank(GNOSIS_SAFE);
+        veHemi.markSeedingStarted();
+        veHemi.seedBatch(type(uint256).max);
+        veHemi.finalizeSeeding();
+        vm.stopPrank();
         uint256 gasUsed = gasBefore - gasleft();
 
         emit log_named_uint("Positions seeded", lockedIds.length);
@@ -1376,105 +1389,97 @@ contract ForkUpgradeLockedCurveTest is Test {
         }
     }
 
-    /// @notice Verify seeding with the EXACT deploy script array succeeds and produces
-    ///         the same result as seeding with the scanner-discovered array.
-    function testSeedingWithDeployScriptArray() public onlyFork {
-        // First, take a snapshot — we'll need to restore for the second seed
+    /// @notice The on-chain enumeration scans the same set of token IDs
+    ///         regardless of any external scanner — running the flow once
+    ///         vs running it after warping/checkpointing must produce the
+    ///         same locked/forfeitable totals against mainnet state.
+    function testSeedingProducesDeterministicTotals() public onlyFork {
         uint256 snapshotId = vm.snapshot();
 
-        // Path 1: Seed with scanner-derived array
+        // Path 1: seed at the original block timestamp
         _upgradeProxy();
-        uint256[] memory scannedIds = _findNonTransferablePositions();
-        vm.prank(GNOSIS_SAFE);
-        veHemi.seedAndFinalizeLockedPositions(scannedIds);
-        uint256 lockedFromScan = veHemi.nonTransferableTotalVeHemiSupply();
-        uint256 forfeitableFromScan = veHemi.forfeitableTotalVeHemiSupply();
+        vm.startPrank(GNOSIS_SAFE);
+        veHemi.markSeedingStarted();
+        veHemi.seedBatch(type(uint256).max);
+        veHemi.finalizeSeeding();
+        vm.stopPrank();
+        uint256 lockedA = veHemi.nonTransferableTotalVeHemiSupply();
+        uint256 forfeitableA = veHemi.forfeitableTotalVeHemiSupply();
 
-        // Restore snapshot
         vm.revertTo(snapshotId);
 
-        // Path 2: Seed with deploy script array
+        // Path 2: same flow from the same starting state — must reproduce.
         _upgradeProxy();
-        uint256[] memory deployIds = _deployScriptLockedTokenIds();
-        vm.prank(GNOSIS_SAFE);
-        veHemi.seedAndFinalizeLockedPositions(deployIds);
-        uint256 lockedFromDeploy = veHemi.nonTransferableTotalVeHemiSupply();
-        uint256 forfeitableFromDeploy = veHemi.forfeitableTotalVeHemiSupply();
+        vm.startPrank(GNOSIS_SAFE);
+        veHemi.markSeedingStarted();
+        veHemi.seedBatch(type(uint256).max);
+        veHemi.finalizeSeeding();
+        vm.stopPrank();
+        uint256 lockedB = veHemi.nonTransferableTotalVeHemiSupply();
+        uint256 forfeitableB = veHemi.forfeitableTotalVeHemiSupply();
 
-        // Both seedings must produce identical results
-        assertEq(lockedFromScan, lockedFromDeploy, "Locked supply differs between scan and deploy");
-        assertEq(forfeitableFromScan, forfeitableFromDeploy, "Forfeitable supply differs between scan and deploy");
+        assertEq(lockedA, lockedB, "locked supply must be deterministic");
+        assertEq(forfeitableA, forfeitableB, "forfeitable supply must be deterministic");
     }
 
     // ═════════════════════════════════════════════════════════════════════
     //  29. SEEDING REVERT MATRIX
     // ═════════════════════════════════════════════════════════════════════
 
-    function testSeedingRevertsOnEmptyArray() public onlyFork {
+    function testSeedingFlowCompletesOnEmptyState() public onlyFork {
         _upgradeProxy();
-        uint256[] memory empty = new uint256[](0);
-        vm.prank(GNOSIS_SAFE);
-        vm.expectRevert(VeHemi.EmptyArray.selector);
-        veHemi.seedAndFinalizeLockedPositions(empty);
-        // Verify state is clean — seeding NOT finalized
-        assertFalse(veHemi.lockedSeedingFinalized(), "Seeding should not be finalized after revert");
-        assertEq(veHemi.nonTransferableTotalVeHemiSupply(), 0, "No locked supply");
+        // Run the flow on a fresh-upgraded proxy. Even with zero active
+        // non-transferable positions the scan must complete cleanly.
+        vm.startPrank(GNOSIS_SAFE);
+        veHemi.markSeedingStarted();
+        veHemi.seedBatch(type(uint256).max);
+        veHemi.finalizeSeeding();
+        vm.stopPrank();
+        assertTrue(veHemi.lockedSeedingFinalized(), "latch must flip");
     }
 
-    function testSeedingRevertsOnUnsortedIds() public onlyFork {
+    function testSeedingRevertsWhenMarkCalledTwice() public onlyFork {
         _upgradeProxy();
-        uint256[] memory unsorted = new uint256[](3);
-        unsorted[0] = 28665;
-        unsorted[1] = 28660; // out of order
-        unsorted[2] = 28670;
-        vm.prank(GNOSIS_SAFE);
-        vm.expectRevert(VeHemi.UnsortedOrDuplicateTokenIds.selector);
-        veHemi.seedAndFinalizeLockedPositions(unsorted);
-        assertFalse(veHemi.lockedSeedingFinalized(), "Should not be finalized");
+        vm.startPrank(GNOSIS_SAFE);
+        veHemi.markSeedingStarted();
+        vm.expectRevert(VeHemi.SeedingAlreadyStarted.selector);
+        veHemi.markSeedingStarted();
+        vm.stopPrank();
     }
 
-    function testSeedingRevertsOnDuplicateIds() public onlyFork {
+    function testSeedingRevertsWhenBatchBeforeMark() public onlyFork {
         _upgradeProxy();
-        uint256[] memory dup = new uint256[](3);
-        dup[0] = 28660;
-        dup[1] = 28665;
-        dup[2] = 28665; // duplicate
         vm.prank(GNOSIS_SAFE);
-        vm.expectRevert(VeHemi.UnsortedOrDuplicateTokenIds.selector);
-        veHemi.seedAndFinalizeLockedPositions(dup);
-        assertFalse(veHemi.lockedSeedingFinalized(), "Should not be finalized");
+        vm.expectRevert(VeHemi.SeedingNotStarted.selector);
+        veHemi.seedBatch(1);
     }
 
-    function testSeedingRevertsOnTransferableTokenInArray() public onlyFork {
+    function testSeedingRevertsOnFinalizeBeforeFullScan() public onlyFork {
         _upgradeProxy();
-        // Find a transferable token (token ID 1 is highly likely to be transferable on mainnet)
-        // Token IDs outside 28625-28809 are transferable per our scan
-        uint256[] memory mixed = new uint256[](2);
-        mixed[0] = 1; // transferable
-        mixed[1] = 28660; // non-transferable
-        vm.prank(GNOSIS_SAFE);
-        vm.expectRevert(VeHemi.NotNonTransferrable.selector);
-        veHemi.seedAndFinalizeLockedPositions(mixed);
-        assertFalse(veHemi.lockedSeedingFinalized(), "Should not be finalized");
-    }
-
-    function testSeedingRevertsOnNonexistentToken() public onlyFork {
-        _upgradeProxy();
-        uint256[] memory bad = new uint256[](1);
-        bad[0] = type(uint256).max - 1; // definitely doesn't exist
-        vm.prank(GNOSIS_SAFE);
-        vm.expectRevert(VeHemi.TokenDoesNotExist.selector);
-        veHemi.seedAndFinalizeLockedPositions(bad);
-        assertFalse(veHemi.lockedSeedingFinalized(), "Should not be finalized");
+        vm.startPrank(GNOSIS_SAFE);
+        veHemi.markSeedingStarted();
+        // Take a small batch that won't cover all IDs (mainnet has many).
+        veHemi.seedBatch(1);
+        vm.expectRevert(); // SeedingIncomplete(actual, expected) — args not pinned here
+        veHemi.finalizeSeeding();
+        vm.stopPrank();
     }
 
     function testSeedingRevertsOnNonOwner() public onlyFork {
         _upgradeProxy();
-        uint256[] memory ids = _deployScriptLockedTokenIds();
-        // Call from a random non-owner address
+        // Each function in the 3-phase flow must be owner-only.
         vm.prank(address(0xBAD));
         vm.expectRevert(abi.encodeWithSignature("OwnableUnauthorizedAccount(address)", address(0xBAD)));
-        veHemi.seedAndFinalizeLockedPositions(ids);
+        veHemi.markSeedingStarted();
+
+        vm.prank(address(0xBAD));
+        vm.expectRevert(abi.encodeWithSignature("OwnableUnauthorizedAccount(address)", address(0xBAD)));
+        veHemi.seedBatch(100);
+
+        vm.prank(address(0xBAD));
+        vm.expectRevert(abi.encodeWithSignature("OwnableUnauthorizedAccount(address)", address(0xBAD)));
+        veHemi.finalizeSeeding();
+
         assertFalse(veHemi.lockedSeedingFinalized(), "Should not be finalized");
     }
 
@@ -2278,9 +2283,14 @@ contract ForkUpgradeLockedCurveTest is Test {
             idsWithExpired[scannedIds.length] = shortId;
         }
 
-        // Seed should succeed (expired position is silently skipped)
-        vm.prank(GNOSIS_SAFE);
-        veHemi.seedAndFinalizeLockedPositions(idsWithExpired);
+        // Seed should succeed — the expired position is silently skipped
+        // by the on-chain scan (the `idsWithExpired` array is a legacy
+        // artifact of the previous single-shot API and is unused here).
+        vm.startPrank(GNOSIS_SAFE);
+        veHemi.markSeedingStarted();
+        veHemi.seedBatch(type(uint256).max);
+        veHemi.finalizeSeeding();
+        vm.stopPrank();
 
         assertTrue(veHemi.lockedSeedingFinalized(), "Should be finalized");
 
@@ -4356,5 +4366,196 @@ contract ForkUpgradeLockedCurveTest is Test {
         assertEq(veHemi.balanceOfNFT(tokenId), biasBefore, "Bias unchanged after operator transfer");
         _assertTokenConservation("After operator transfer");
         _assertOrdering("After operator transfer");
+    }
+
+    // ═════════════════════════════════════════════════════════════════════
+    //  65. CONTINUITY ACROSS SEEDING BOUNDARY (N3-A14 follow-up)
+    // ═════════════════════════════════════════════════════════════════════
+
+    /// @notice Verify that `totalVeHemiSupplyAt(t)` and per-position
+    ///         `balanceOfNFT(id)` values queried BEFORE seeding remain
+    ///         byte-for-byte identical when queried AFTER seeding for the
+    ///         same `t` (or, for current-time queries, decay by no more
+    ///         than `totalSlope * dt` seconds). Proves the seeding flow is
+    ///         strictly additive on V1 history — no jump discontinuities
+    ///         introduced at the boundary.
+    ///
+    ///         This is the test N3-A14 flagged as missing: existing fork
+    ///         tests sample post-seed values but never compare against a
+    ///         pre-seed snapshot at the same timestamps.
+    function testContinuityAcrossSeedingBoundary() public onlyFork {
+        _upgradeProxy(); // V2 impl deployed; seeding NOT yet run.
+
+        // Sample timestamps spanning V1 history. These are the timestamps
+        // historical proposals or off-chain indexers would query at.
+        uint256[] memory sampleTs = new uint256[](5);
+        sampleTs[0] = block.timestamp - 30 days;
+        sampleTs[1] = block.timestamp - 7 days;
+        sampleTs[2] = block.timestamp - 1 days;
+        sampleTs[3] = block.timestamp - 1 hours;
+        sampleTs[4] = block.timestamp;
+
+        // Snapshot pre-seed values for each sample timestamp.
+        uint256[] memory preSeedTotal = new uint256[](sampleTs.length);
+        for (uint256 i; i < sampleTs.length; ++i) {
+            preSeedTotal[i] = veHemi.totalVeHemiSupplyAt(sampleTs[i]);
+        }
+
+        // Vacuity guard: if every snapshot returns 0, the equality checks
+        // below pass trivially (e.g., a fork block predating V1 deployment).
+        // Live Hemi has had non-zero veHEMI supply since ~2025, so on any
+        // realistic fork block at least one sample must be non-zero.
+        assertGt(
+            preSeedTotal[sampleTs.length - 1],
+            0,
+            "vacuity: pre-seed totalVeHemiSupplyAt(now) was zero - fork block predates V1?"
+        );
+
+        // Snapshot pre-seed balances for a handful of known active token IDs
+        // (use the first few non-transferable positions from the live range).
+        uint256[] memory probeIds = _findNonTransferablePositions();
+        uint256 probeCount = probeIds.length < 5 ? probeIds.length : 5;
+        // Vacuity guard: the per-position balance loop below is meaningful
+        // only if at least one probe ID was discovered.
+        assertGt(
+            probeCount,
+            0,
+            "vacuity: no non-transferable positions found in LOCKED_RANGE - fork drift?"
+        );
+
+        uint256[] memory preSeedBalances = new uint256[](probeCount);
+        for (uint256 j; j < probeCount; ++j) {
+            preSeedBalances[j] = veHemi.balanceOfNFT(probeIds[j]);
+        }
+        // Vacuity guard: if every probe's balance is zero, the per-position
+        // equality loop below would trivially pass. The `_findNonTransferable`
+        // scan already filters on `bal.end > block.timestamp`, so a live
+        // non-transferable position MUST have non-zero bias unless it's
+        // exactly at expiry — pinning the first probe is the tightest
+        // belt-and-suspenders check.
+        assertGt(
+            preSeedBalances[0],
+            0,
+            "vacuity: first probe position has zero balance - all probes fully decayed?"
+        );
+        uint256 preSeedGlobalEpoch = veHemi.epoch();
+        // Capture the timestamp of the most recent V1 checkpoint. The
+        // `_checkpoint(0, …)` call inside `finalizeSeeding` will append one
+        // new global point per SIX_DAYS boundary crossed between this
+        // timestamp and `block.timestamp` (catchup loop in `_checkpoint`).
+        uint256 lastV1PointTs = veHemi.getGlobalPoint(preSeedGlobalEpoch).timestamp;
+
+        // Run the seeding flow atomically.
+        vm.startPrank(GNOSIS_SAFE);
+        veHemi.markSeedingStarted();
+        veHemi.seedBatch(type(uint256).max);
+        veHemi.finalizeSeeding();
+        vm.stopPrank();
+
+        // Historical sample timestamps must produce IDENTICAL values post-seed.
+        // The seeding flow only writes new global epochs at SIX_DAYS-aligned
+        // boundaries (catchup) and one at `block.timestamp` (finalize); it
+        // does not retroactively mutate any V1 history.
+        for (uint256 i; i < sampleTs.length - 1; ++i) {
+            assertEq(
+                veHemi.totalVeHemiSupplyAt(sampleTs[i]),
+                preSeedTotal[i],
+                "totalVeHemiSupplyAt drift at historical timestamp"
+            );
+        }
+
+        // For the current-time sample (the last entry), the new global
+        // epoch was just appended. Decay is bounded — the value must equal
+        // the pre-seed extrapolation at the same `block.timestamp` since
+        // seeding ran atomically. Use the snapshot taken at the same
+        // timestamp pre-seed; allow exact equality (zero seconds elapsed).
+        assertEq(
+            veHemi.totalVeHemiSupplyAt(sampleTs[sampleTs.length - 1]),
+            preSeedTotal[sampleTs.length - 1],
+            "totalVeHemiSupplyAt drift at current timestamp"
+        );
+
+        // Per-position balances must be byte-identical for live positions.
+        for (uint256 j; j < probeCount; ++j) {
+            assertEq(
+                veHemi.balanceOfNFT(probeIds[j]),
+                preSeedBalances[j],
+                "balanceOfNFT drift across seeding boundary"
+            );
+        }
+
+        // The global epoch advances by exactly (catchup count + 1):
+        //   - One new global point per SIX_DAYS boundary between
+        //     `lastV1PointTs` and `block.timestamp` (catchup loop, capped at
+        //     MAX_ITERATIONS = 300 in `_checkpoint`).
+        //   - Plus one final point at `block.timestamp` written by finalize
+        //     (or an in-place overwrite if a same-block V1 epoch already
+        //     existed, contributing 0 to the advance).
+        // Compute the upper bound from the live V1 idle period and assert
+        // the observed advance is ≤ that. A tighter bound is unsafe on
+        // CI's `latest`-block fork because the V1 idle duration drifts.
+        uint256 SIX_DAYS_CONST = 525_960; // 365.25 days / (12 * 5)
+        uint256 idleSinceLastV1 = block.timestamp >= lastV1PointTs
+            ? block.timestamp - lastV1PointTs
+            : 0;
+        // ceil(idle / SIX_DAYS) + 1 for the finalize epoch, capped at the
+        // catchup loop's MAX_ITERATIONS to handle pathological idle V1.
+        uint256 maxExpectedAdvance = (idleSinceLastV1 + SIX_DAYS_CONST - 1) / SIX_DAYS_CONST + 1;
+        if (maxExpectedAdvance > 300) maxExpectedAdvance = 300;
+        uint256 postSeedGlobalEpoch = veHemi.epoch();
+        assertLe(
+            postSeedGlobalEpoch - preSeedGlobalEpoch,
+            maxExpectedAdvance,
+            "seeding advanced global epoch beyond the catchup-bound limit"
+        );
+    }
+
+    // ═════════════════════════════════════════════════════════════════════
+    //  66. ATOMICITY GUARD UNDER FORKED STATE (N3-A2 follow-up)
+    // ═════════════════════════════════════════════════════════════════════
+
+    /// @notice Verify the atomicity guard fires on real Hemi state: if the
+    ///         Safe operator splits `markSeedingStarted` from `seedBatch` /
+    ///         `finalizeSeeding` across blocks, the cross-block calls MUST
+    ///         revert with `SeedingInProgress`. The unit-test coverage
+    ///         (`test_seedingFlow_revertsIfSeedBatchAcrossBlockBoundary`)
+    ///         already pins this against synthetic state; this test re-pins
+    ///         it against live mainnet positions to guard against the case
+    ///         where some real-state pathology makes the guard misfire.
+    ///
+    ///         If the Gnosis Safe MultiSend protocol-kit ever ships a
+    ///         change that decomposes the bundle into separate L2 txs (it
+    ///         currently does not — verified via N3-A16), the production
+    ///         deploy script's reliance on same-block execution would break
+    ///         silently. This test would still pass (the guard is intact),
+    ///         but the contract-side guarantee remains the load-bearing one.
+    function testAtomicityGuardAcrossBlocks_OnFork() public onlyFork {
+        _upgradeProxy();
+
+        // Open the seeding window at block T.
+        vm.prank(GNOSIS_SAFE);
+        veHemi.markSeedingStarted();
+
+        // Operator-error: advance to T+1 before continuing.
+        _warpAndRoll(1);
+
+        // seedBatch MUST revert.
+        vm.prank(GNOSIS_SAFE);
+        vm.expectRevert(VeHemi.SeedingInProgress.selector);
+        veHemi.seedBatch(type(uint256).max);
+
+        // finalizeSeeding MUST revert (even though no batches succeeded —
+        // the guard fires before the cursor-completeness check).
+        vm.prank(GNOSIS_SAFE);
+        vm.expectRevert(VeHemi.SeedingInProgress.selector);
+        veHemi.finalizeSeeding();
+
+        // The seeding window remains open but stuck. The contract has no
+        // on-chain recovery: `markSeedingStarted` reverts (latch set),
+        // `seedBatch`/`finalizeSeeding` revert (cross-block). Only a fresh
+        // implementation upgrade could clear `seedingStarted`. This is the
+        // failure mode the Safe MultiSend prevents by construction.
+        assertTrue(veHemi.seedingStarted(), "latch set");
+        assertFalse(veHemi.lockedSeedingFinalized(), "not finalized");
     }
 }

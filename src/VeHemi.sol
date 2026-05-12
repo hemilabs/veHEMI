@@ -22,7 +22,8 @@ import {VeHemiStorageV2} from "./storage/VeHemiStorageV2.sol";
  *        - `lockedSeedingFinalized == false` (V1 behavior): `_checkpoint` skips all
  *          subcurve accumulation. Contract is bytecode-upgradeable from V1 with
  *          zero behavioral divergence until seeding runs.
- *        - `seedAndFinalizeLockedPositions(tokenIds)` (one-shot, owner-only): computes
+ *        - `markSeedingStarted` + repeated `seedBatch(maxIterations)` +
+ *          `finalizeSeeding` (owner-only, on-chain enumeration): computes
  *          aggregate bias/slope for all existing non-transferable positions in memory,
  *          writes the locked + forfeitable LockedPoints, then flips the latch to true.
  *        - `lockedSeedingFinalized == true` (V2 behavior): subcurve logic is live.
@@ -33,6 +34,30 @@ import {VeHemiStorageV2} from "./storage/VeHemiStorageV2.sol";
  *      values pre- and post-seeding. Only the NEW subcurve reads (supplyBreakdown,
  *      nonTransferableTotalVeHemiSupply, forfeitableTotalVeHemiSupply) depend on
  *      seeding having run.
+ *
+ *      V2 MIGRATION NOTES (silent behavior changes vs. V1):
+ *        - `createLock` / `createLockFor` now reject amounts below `MIN_LOCK_AMOUNT`
+ *          (10 HEMI) with `AmountTooSmall`. V1 accepted any non-zero amount.
+ *        - `createLockFor` reverts `InvalidConfiguration` if both `transferable_`
+ *          and `forfeitable_` are true (mutually exclusive in V2).
+ *        - `forfeit` is bounded by `transferableAfter` rather than `lock.end`:
+ *          once a position becomes transferable, the forfeit window closes
+ *          (reverts `ForfeitWindowExpired`). Narrows the admin's window vs. V1.
+ *        - Between `markSeedingStarted()` and `finalizeSeeding()` (typically a
+ *          single block via Gnosis Safe MultiSend), `_createLock` for
+ *          non-transferable positions, `forfeit`, and `increaseAmount` /
+ *          `increaseUnlockTime` on non-transferable positions all revert with
+ *          `SeedingInProgress`. Transferable positions are unaffected.
+ *          Practical exposure on mainnet: one block, gated by the atomicity
+ *          guard. Pending mempool txs in that block will revert and need re-broadcast.
+ *        - `transferFrom` adds a `nonReentrant` modifier. Composed contracts
+ *          that re-enter VeHemi from `onERC721Received` will revert; pure ERC-721
+ *          receivers and callbacks that only read VeHemi state are unaffected.
+ *
+ *      All V1 function signatures, event topics, and ERC721Enumerable interface
+ *      are preserved. View functions reading per-token state (`balanceOfNFT`,
+ *      `getUserPoint`, `getGlobalPoint`, `totalVeHemiSupply[At]`) are byte-identical
+ *      across the V1→V2 boundary at any historical timestamp.
  */
 contract VeHemi is
     ERC721EnumerableUpgradeable,
@@ -79,9 +104,10 @@ contract VeHemi is
     error OwnerIsZero();
     error NotTransferable();
     error SeedingAlreadyFinalized();
-    error EmptyArray();
-    error NotNonTransferrable();
-    error UnsortedOrDuplicateTokenIds();
+    error SeedingAlreadyStarted();
+    error SeedingNotStarted();
+    error SeedingInProgress();
+    error SeedingIncomplete(uint256 lastProcessedId, uint256 expectedEnd);
     error ForfeitWindowExpired();
     error InvalidConfiguration();
     error TokenDoesNotExist();
@@ -201,6 +227,8 @@ contract VeHemi is
         // becomes transferable, it can no longer be forfeited — this prevents
         // punishing users who voluntarily extend their lock past the original term.
         if (block.timestamp >= transferableAfter[tokenId_]) revert ForfeitWindowExpired();
+        // Forfeitable positions are always non-transferable, so always check.
+        _requireSeedingNotActiveForNonTransferable(true);
         _delegate(tokenId_, address(0));
         _withdraw(tokenId_);
     }
@@ -248,6 +276,8 @@ contract VeHemi is
         if (_oldLocked.amount <= 0) revert NoExistingLock();
         if (_oldLocked.end <= block.timestamp) revert LockExpired();
 
+        _requireSeedingNotActiveForNonTransferable(transferableAfter[tokenId_] != 0);
+
         _depositFor(tokenId_, amount_, 0, _oldLocked);
     }
 
@@ -264,6 +294,8 @@ contract VeHemi is
         uint256 _unlockTime = ((block.timestamp + lockDuration_) / SIX_DAYS) * SIX_DAYS; // unlock time is rounded down to SIX_DAYS
         if (_unlockTime > block.timestamp + MAX_TIME) revert LockDurationTooLong();
         if (_unlockTime <= _oldLocked.end) revert NewLockDurationNotGreater();
+
+        _requireSeedingNotActiveForNonTransferable(transferableAfter[tokenId_] != 0);
 
         // V2: transferableAfter is NOT extended when the user voluntarily extends their lock.
         // The user was promised transferability at the original unlock time, and extending the
@@ -844,6 +876,8 @@ contract VeHemi is
         // ForfeitWindowExpired (block.timestamp >= 0 is always true).
         if (transferable_ && forfeitable_) revert InvalidConfiguration();
 
+        _requireSeedingNotActiveForNonTransferable(!transferable_);
+
         _tokenId = nextTokenId++;
         _mint(account_, _tokenId);
 
@@ -936,6 +970,45 @@ contract VeHemi is
         }
     }
 
+    /// @dev Revert with SeedingInProgress if the seeding window is open AND the
+    ///      caller's operation targets a non-transferable position (the only
+    ///      class whose state is reflected in the in-progress accumulator).
+    function _requireSeedingNotActiveForNonTransferable(bool isNonTransferable) internal view {
+        if (isNonTransferable && seedingStarted && !lockedSeedingFinalized) {
+            revert SeedingInProgress();
+        }
+    }
+
+    /// @dev Shared precondition check for seedBatch + finalizeSeeding. Factored
+    ///      out so the three SLOADs and three reverts only contribute their
+    ///      bytecode once. The atomicity check (`block.timestamp ==
+    ///      seedingStartedAt`) is critical: cross-block execution would leave
+    ///      slope-change entries at past subEnds as dead storage.
+    ///
+    ///      CHECK ORDER (UX-driven; do NOT reorder without considering the
+    ///      operator's diagnostic experience):
+    ///        1. `lockedSeedingFinalized` first — the most common operator
+    ///           foot-gun is calling `seedBatch`/`finalizeSeeding` after the
+    ///           flow has already completed; `SeedingAlreadyFinalized` is
+    ///           the most informative error in that case.
+    ///        2. `!seedingStarted` second — applies when someone calls the
+    ///           batched entrypoints before `markSeedingStarted`.
+    ///        3. Atomicity check last — the cross-block scenario implies the
+    ///           latch is set and not yet finalized, so it's reached only
+    ///           after the first two filters fall through.
+    ///
+    ///      The impossible state `(finalized=true, started=false)` cannot
+    ///      arise from honest execution: `finalizeSeeding` calls this
+    ///      function FIRST (so reaching the latch-flip requires
+    ///      `seedingStarted = true`), and neither flag is ever cleared. The
+    ///      check order therefore matters only for error-message clarity in
+    ///      reachable states, not for correctness under unreachable states.
+    function _requireSeedingActive() internal view {
+        if (lockedSeedingFinalized) revert SeedingAlreadyFinalized();
+        if (!seedingStarted) revert SeedingNotStarted();
+        if (block.timestamp != seedingStartedAt) revert SeedingInProgress();
+    }
+
     /// @dev Returns the auto-delegate target for an account, or the account itself
     ///      if no auto-delegate is set. try/catch ensures backwards compatibility
     ///      if voteDelegation hasn't been upgraded to support autoDelegate yet.
@@ -963,84 +1036,190 @@ contract VeHemi is
     // =========================================================================
 
     /**
-     * @notice Seeds all non-transferrable positions and finalizes the locked + forfeitable curves atomically.
-     * @dev Computes bias/slope entirely in memory for both locked and forfeitable subsets.
-     *      Calls _checkpoint to advance the epoch while lockedSeedingFinalized is still false
-     *      (so subcurve logic is skipped), then writes both LockedPoints.
-     *      Forfeitable positions are those where forfeitable[tokenId] == true.
-     *      Callable once. Gas: ~4-7M depending on forfeitable count.
+     * @notice Open the seeding window and freeze the seeding range. Subsequent
+     *         `seedBatch` calls iterate token IDs in `[1, seedingTargetId)`.
+     *         While the window is open and `lockedSeedingFinalized` is false,
+     *         `_createLock` rejects new non-transferable positions — without
+     *         that guard a permissionless mint could extend `nextTokenId` past
+     *         the snapshotted range and the new position would be silently
+     *         dropped from the seeded set.
      *
-     *      Slope-write timing: `lockedSlopeChanges[_subEnd]` and `forfeitableSlopeChanges[_subEnd]`
-     *      are written during Phase 1 at each position's effective subcurve end
-     *      (`min(lock.end, transferableAfter)`), which is always >= block.timestamp (positions
-     *      with `_ta <= block.timestamp` are skipped). The Phase 3 LockedPoint is written at
-     *      `block.timestamp`, NOT at a SIX_DAYS-rounded timestamp. This is safe because
-     *      `_subcurveSupplyAt` reads the most recent LockedPoint at or before the query
-     *      timestamp and walks forward on the SIX_DAYS grid, picking up the just-written
-     *      future slope changes without revisiting `block.timestamp`.
+     *         Idempotent against accidental re-call: reverts with
+     *         `SeedingAlreadyStarted` once invoked. Also reverts after
+     *         finalization with `SeedingAlreadyFinalized`.
      *
-     *      Input constraints: `tokenIds_` MUST be strictly ascending and contain every
-     *      active non-transferable position. Missed positions permanently understate the
-     *      locked subcurve (no retroactive seeding path).
-     * @param tokenIds_ Array of non-transferrable token IDs (must not be empty)
+     * @dev    LOAD-BEARING OPERATIONAL CONTRACT: this function MUST be called
+     *         as part of a single transaction (a Gnosis Safe MultiSend) that
+     *         also calls every `seedBatch(...)` and `finalizeSeeding()`. The
+     *         atomicity guard in `_requireSeedingActive` (`block.timestamp ==
+     *         seedingStartedAt`) lets later calls execute only at the same
+     *         timestamp; the `seedingStarted` latch set here is monotonic
+     *         and has no on-chain reset path. If an operator splits the
+     *         flow across blocks (e.g., submits `markSeedingStarted` in one
+     *         tx and `seedBatch` in another), every subsequent
+     *         `seedBatch`/`finalizeSeeding` reverts forever and new
+     *         non-transferable mints (via `_createLock`) stay blocked until
+     *         a fresh implementation upgrade clears the latch via storage
+     *         migration. Existing positions and transferable mints remain
+     *         unaffected. The deploy script `deploy/04_upgrade_vehemi_v2.ts`
+     *         enforces the single-tx requirement by construction; DO NOT
+     *         submit the seeding calls outside that MultiSend bundle.
      */
-    function seedAndFinalizeLockedPositions(uint256[] calldata tokenIds_) external onlyOwner {
-        if (lockedSeedingFinalized) revert SeedingAlreadyFinalized();
-        if (tokenIds_.length == 0) revert EmptyArray();
+    function markSeedingStarted() external onlyOwner {
+        // The `seedingStarted` latch is set here and never cleared, so this
+        // single check catches both "already started" and "post-finalization"
+        // re-calls (after finalize, `seedingStarted` is still true).
+        if (seedingStarted) revert SeedingAlreadyStarted();
+        seedingStarted = true;
+        // Snapshot block.timestamp so seedBatch + finalizeSeeding can enforce
+        // single-block atomicity. Solidity's implicit narrowing of
+        // block.timestamp to uint64 is safe (block.timestamp fits uint64 for
+        // ~584 billion years past epoch).
+        seedingStartedAt = uint64(block.timestamp);
+        seedingTargetId = nextTokenId;
+        emit SeedingStarted(nextTokenId);
+    }
 
-        // Require strictly ascending token IDs to prevent double-counting.
-        // Duplicate IDs would permanently corrupt the curves since this
-        // function can only be called once (lockedSeedingFinalized gate).
-        for (uint256 i = 1; i < tokenIds_.length; ++i) {
-            if (tokenIds_[i] <= tokenIds_[i - 1]) revert UnsortedOrDuplicateTokenIds();
-        }
+    /**
+     * @notice Iterate up to `maxIterations` token IDs forward from the last
+     *         processed cursor, accumulating slope/bias deltas for non-
+     *         transferable positions and writing the matching slope-change
+     *         entries on each subcurve.
+     * @dev Multiple calls advance the cursor monotonically; the function
+     *      tolerates being called any number of times until the cursor
+     *      reaches `seedingTargetId`. Burned, transferable, expired, or
+     *      already-mature positions are skipped without affecting totals.
+     *      Each accepted position contributes:
+     *        * `slope = lock.amount / MAX_TIME`
+     *        * `bias += slope * subEnd` (time-independent: bias-at-T derived
+     *          in `finalizeSeeding` once all batches complete)
+     *        * `lockedSlopeChanges[subEnd] -= slope`
+     *        * if `forfeitable[id]`: same accumulation against the
+     *          forfeitable subcurve totals + `forfeitableSlopeChanges`.
+     *
+     *      Slope-change writes during batches are invisible to `_checkpoint`
+     *      because `lockedSeedingFinalized` is still false (and the global
+     *      epoch advance happens once, inside `finalizeSeeding`).
+     *
+     *      No upper bound on `maxIterations`: the caller picks the chunk
+     *      size that fits the block gas limit. The cursor is clamped to
+     *      `seedingTargetId` so a generous value harmlessly converges.
+     * @param maxIterations Maximum number of token IDs to scan in this call.
+     *        The function returns early when `endId > seedingTargetId`.
+     */
+    function seedBatch(uint256 maxIterations) external onlyOwner {
+        _requireSeedingActive();
 
-        // --- Phase 1: Accumulate bias/slope in memory for locked AND forfeitable ---
-        int128 _totalSlope;
-        int128 _totalBias; // stores sum(slope_i * end_i), time-independent
-        int128 _totalForfeitableSlope;
-        int128 _totalForfeitableBias;
+        SeedingProgress storage progress = _seedingProgress;
+        uint256 startId = progress.lastProcessedId == 0 ? 1 : progress.lastProcessedId + 1;
+        // Cursor already at the end — no-op convergence. The accumulator is
+        // internal (no auto-generated getter); callers monitoring progress
+        // mid-flow should probe `_seedingProgress` slots directly
+        // (slots 23-26; see VeHemiStorageV2 layout block). `finalizeSeeding`
+        // reverts with `SeedingIncomplete(lastProcessedId, expectedEnd)` on
+        // an unfinished scan, which is the practical end-of-flow signal.
+        if (startId >= seedingTargetId) return;
+        // Compute endIdExclusive without overflowing when callers pass
+        // type(uint256).max as maxIterations. Clamp BEFORE the add.
+        uint256 remaining = seedingTargetId - startId;
+        uint256 step = maxIterations < remaining ? maxIterations : remaining;
+        uint256 endIdExclusive = startId + step;
 
-        for (uint256 i; i < tokenIds_.length; ++i) {
-            uint256 tokenId = tokenIds_[i];
-            if (_ownerOf(tokenId) == address(0)) revert TokenDoesNotExist();
-            if (transferableAfter[tokenId] == 0) revert NotNonTransferrable();
-            LockedBalance memory _lock = locked[tokenId];
-            if (_lock.end <= block.timestamp || _lock.amount <= 0) continue;
+        // Accumulate per-batch in stack-locals to avoid one SSTORE per token.
+        int128 batchSlope;
+        int128 batchBias;
+        int128 batchForfSlope;
+        int128 batchForfBias;
+        uint256 batchCount;
+
+        // IMPORTANT — skip-condition coupling: the same filter is duplicated
+        // in `test/Invariant.t.sol` (`invariant_nonTransferableEqualsPerPositionSum`
+        // and `invariant_forfeitableEqualsPerPositionSum`). Any change to the
+        // skip predicates below (e.g., a future V3 slash-skip) MUST be
+        // mirrored in both invariant reconstructions, otherwise both sides
+        // diverge by the same amount and the invariant becomes a tautology.
+        for (uint256 id = startId; id < endIdExclusive; ++id) {
+            if (_ownerOf(id) == address(0)) continue;
+            uint256 _ta = transferableAfter[id];
+            // Skip transferable positions (transferableAfter == 0) and
+            // positions whose transferability window has already opened
+            // (no subcurve membership).
+            if (_ta == 0 || _ta <= block.timestamp) continue;
+            LockedBalance memory _lock = locked[id];
+            if (_lock.amount <= 0 || _lock.end <= block.timestamp) continue;
 
             int128 slope = _lock.amount / MAX_TIME.toInt256().toInt128();
-            // V2: Subcurve endpoint is min(lock.end, transferableAfter).
-            // Skip subcurve accumulation if the transferability window has already opened
-            // (the position is no longer in the locked/forfeitable subcurves).
-            uint256 _ta = transferableAfter[tokenId];
-            if (_ta > block.timestamp) {
-                uint256 _subEnd = _lock.end < _ta ? _lock.end : _ta;
-                _totalSlope += slope;
-                _totalBias += slope * uint256(_subEnd).toInt256().toInt128();
-                lockedSlopeChanges[_subEnd] -= slope;
+            uint256 _subEnd = _lock.end < _ta ? _lock.end : _ta;
+            int128 _subEndI = uint256(_subEnd).toInt256().toInt128();
 
-                // Forfeitable subset
-                if (forfeitable[tokenId]) {
-                    _totalForfeitableSlope += slope;
-                    _totalForfeitableBias += slope * uint256(_subEnd).toInt256().toInt128();
-                    forfeitableSlopeChanges[_subEnd] -= slope;
-                }
+            batchSlope += slope;
+            batchBias += slope * _subEndI;
+            lockedSlopeChanges[_subEnd] -= slope;
+            unchecked {
+                ++batchCount;
             }
-            // Note: positions with _ta <= block.timestamp are still valid non-transferrable
-            // positions (they pass the transferableAfter[tokenId] != 0 check above), but
-            // their transferability window has opened so they are excluded from subcurves.
+
+            if (forfeitable[id]) {
+                batchForfSlope += slope;
+                batchForfBias += slope * _subEndI;
+                forfeitableSlopeChanges[_subEnd] -= slope;
+            }
         }
 
-        // --- Phase 2: Advance global epoch to block.timestamp ---
-        // lockedSeedingFinalized is still false, so _checkpoint skips all subcurve
-        // logic. The already-written slope changes are invisible to the catchup loop.
+        // Flush batch into the persistent accumulator.
+        progress.lastProcessedId = endIdExclusive - 1;
+        progress.totalSlope += batchSlope;
+        progress.totalBias += batchBias;
+        progress.totalForfeitableSlope += batchForfSlope;
+        progress.totalForfeitableBias += batchForfBias;
+        progress.count += batchCount;
+    }
+
+    /**
+     * @notice Materialize the accumulated totals into the locked +
+     *         forfeitable `SupplyPoint`s and flip the seeding latch.
+     *         Requires `seedBatch` to have advanced the cursor all the way
+     *         to `seedingTargetId - 1`; an incomplete cursor reverts with
+     *         `SeedingIncomplete` so the operator notices and finishes the
+     *         scan before finalizing.
+     * @dev Mirrors phases 2-4 of the prior single-shot implementation:
+     *      advances the global epoch with `_checkpoint(0, …)` (subcurve
+     *      logic still skipped because `lockedSeedingFinalized` is false),
+     *      writes both `LockedPoint`s at `block.timestamp`, flips the
+     *      latch, and clears the accumulator. The aggregate math is
+     *      identical regardless of how many `seedBatch` calls produced
+     *      the totals.
+     */
+    function finalizeSeeding() external onlyOwner {
+        _requireSeedingActive();
+
+        SeedingProgress storage progress = _seedingProgress;
+        // seedingTargetId is the EXCLUSIVE upper bound of the scan, so the
+        // last scannable ID is seedingTargetId - 1. If seedingTargetId is 1
+        // (i.e., markSeedingStarted ran before any mint), there is nothing
+        // to scan and the cursor stays at 0 — that's still "complete".
+        uint256 expectedEnd = seedingTargetId == 0 ? 0 : seedingTargetId - 1;
+        if (progress.lastProcessedId < expectedEnd) {
+            revert SeedingIncomplete(progress.lastProcessedId, expectedEnd);
+        }
+
+        // Snapshot totals before clearing the accumulator. SLOADs are
+        // cheaper than re-deriving from per-position data.
+        int128 _totalSlope = progress.totalSlope;
+        int128 _totalBias = progress.totalBias;
+        int128 _totalForfeitableSlope = progress.totalForfeitableSlope;
+        int128 _totalForfeitableBias = progress.totalForfeitableBias;
+
+        // Advance the global epoch to block.timestamp. Subcurve logic in
+        // `_checkpoint` remains gated on `lockedSeedingFinalized`, which is
+        // still false here, so the slope-change entries written by the
+        // batches are invisible to the catchup walk.
         _checkpoint(0, LockedBalance(0, 0), LockedBalance(0, 0));
 
-        // --- Phase 3: Write locked + forfeitable points at current epoch ---
         uint256 _epoch = epoch;
         int128 _tsInt = uint256(block.timestamp).toInt256().toInt128();
 
-        // Locked point: derive bias at block.timestamp
+        // Locked point: derive bias at block.timestamp from time-independent total.
         int128 _lockedBias = _totalBias - _totalSlope * _tsInt;
         if (_lockedBias < 0) _lockedBias = 0;
 
@@ -1051,7 +1230,7 @@ contract VeHemi is
             blockNumber: block.number.toUint64()
         });
 
-        // Forfeitable point: always write (even if zero) so timestamp != 0 for view functions
+        // Forfeitable point: always write (even if zero) so timestamp != 0 for view functions.
         int128 _forfeitableBias = _totalForfeitableBias - _totalForfeitableSlope * _tsInt;
         if (_forfeitableBias < 0) _forfeitableBias = 0;
 
@@ -1062,8 +1241,9 @@ contract VeHemi is
             blockNumber: block.number.toUint64()
         });
 
-        // --- Phase 4: Finalize ---
         lockedSeedingFinalized = true;
+        delete _seedingProgress;
+
         emit LockedSeedingFinalized(_epoch);
     }
 
@@ -1110,7 +1290,7 @@ contract VeHemi is
      *        (a) integer-rounding skew between curves (subcurves use min(end, transferableAfter)
      *            and a separate slope-changes mapping, so their truncation behavior under
      *            the linear-decay formula can drift by a few wei),
-     *        (b) the period before `seedAndFinalizeLockedPositions` runs, where the locked
+     *        (b) the period before `finalizeSeeding` runs, where the locked
      *            and forfeitable LockedPoints are unwritten (timestamp == 0) and therefore
      *            return 0 — without the cap a subsequent off-by-one in seeding could surface
      *            as `locked > total` to downstream consumers,

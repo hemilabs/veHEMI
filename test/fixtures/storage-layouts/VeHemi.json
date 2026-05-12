@@ -149,10 +149,38 @@
     },
     {
       "contract": "src/VeHemi.sol:VeHemi",
-      "label": "__gapV2",
+      "label": "seedingStarted",
       "offset": 0,
       "slot": "21",
-      "type": "t_array(t_uint256)43_storage"
+      "type": "t_bool"
+    },
+    {
+      "contract": "src/VeHemi.sol:VeHemi",
+      "label": "seedingStartedAt",
+      "offset": 1,
+      "slot": "21",
+      "type": "t_uint64"
+    },
+    {
+      "contract": "src/VeHemi.sol:VeHemi",
+      "label": "seedingTargetId",
+      "offset": 0,
+      "slot": "22",
+      "type": "t_uint256"
+    },
+    {
+      "contract": "src/VeHemi.sol:VeHemi",
+      "label": "_seedingProgress",
+      "offset": 0,
+      "slot": "23",
+      "type": "t_struct(SeedingProgress)_storage"
+    },
+    {
+      "contract": "src/VeHemi.sol:VeHemi",
+      "label": "__gapV2",
+      "offset": 0,
+      "slot": "27",
+      "type": "t_array(t_uint256)37_storage"
     }
   ],
   "types": {
@@ -174,13 +202,13 @@
       "numberOfBytes": "128000000000",
       "value": null
     },
-    "t_array(t_uint256)43_storage": {
+    "t_array(t_uint256)37_storage": {
       "base": "t_uint256",
       "encoding": "inplace",
       "key": null,
-      "label": "uint256[43]",
+      "label": "uint256[37]",
       "members": null,
-      "numberOfBytes": "1376",
+      "numberOfBytes": "1184",
       "value": null
     },
     "t_bool": {
@@ -403,6 +431,58 @@
         }
       ],
       "numberOfBytes": "96",
+      "value": null
+    },
+    "t_struct(SeedingProgress)_storage": {
+      "base": null,
+      "encoding": "inplace",
+      "key": null,
+      "label": "struct VeHemiStorageV2.SeedingProgress",
+      "members": [
+        {
+          "contract": "src/VeHemi.sol:VeHemi",
+          "label": "lastProcessedId",
+          "offset": 0,
+          "slot": "0",
+          "type": "t_uint256"
+        },
+        {
+          "contract": "src/VeHemi.sol:VeHemi",
+          "label": "totalSlope",
+          "offset": 0,
+          "slot": "1",
+          "type": "t_int128"
+        },
+        {
+          "contract": "src/VeHemi.sol:VeHemi",
+          "label": "totalBias",
+          "offset": 16,
+          "slot": "1",
+          "type": "t_int128"
+        },
+        {
+          "contract": "src/VeHemi.sol:VeHemi",
+          "label": "totalForfeitableSlope",
+          "offset": 0,
+          "slot": "2",
+          "type": "t_int128"
+        },
+        {
+          "contract": "src/VeHemi.sol:VeHemi",
+          "label": "totalForfeitableBias",
+          "offset": 16,
+          "slot": "2",
+          "type": "t_int128"
+        },
+        {
+          "contract": "src/VeHemi.sol:VeHemi",
+          "label": "count",
+          "offset": 0,
+          "slot": "3",
+          "type": "t_uint256"
+        }
+      ],
+      "numberOfBytes": "128",
       "value": null
     },
     "t_struct(UserPoint)_storage": {

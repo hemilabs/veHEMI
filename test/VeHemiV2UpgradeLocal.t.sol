@@ -19,7 +19,7 @@ import "./mocks/MockHemiVoteDelegation.sol";
 ///         hermetic setting. It catches:
 ///          - Storage-layout drift across the implementation swap
 ///          - Admin authorization failures
-///          - seedAndFinalizeLockedPositions invocation semantics
+///          - markSeedingStarted / seedBatch / finalizeSeeding invocation semantics
 ///          - Pre-seeding "behaves like V1" guarantee (hooks gated on lockedSeedingFinalized)
 contract VeHemiV2UpgradeLocalTest is Test {
     MockERC20 hemi;
@@ -379,29 +379,43 @@ contract VeHemiV2UpgradeLocalTest is Test {
     function test_SeedAndFinalize_OnlyOnce() public {
         // Create a non-transferable position eligible for seeding.
         vm.prank(user);
-        uint256 tokenId = veHemi.createLockFor(1000 ether, 365 days, user, false, false);
+        veHemi.createLockFor(1000 ether, 365 days, user, false, false);
 
-        uint256[] memory ids = new uint256[](1);
-        ids[0] = tokenId;
-
-        vm.prank(admin);
-        veHemi.seedAndFinalizeLockedPositions(ids);
+        vm.startPrank(admin);
+        veHemi.markSeedingStarted();
+        veHemi.seedBatch(type(uint256).max);
+        veHemi.finalizeSeeding();
+        vm.stopPrank();
         assertTrue(veHemi.lockedSeedingFinalized());
 
-        // Second attempt must revert with the specific selector.
+        // Second markSeedingStarted attempt must revert. The dead
+        // `lockedSeedingFinalized` check in markSeedingStarted was removed
+        // for bytecode — the `seedingStarted` latch (never cleared) catches
+        // re-calls and surfaces SeedingAlreadyStarted.
+        vm.prank(admin);
+        vm.expectRevert(abi.encodeWithSignature("SeedingAlreadyStarted()"));
+        veHemi.markSeedingStarted();
+
+        // Second finalizeSeeding attempt must revert with the same latch.
         vm.prank(admin);
         vm.expectRevert(abi.encodeWithSignature("SeedingAlreadyFinalized()"));
-        veHemi.seedAndFinalizeLockedPositions(ids);
+        veHemi.finalizeSeeding();
     }
 
     function test_SeedAndFinalize_OnlyOwner() public {
-        uint256[] memory ids = new uint256[](0);
         address attacker = makeAddr("attacker");
+
         vm.prank(attacker);
-        vm.expectRevert(
-            abi.encodeWithSignature("OwnableUnauthorizedAccount(address)", attacker)
-        );
-        veHemi.seedAndFinalizeLockedPositions(ids);
+        vm.expectRevert(abi.encodeWithSignature("OwnableUnauthorizedAccount(address)", attacker));
+        veHemi.markSeedingStarted();
+
+        vm.prank(attacker);
+        vm.expectRevert(abi.encodeWithSignature("OwnableUnauthorizedAccount(address)", attacker));
+        veHemi.seedBatch(100);
+
+        vm.prank(attacker);
+        vm.expectRevert(abi.encodeWithSignature("OwnableUnauthorizedAccount(address)", attacker));
+        veHemi.finalizeSeeding();
     }
 
     /// @dev Front-run defense on the production upgrade path. Between the
@@ -427,16 +441,22 @@ contract VeHemiV2UpgradeLocalTest is Test {
         assertEq(veHemi.owner(), admin, "admin ownership lost");
     }
 
-    /// @dev Lock in semantics of `seedAndFinalizeLockedPositions([])` — whether
-    ///      it reverts or flips the latch must not accidentally change. Current
-    ///      behavior: reverts with EmptyArray to prevent the admin from
-    ///      finalizing without seeding any positions.
-    function test_SeedAndFinalize_EmptyArray_Reverts() public {
-        uint256[] memory empty = new uint256[](0);
-        vm.prank(admin);
-        vm.expectRevert(abi.encodeWithSignature("EmptyArray()"));
-        veHemi.seedAndFinalizeLockedPositions(empty);
-        assertFalse(veHemi.lockedSeedingFinalized(), "latch must remain unset when array empty");
+    /// @dev Lock in the empty-state semantics of the seeding flow. With no
+    ///      non-transferable positions present the scan visits zero
+    ///      contributing IDs but the flow still completes cleanly and flips
+    ///      the latch — the resulting locked supply is zero. This avoids the
+    ///      operational footgun of an admin being unable to finalize a V2
+    ///      upgrade on a chain with no non-transferable positions yet.
+    function test_SeedAndFinalize_EmptyState_CompletesCleanly() public {
+        // No non-transferable positions exist at this point.
+        vm.startPrank(admin);
+        veHemi.markSeedingStarted();
+        veHemi.seedBatch(type(uint256).max);
+        veHemi.finalizeSeeding();
+        vm.stopPrank();
+
+        assertTrue(veHemi.lockedSeedingFinalized(), "latch must flip even with no positions");
+        assertEq(veHemi.nonTransferableTotalVeHemiSupply(), 0, "locked supply == 0 with no positions");
     }
 
     // =========================================================================
@@ -461,11 +481,13 @@ contract VeHemiV2UpgradeLocalTest is Test {
         assertEq(veHemi.ownerOf(tokenId), user);
         assertFalse(veHemi.lockedSeedingFinalized());
 
-        // 5. Seed (step 3 of deploy script).
-        uint256[] memory ids = new uint256[](1);
-        ids[0] = tokenId;
-        vm.prank(admin);
-        veHemi.seedAndFinalizeLockedPositions(ids);
+        // 5. Seed (steps 3-5 of deploy/04_upgrade_vehemi_v2.ts: markSeedingStarted,
+        //    one or more seedBatch calls, then finalizeSeeding).
+        vm.startPrank(admin);
+        veHemi.markSeedingStarted();
+        veHemi.seedBatch(type(uint256).max);
+        veHemi.finalizeSeeding();
+        vm.stopPrank();
 
         // 6. Verify subcurves now populated.
         assertTrue(veHemi.lockedSeedingFinalized());

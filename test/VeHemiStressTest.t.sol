@@ -261,7 +261,9 @@ contract VeHemiStressTest is LockedCurveTestBase {
             _createPos(user, amount, duration, ptype);
         }
 
-        veHemi.seedAndFinalizeLockedPositions(_sortedLockedTokenIds());
+        veHemi.markSeedingStarted();
+        veHemi.seedBatch(type(uint256).max);
+        veHemi.finalizeSeeding();
         _verify("After 100 positions + seed");
 
         uint256 t0 = block.timestamp;
@@ -307,7 +309,9 @@ contract VeHemiStressTest is LockedCurveTestBase {
         }
 
         // Phase 2: Seed and snapshot
-        veHemi.seedAndFinalizeLockedPositions(_sortedLockedTokenIds());
+        veHemi.markSeedingStarted();
+        veHemi.seedBatch(type(uint256).max);
+        veHemi.finalizeSeeding();
         _verify("After 200 positions + seed");
 
         // Snapshot t0 expected values BEFORE any mutations
@@ -459,7 +463,9 @@ contract VeHemiStressTest is LockedCurveTestBase {
             _createPos(user, amount, duration, ptype);
         }
 
-        veHemi.seedAndFinalizeLockedPositions(_sortedLockedTokenIds());
+        veHemi.markSeedingStarted();
+        veHemi.seedBatch(type(uint256).max);
+        veHemi.finalizeSeeding();
         _verify("Initial");
 
         // Check at every 30-day interval for 2 years
@@ -500,7 +506,9 @@ contract VeHemiStressTest is LockedCurveTestBase {
             _createPos(user, amount, lockDuration, ptype);
         }
 
-        veHemi.seedAndFinalizeLockedPositions(_sortedLockedTokenIds());
+        veHemi.markSeedingStarted();
+        veHemi.seedBatch(type(uint256).max);
+        veHemi.finalizeSeeding();
         _verify("After same-expiry creation");
 
         // All positions should share the same end time
@@ -551,7 +559,9 @@ contract VeHemiStressTest is LockedCurveTestBase {
         }
 
         if (lockedTokenIds.length > 0) {
-            veHemi.seedAndFinalizeLockedPositions(_sortedLockedTokenIds());
+            veHemi.markSeedingStarted();
+        veHemi.seedBatch(type(uint256).max);
+        veHemi.finalizeSeeding();
         }
 
         _verify("After fuzzed creation");

@@ -13,6 +13,12 @@ import {InvariantHandler} from "./InvariantHandler.sol";
 contract InvariantTest is Test {
     using SafeCast for int128;
 
+    /// @dev MAX_TIME from VeHemi.sol: 4 * YEAR = 4 * 365.25 days. Hardcoded
+    ///      because the contract constant is private. If this value changes
+    ///      in the contract, the per-position invariant reconstruction below
+    ///      will silently drift — update both together.
+    uint256 internal constant MAX_TIME = 4 * 365.25 days;
+
     address admin = makeAddr("admin");
     address alice = makeAddr("alice");
     address bob = makeAddr("bob");
@@ -78,6 +84,97 @@ contract InvariantTest is Test {
         assertEq(sumOfBalances, sumOfVotes, "sum of balances != sum of votes");
 
         vm.warp(savedTimestamp);
+    }
+
+    /// @dev V2: The aggregate non-transferable supply curve must equal the sum
+    ///      reconstructed from per-position primitives. The existing
+    ///      `invariant_supplyBreakdownConsistency` only proves the curve is
+    ///      self-consistent across its own getters; it cannot detect a drift
+    ///      between the cached `lockedGlobalPointHistory` and the underlying
+    ///      positions (e.g., a missed slope-change write, a wrong `_subEnd`
+    ///      choice in seedBatch, a missed forfeit cleanup, a double-decrement).
+    ///      This invariant reconstructs the truth from the same primitives the
+    ///      contract reads and demands byte-equality — no tolerance.
+    function invariant_nonTransferableEqualsPerPositionSum() public {
+        if (!handler.seeded()) return;
+
+        uint256 nowTs = block.timestamp;
+        uint256 expected;
+        uint256 nextId = veHemi.nextTokenId();
+
+        for (uint256 id = 1; id < nextId; ++id) {
+            if (handler._ownerOf(id) == address(0)) continue; // burned
+            uint256 ta = veHemi.transferableAfter(id);
+            if (ta == 0) continue;          // transferable — not in subcurve
+            if (ta <= nowTs) continue;      // subcurve membership already exited
+            IVeHemi.LockedBalance memory lb = veHemi.getLockedBalance(id);
+            if (lb.end <= nowTs) continue;  // expired
+            uint256 subEnd = lb.end < ta ? lb.end : ta;
+            if (subEnd <= nowTs) continue;
+            // slope uses integer truncation matching `_checkpoint` math:
+            //   slope = amount / MAX_TIME  (int128 ops, but always non-negative here)
+            uint256 slope = uint256(uint128(lb.amount)) / MAX_TIME;
+            expected += slope * (subEnd - nowTs);
+        }
+        assertEq(
+            expected,
+            veHemi.nonTransferableTotalVeHemiSupply(),
+            "non-transferable subcurve diverged from per-position reconstruction"
+        );
+    }
+
+    /// @dev V2: Companion to `invariant_nonTransferableEqualsPerPositionSum`
+    ///      for the forfeitable subset. Forfeitable positions are a strict
+    ///      subset of non-transferable, so the reconstruction filter adds the
+    ///      `forfeitable[id]` check.
+    function invariant_forfeitableEqualsPerPositionSum() public {
+        if (!handler.seeded()) return;
+
+        uint256 nowTs = block.timestamp;
+        uint256 expected;
+        uint256 nextId = veHemi.nextTokenId();
+
+        for (uint256 id = 1; id < nextId; ++id) {
+            if (handler._ownerOf(id) == address(0)) continue;
+            if (!veHemi.forfeitable(id)) continue;
+            uint256 ta = veHemi.transferableAfter(id);
+            if (ta == 0 || ta <= nowTs) continue;
+            IVeHemi.LockedBalance memory lb = veHemi.getLockedBalance(id);
+            if (lb.end <= nowTs) continue;
+            uint256 subEnd = lb.end < ta ? lb.end : ta;
+            if (subEnd <= nowTs) continue;
+            uint256 slope = uint256(uint128(lb.amount)) / MAX_TIME;
+            expected += slope * (subEnd - nowTs);
+        }
+        assertEq(
+            expected,
+            veHemi.forfeitableTotalVeHemiSupply(),
+            "forfeitable subcurve diverged from per-position reconstruction"
+        );
+    }
+
+    /// @dev VACUITY GUARD: `seed()` increments `handler.seedAttempts` BEFORE
+    ///      running `markSeedingStarted`/`seedBatch`/`finalizeSeeding`, and
+    ///      sets `handler.seeded` AFTER. With `fail_on_revert = true` the
+    ///      handler can never partial-complete `seed()` — it either reverts
+    ///      (failing the run) or runs cleanly to set the latch. Therefore
+    ///      EVERY observation of `seedAttempts > 0` MUST coincide with
+    ///      `seeded == true` at this invariant check point.
+    ///
+    ///      Defends against the regression class where `markSeedingStarted`
+    ///      silently fails to set the latch (e.g., MUT-Q7 of N4-A2's
+    ///      mutation analysis: `seedingStartedAt = block.timestamp - 1`):
+    ///      `seedAttempts` would increment but the immediate cross-block
+    ///      revert from `_requireSeedingActive` would either fail the run
+    ///      under fail_on_revert (catching the bug) or leave `seeded ==
+    ///      false` (caught by THIS invariant).
+    function invariant_seedingAttemptCounterAndSeededLatchAreCoherent() public view {
+        if (handler.seedAttempts() > 0) {
+            assertTrue(
+                handler.seeded(),
+                "seedAttempts > 0 but seeded latch never flipped - markSeedingStarted broken?"
+            );
+        }
     }
 
     /// @dev V2: After seeding, forfeitable <= locked <= total must always hold.
@@ -199,16 +296,34 @@ contract InvariantTest is Test {
         );
     }
 
-    /// @dev Storage-gap integrity: V2's `__gapV2[43]` occupies slots 21–63. They must remain
-    ///      zero under all handler operations. Any non-zero slot in this range indicates a
-    ///      write ran off the end of a named field (would happen if a struct size calculation
-    ///      were wrong or storage was written beyond a mapping's expected layout).
+    /// @dev Storage-gap integrity: V2's `__gapV2[37]` occupies slots 27–63.
+    ///      They must remain zero under all handler operations. Any non-zero
+    ///      slot in this range indicates a write ran off the end of a named
+    ///      field (would happen if a struct size calculation were wrong or
+    ///      storage was written beyond a mapping's expected layout).
     function invariant_gapSlotsZero() public view {
-        for (uint256 i = 21; i <= 63; ++i) {
+        for (uint256 i = 27; i <= 63; ++i) {
             assertEq(
                 vm.load(address(veHemi), bytes32(i)),
                 bytes32(0),
                 string.concat("V2 gap slot ", vm.toString(i), " corrupted")
+            );
+        }
+    }
+
+    /// @dev `_seedingProgress` occupies slots 23-26. While seeding is in
+    ///      flight (between `markSeedingStarted` and `finalizeSeeding`) these
+    ///      slots carry the accumulator; after `finalizeSeeding` runs the
+    ///      `delete _seedingProgress` clears them back to zero. The invariant
+    ///      runner evaluates between handler calls, when seeding is either
+    ///      not yet started or fully finalized — so the accumulator MUST be
+    ///      zero in every observed state.
+    function invariant_seedingProgressAccumulatorIsCleanAtRest() public view {
+        for (uint256 i = 23; i <= 26; ++i) {
+            assertEq(
+                vm.load(address(veHemi), bytes32(i)),
+                bytes32(0),
+                string.concat("_seedingProgress slot ", vm.toString(i), " not cleared")
             );
         }
     }
@@ -314,4 +429,5 @@ contract InvariantTest is Test {
             );
         }
     }
+
 }

@@ -12,7 +12,7 @@ import "../src/storage/VeHemiStorageV2.sol";
 /// This is a strict subset of the locked curve (all non-transferrable positions).
 ///
 /// Test categories:
-///   1. Seeding — forfeitable partition in seedAndFinalizeLockedPositions
+///   1. Seeding — forfeitable partition in the 3-phase seeding flow
 ///   2. supplyBreakdown — 4-tuple correctness and defensive caps
 ///   3. forfeitableTotalVeHemiSupply — current and historical queries
 ///   4. increaseAmount — forfeitable curve updated for forfeitable positions
@@ -77,8 +77,13 @@ contract VeHemiForfeitableCurveTest is LockedCurveTestBase {
         _end = veHemi.getLockedBalance(_tokenId).end;
     }
 
-    function seedAndFinalize(uint256[] memory tokenIds_) public {
-        veHemi.seedAndFinalizeLockedPositions(tokenIds_);
+    function seedAndFinalize(uint256[] memory /* tokenIds_ */ ) public {
+        // The new 3-phase seeding flow scans all token IDs in [1, nextTokenId)
+        // on-chain and ignores caller-supplied lists. The parameter is kept
+        // for source-level compatibility with existing test invocations.
+        veHemi.markSeedingStarted();
+        veHemi.seedBatch(type(uint256).max);
+        veHemi.finalizeSeeding();
     }
 
     function _toArray(uint256 a) internal pure returns (uint256[] memory arr) {

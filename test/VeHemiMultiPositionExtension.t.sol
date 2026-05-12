@@ -86,7 +86,9 @@ contract VeHemiMultiPositionExtensionTest is LockedCurveTestBase {
         positions.push(PosInfo(tokenId, slope, end, end, true));
     }
 
-    /// @dev Sort token IDs ascending for seedAndFinalizeLockedPositions
+    /// @dev Sort token IDs ascending. Retained from the legacy single-shot
+    ///      seeding API; kept here so tests that pre-compute the expected
+    ///      seeded set can compare against it.
     function _sortedIds() internal view returns (uint256[] memory sorted) {
         sorted = new uint256[](positions.length);
         for (uint256 i; i < positions.length; i++) {
@@ -190,7 +192,9 @@ contract VeHemiMultiPositionExtensionTest is LockedCurveTestBase {
         _createAndRecordForfeitable(frank, amount, LOCK_3Y);
 
         // Step 3: Seed all 6 positions
-        veHemi.seedAndFinalizeLockedPositions(_sortedIds());
+        veHemi.markSeedingStarted();
+        veHemi.seedBatch(type(uint256).max);
+        veHemi.finalizeSeeding();
 
         uint256 t0 = block.timestamp;
 
@@ -335,7 +339,9 @@ contract VeHemiMultiPositionExtensionTest is LockedCurveTestBase {
         _createAndRecordForfeitable(eve, amount, LOCK_2Y);
         _createAndRecordForfeitable(frank, amount, LOCK_3Y);
 
-        veHemi.seedAndFinalizeLockedPositions(_sortedIds());
+        veHemi.markSeedingStarted();
+        veHemi.seedBatch(type(uint256).max);
+        veHemi.finalizeSeeding();
 
         uint256 t0 = block.timestamp;
 

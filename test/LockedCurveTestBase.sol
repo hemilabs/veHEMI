@@ -68,4 +68,22 @@ contract LockedCurveTestBase is Test {
         _slope = amount_ / MAX_TIME;
         _end = veHemi.getLockedBalance(_tokenId).end;
     }
+
+    /// @notice Run the full 3-phase seeding flow against `veHemi` in a single
+    ///         test step: `markSeedingStarted` → one `seedBatch` covering all
+    ///         token IDs → `finalizeSeeding`. Use this in tests that need a
+    ///         seeded V2 state but aren't testing the seeding flow itself.
+    /// @dev    Tests covering the per-phase behavior (preconditions, batch
+    ///         boundaries, mint guard, etc.) should call the underlying
+    ///         functions directly rather than going through this helper.
+    function runSeedingFlow(VeHemi veHemi_) internal {
+        veHemi_.markSeedingStarted();
+        veHemi_.seedBatch(type(uint256).max);
+        veHemi_.finalizeSeeding();
+    }
+
+    /// @notice Same as `runSeedingFlow` but operating on this base's `veHemi`.
+    function runSeedingFlow() internal {
+        runSeedingFlow(veHemi);
+    }
 }

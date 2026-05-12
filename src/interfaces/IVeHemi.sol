@@ -71,17 +71,25 @@ interface IVeHemi is IERC721Enumerable {
     event LockedSeedingFinalized(uint256 epoch);
     event RewardUpdateFailed(uint256 indexed tokenId);
     event DelegationUpdateFailed(uint256 indexed delegator);
+    /// @notice Emitted by `markSeedingStarted` once the seeding window opens.
+    ///         `seedingTargetId` is the exclusive upper bound for `seedBatch`.
+    ///         The per-batch accumulator (`_seedingProgress`) is internal so
+    ///         operators monitoring progress mid-flow should probe its storage
+    ///         slots directly (slots 23-26; see VeHemiStorageV2 layout block).
+    ///         `finalizeSeeding` emits the terminating `LockedSeedingFinalized`.
+    event SeedingStarted(uint256 seedingTargetId);
 
     // --- Errors ---
     // Declared in VeHemi.sol (not here) to avoid Solidity duplicate-identifier
     // conflicts when both IVeHemi and VeHemi are imported in the same compilation unit.
     // Errors are included in VeHemi's ABI and can be decoded from revert data.
     //
-    // AddressIsNull, AmountIsZero, AmountTooSmall, EmptyArray, ForfeitWindowExpired,
+    // AddressIsNull, AmountIsZero, AmountTooSmall, ForfeitWindowExpired,
     // InvalidConfiguration, LockDurationTooLong, LockDurationTooShort, LockExpired,
     // LockNotExpired, NewLockDurationNotGreater, NoExistingLock, NotForfeitAdmin,
-    // NotForfeitable, NotNonTransferrable, NotOwner, NotTransferable, OwnerIsZero,
-    // SeedingAlreadyFinalized, TokenDoesNotExist, UnsortedOrDuplicateTokenIds
+    // NotForfeitable, NotOwner, NotTransferable, OwnerIsZero,
+    // SeedingAlreadyFinalized, SeedingAlreadyStarted, SeedingNotStarted,
+    // SeedingInProgress, SeedingIncomplete
 
     // --- External/Public Functions ---
     function HEMI() external view returns (IERC20);
@@ -122,7 +130,11 @@ interface IVeHemi is IERC721Enumerable {
     function totalVeHemiSupplyAt(uint256 timestamp_) external view returns (uint256);
 
     // --- V2 Locked + Forfeitable Curve Functions ---
-    function seedAndFinalizeLockedPositions(uint256[] calldata tokenIds) external;
+    function markSeedingStarted() external;
+    function seedBatch(uint256 maxIterations) external;
+    function finalizeSeeding() external;
+    function seedingStarted() external view returns (bool);
+    function seedingTargetId() external view returns (uint256);
     function nonTransferableTotalVeHemiSupply() external view returns (uint256);
     function nonTransferableTotalVeHemiSupplyAt(uint256 timestamp) external view returns (uint256);
     function forfeitableTotalVeHemiSupply() external view returns (uint256);

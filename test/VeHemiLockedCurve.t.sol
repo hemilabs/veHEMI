@@ -52,9 +52,14 @@ contract VeHemiLockedCurveTest is LockedCurveTestBase {
         _end = veHemi.getLockedBalance(_tokenId).end;
     }
 
-    // ── Helper: seed and finalize a set of locked positions ──────────────
-    function seedAndFinalize(uint256[] memory tokenIds_) public {
-        veHemi.seedAndFinalizeLockedPositions(tokenIds_);
+    // ── Helper: seed and finalize all non-transferable positions ─────────
+    // The new on-chain enumeration scans every token ID in [1, nextTokenId)
+    // and ignores caller-supplied lists. The parameter is preserved purely
+    // for backwards-compatibility with existing tests; it has no effect.
+    function seedAndFinalize(uint256[] memory /* tokenIds_ */ ) public {
+        veHemi.markSeedingStarted();
+        veHemi.seedBatch(type(uint256).max);
+        veHemi.finalizeSeeding();
     }
 
     // ── Helper: build a single-element array ─────────────────────────────
@@ -81,20 +86,24 @@ contract VeHemiLockedCurveTest is LockedCurveTestBase {
     // ═════════════════════════════════════════════════════════════════════
 
     function test_SeedAndFinalize_Basic() public {
-        (uint256 t1,,) = createLockedPosition(alice, 100 ether, LOCK_2Y);
+        createLockedPosition(alice, 100 ether, LOCK_2Y);
 
         assertFalse(veHemi.lockedSeedingFinalized(), "Should not be finalized yet");
 
-        veHemi.seedAndFinalizeLockedPositions(_toArray(t1));
+        veHemi.markSeedingStarted();
+        veHemi.seedBatch(type(uint256).max);
+        veHemi.finalizeSeeding();
 
         assertTrue(veHemi.lockedSeedingFinalized(), "Should be finalized");
     }
 
     function test_SeedAndFinalize_MultiplePositions() public {
-        (uint256 t1, uint256 s1, uint256 e1) = createLockedPosition(alice, 100 ether, LOCK_2Y);
-        (uint256 t2, uint256 s2, uint256 e2) = createLockedPosition(bob, 200 ether, MAX_TIME);
+        (, uint256 s1, uint256 e1) = createLockedPosition(alice, 100 ether, LOCK_2Y);
+        (, uint256 s2, uint256 e2) = createLockedPosition(bob, 200 ether, MAX_TIME);
 
-        seedAndFinalize(_toArray(t1, t2));
+        veHemi.markSeedingStarted();
+        veHemi.seedBatch(type(uint256).max);
+        veHemi.finalizeSeeding();
 
         // Locked supply should reflect both positions
         uint256 lockedSupply = veHemi.nonTransferableTotalVeHemiSupply();
@@ -102,16 +111,124 @@ contract VeHemiLockedCurveTest is LockedCurveTestBase {
         assertEq(lockedSupply, expectedBias, "Locked supply should match seeded positions");
     }
 
+    /// @dev DRIFT-VECTOR REGRESSION (companion to the atomicity guard): seed
+    ///      three non-transferable positions with distinct `subEnd`s, finalize
+    ///      atomically, then walk forward in time past each subEnd in turn and
+    ///      call `checkpoint()`. After each warp the locked subcurve must
+    ///      decay in lockstep with the underlying positions — proving that
+    ///      every slope-change `seedBatch` wrote at a future timestamp is
+    ///      actually visited by the post-finalize `_checkpoint` catchup walk.
+    ///
+    ///      A single-position warp is insufficient: it can't distinguish
+    ///      "applies one change" from "applies all pending changes". Three
+    ///      staged checkpoints across three distinct subEnds is the smallest
+    ///      case that proves the catchup loop walks the full slope-change
+    ///      grid. If a future refactor of `_checkpoint` accidentally
+    ///      short-circuits the subcurve catchup after the first slope-change,
+    ///      this test fires.
+    function test_PostFinalize_CheckpointCatchupWalksSlopeChanges() public {
+        (, uint256 s1, uint256 e1) = createLockedPosition(alice, 100 ether, 2 * SIX_DAYS);
+        (, uint256 s2, uint256 e2) = createLockedPosition(bob, 200 ether, LOCK_2Y);
+        (, uint256 s3, uint256 e3) = createLockedPosition(charlie, 300 ether, MAX_TIME);
+
+        veHemi.markSeedingStarted();
+        veHemi.seedBatch(type(uint256).max);
+        veHemi.finalizeSeeding();
+
+        // All three positions contribute pre-warp.
+        uint256 expected0 = s1 * (e1 - block.timestamp)
+            + s2 * (e2 - block.timestamp)
+            + s3 * (e3 - block.timestamp);
+        assertEq(
+            veHemi.nonTransferableTotalVeHemiSupply(),
+            expected0,
+            "pre-warp: all three positions contribute"
+        );
+
+        // Stage 1: warp past e1 (the shortest). Slope-change at e1 must fire.
+        vm.warp(e1 + 1);
+        veHemi.checkpoint();
+        uint256 expected1 = s2 * (e2 - block.timestamp) + s3 * (e3 - block.timestamp);
+        assertEq(
+            veHemi.nonTransferableTotalVeHemiSupply(),
+            expected1,
+            "after warp past e1: catchup did not retire e1's slope-change"
+        );
+
+        // Stage 2: warp past e2. Slope-change at e2 must fire on top of stage 1.
+        vm.warp(e2 + 1);
+        veHemi.checkpoint();
+        uint256 expected2 = s3 * (e3 - block.timestamp);
+        assertEq(
+            veHemi.nonTransferableTotalVeHemiSupply(),
+            expected2,
+            "after warp past e2: catchup did not retire e2's slope-change"
+        );
+
+        // Stage 3: warp past e3. Subcurve must be fully drained.
+        vm.warp(e3 + 1);
+        veHemi.checkpoint();
+        assertEq(
+            veHemi.nonTransferableTotalVeHemiSupply(),
+            0,
+            "after warp past e3: catchup did not drain the final slope"
+        );
+    }
+
+    /// @dev COLLIDED SUBEND REGRESSION (N4-A6 follow-up): when two positions
+    ///      share the same `subEnd`, both write to the same
+    ///      `lockedSlopeChanges[_subEnd]` slot. The catchup walk reads that
+    ///      slot ONCE per SIX_DAYS boundary, so the slope-change must already
+    ///      contain the accumulated `-= slope` from both positions. A bug
+    ///      that fired the slope-change application twice (or once instead of
+    ///      once) for a collided subEnd would corrupt the catchup output.
+    ///      The 3-position distinct-subEnd test above can't surface this
+    ///      class because every slope-change is applied exactly once.
+    function test_PostFinalize_CheckpointCatchup_CollidedSubEnds() public {
+        // Two positions with the SAME lock duration → same SIX_DAYS-aligned
+        // lock.end → same `_subEnd` (since for non-transferable mints
+        // `transferableAfter == lock.end`). Different amounts so we can
+        // verify both slopes accumulated.
+        (, uint256 s1, uint256 e1) = createLockedPosition(alice, 100 ether, LOCK_2Y);
+        (, uint256 s2, uint256 e2) = createLockedPosition(bob,   200 ether, LOCK_2Y);
+        assertEq(e1, e2, "test setup: subEnds must collide");
+
+        veHemi.markSeedingStarted();
+        veHemi.seedBatch(type(uint256).max);
+        veHemi.finalizeSeeding();
+
+        // Pre-warp: both positions contribute.
+        uint256 expectedPre = (s1 + s2) * (e1 - block.timestamp);
+        assertEq(
+            veHemi.nonTransferableTotalVeHemiSupply(),
+            expectedPre,
+            "pre-warp: both colliding-subEnd positions contribute"
+        );
+
+        // The slope-change at `e1` (== `e2`) must apply the SUM of both
+        // slopes in one step. Warp 1 second past it and check the curve
+        // drained to zero — neither under- nor over-decrement.
+        vm.warp(e1 + 1);
+        veHemi.checkpoint();
+        assertEq(
+            veHemi.nonTransferableTotalVeHemiSupply(),
+            0,
+            "after warp past shared subEnd: collided slope-change applied wrong"
+        );
+    }
+
     function test_SeedAndFinalize_SkipsExpiredPositions() public {
         // Create a position that will expire before seeding
         (uint256 t1,,) = createLockedPosition(alice, 100 ether, 2 * SIX_DAYS);
-        (uint256 t2, uint256 s2, uint256 e2) = createLockedPosition(bob, 200 ether, LOCK_2Y);
+        (, uint256 s2, uint256 e2) = createLockedPosition(bob, 200 ether, LOCK_2Y);
 
         // Warp past t1's expiry
         uint256 newTime = veHemi.getLockedBalance(t1).end + 1;
         vm.warp(newTime);
 
-        seedAndFinalize(_toArray(t1, t2));
+        veHemi.markSeedingStarted();
+        veHemi.seedBatch(type(uint256).max);
+        veHemi.finalizeSeeding();
 
         // Only t2 should be counted
         uint256 lockedSupply = veHemi.nonTransferableTotalVeHemiSupply();
@@ -119,47 +236,83 @@ contract VeHemiLockedCurveTest is LockedCurveTestBase {
         assertEq(lockedSupply, expectedBias, "Expired position should be skipped");
     }
 
-    function test_SeedAndFinalize_RevertsIfTransferable() public {
-        // Create a transferable lock
-        (uint256 tokenId,,) = createLock(alice, 100 ether, LOCK_2Y);
+    function test_SeedAndFinalize_TransferablePositionsAreSilentlySkipped() public {
+        // The seeding flow scans every token ID and includes only those with
+        // `transferableAfter != 0`. Transferable positions are silently
+        // excluded — no revert, just zero contribution to the locked subcurve.
+        (, uint256 s1, uint256 e1) = createLockedPosition(alice, 100 ether, LOCK_2Y);
+        createLock(bob, 100 ether, LOCK_2Y); // transferable — should be skipped
 
-        vm.expectRevert(VeHemi.NotNonTransferrable.selector);
-        veHemi.seedAndFinalizeLockedPositions(_toArray(tokenId));
+        veHemi.markSeedingStarted();
+        veHemi.seedBatch(type(uint256).max);
+        veHemi.finalizeSeeding();
+
+        // Only the non-transferable position contributes.
+        uint256 lockedSupply = veHemi.nonTransferableTotalVeHemiSupply();
+        assertEq(lockedSupply, s1 * (e1 - block.timestamp), "transferable position must not affect locked supply");
     }
 
-    function test_SeedAndFinalize_RevertsIfEmpty() public {
-        uint256[] memory empty = new uint256[](0);
-        vm.expectRevert(VeHemi.EmptyArray.selector);
-        veHemi.seedAndFinalizeLockedPositions(empty);
+    function test_SeedAndFinalize_HandlesEmptyState() public {
+        // No positions exist. The flow must still complete cleanly: scan a
+        // zero-length range, write zero-supply locked + forfeitable points,
+        // flip the latch.
+        veHemi.markSeedingStarted();
+        veHemi.seedBatch(type(uint256).max);
+        veHemi.finalizeSeeding();
+
+        assertTrue(veHemi.lockedSeedingFinalized(), "latch must flip even with no positions");
+        assertEq(veHemi.nonTransferableTotalVeHemiSupply(), 0, "no positions => zero supply");
     }
 
     function test_SeedAndFinalize_RevertsAfterFinalized() public {
-        (uint256 t1,,) = createLockedPosition(alice, 100 ether, LOCK_2Y);
-        seedAndFinalize(_toArray(t1));
+        createLockedPosition(alice, 100 ether, LOCK_2Y);
+        veHemi.markSeedingStarted();
+        veHemi.seedBatch(type(uint256).max);
+        veHemi.finalizeSeeding();
 
-        (uint256 t2,,) = createLockedPosition(bob, 200 ether, LOCK_2Y);
+        // Any subsequent attempt to start, scan, or finalize must revert.
+        // markSeedingStarted's dead `lockedSeedingFinalized` check was
+        // removed for bytecode — the `seedingStarted` latch (never cleared)
+        // already catches re-calls, so the surfaced error is SeedingAlreadyStarted.
+        vm.expectRevert(VeHemi.SeedingAlreadyStarted.selector);
+        veHemi.markSeedingStarted();
+
         vm.expectRevert(VeHemi.SeedingAlreadyFinalized.selector);
-        veHemi.seedAndFinalizeLockedPositions(_toArray(t2));
+        veHemi.seedBatch(1);
+
+        vm.expectRevert(VeHemi.SeedingAlreadyFinalized.selector);
+        veHemi.finalizeSeeding();
     }
 
     function test_SeedAndFinalize_RevertsIfNotOwner() public {
-        (uint256 t1,,) = createLockedPosition(alice, 100 ether, LOCK_2Y);
+        createLockedPosition(alice, 100 ether, LOCK_2Y);
 
         vm.prank(alice);
         vm.expectRevert();
-        veHemi.seedAndFinalizeLockedPositions(_toArray(t1));
+        veHemi.markSeedingStarted();
+
+        vm.prank(alice);
+        vm.expectRevert();
+        veHemi.seedBatch(1);
+
+        vm.prank(alice);
+        vm.expectRevert();
+        veHemi.finalizeSeeding();
     }
 
     function test_SeedAndFinalize_EmitsEvent() public {
-        (uint256 t1,,) = createLockedPosition(alice, 100 ether, LOCK_2Y);
+        createLockedPosition(alice, 100 ether, LOCK_2Y);
 
-        // _checkpoint inside seedAndFinalize may advance the epoch
+        // _checkpoint inside finalizeSeeding may advance the epoch
         veHemi.checkpoint(); // ensure epoch is current
         uint256 expectedEpoch = veHemi.epoch();
 
+        veHemi.markSeedingStarted();
+        veHemi.seedBatch(type(uint256).max);
+
         vm.expectEmit();
         emit IVeHemi.LockedSeedingFinalized(expectedEpoch);
-        veHemi.seedAndFinalizeLockedPositions(_toArray(t1));
+        veHemi.finalizeSeeding();
     }
 
     function test_SeedAndFinalize_WritesLockedSlopeChanges() public {
@@ -788,12 +941,22 @@ contract VeHemiLockedCurveTest is LockedCurveTestBase {
         assertEq(veHemi.nonTransferableTotalVeHemiSupply(), 0, "All expired => locked supply 0");
     }
 
-    function test_SeedAndFinalize_DuplicateTokenId_Reverts() public {
-        // Passing the same tokenId twice now reverts with UnsortedOrDuplicateTokenIds.
-        (uint256 t1,,) = createLockedPosition(alice, 100 ether, LOCK_2Y);
+    function test_SeedAndFinalize_NoDoubleCountingViaOnChainEnumeration() public {
+        // The flow scans each token ID exactly once (id from startId to
+        // endId-1 in the loop). Even with multiple seedBatch calls covering
+        // overlapping ranges via maxIterations, double-counting is structurally
+        // impossible because the cursor advances monotonically.
+        (, uint256 s1, uint256 e1) = createLockedPosition(alice, 100 ether, LOCK_2Y);
 
-        vm.expectRevert(VeHemi.UnsortedOrDuplicateTokenIds.selector);
-        seedAndFinalize(_toArray(t1, t1));
+        veHemi.markSeedingStarted();
+        // Two batches, intentionally with generous maxIterations to test the
+        // clamp-to-target behavior. The second batch is a structural no-op.
+        veHemi.seedBatch(type(uint256).max);
+        veHemi.seedBatch(type(uint256).max);
+        veHemi.finalizeSeeding();
+
+        uint256 lockedSupply = veHemi.nonTransferableTotalVeHemiSupply();
+        assertEq(lockedSupply, s1 * (e1 - block.timestamp), "single position must contribute exactly once");
     }
 
     function test_SeedAndFinalize_SameBlockAsLockCreation() public {
@@ -808,17 +971,25 @@ contract VeHemiLockedCurveTest is LockedCurveTestBase {
     }
 
     function test_SeedAndFinalize_OnlyOwnerCanCall() public {
-        (uint256 t1,,) = createLockedPosition(alice, 100 ether, LOCK_2Y);
+        createLockedPosition(alice, 100 ether, LOCK_2Y);
 
         // alice is not the owner
         vm.prank(alice);
         vm.expectRevert();
-        veHemi.seedAndFinalizeLockedPositions(_toArray(t1));
+        veHemi.markSeedingStarted();
 
-        // bob is not the owner
+        vm.prank(alice);
+        vm.expectRevert();
+        veHemi.seedBatch(1);
+
+        vm.prank(alice);
+        vm.expectRevert();
+        veHemi.finalizeSeeding();
+
+        // bob is not the owner either
         vm.prank(bob);
         vm.expectRevert();
-        veHemi.seedAndFinalizeLockedPositions(_toArray(t1));
+        veHemi.markSeedingStarted();
     }
 
     // ═════════════════════════════════════════════════════════════════════
@@ -846,10 +1017,13 @@ contract VeHemiLockedCurveTest is LockedCurveTestBase {
         createLock(alice, 100 ether, LOCK_2Y);
         createLock(bob, 200 ether, LOCK_3Y);
 
-        // Seed with no locked positions isn't possible (EmptyArray),
-        // so we create a minimal locked position to enable tracking
-        (uint256 tMinimal,,) = createLockedPosition(charlie, 11 ether, 2 * SIX_DAYS);
-        seedAndFinalize(_toArray(tMinimal));
+        // Seeding completes harmlessly with no non-transferable positions
+        // present, but to also exercise the locked subcurve we add a minimal
+        // locked position.
+        createLockedPosition(charlie, 11 ether, 2 * SIX_DAYS);
+        veHemi.markSeedingStarted();
+        veHemi.seedBatch(type(uint256).max);
+        veHemi.finalizeSeeding();
 
         for (uint256 i; i < 5; ++i) {
             vm.warp(block.timestamp + SIX_DAYS);
@@ -1159,27 +1333,43 @@ contract VeHemiLockedCurveTest is LockedCurveTestBase {
     //  Additional seedAndFinalize edge-case tests
     // ═════════════════════════════════════════════════════════════════════
 
-    /// @notice Unsorted (but non-duplicate) token IDs should revert.
-    function test_SeedAndFinalize_UnsortedTokenIds_Reverts() public {
-        (uint256 t1,,) = createLockedPosition(alice, 100 ether, LOCK_2Y);
-        (uint256 t2,,) = createLockedPosition(bob, 200 ether, LOCK_3Y);
+    /// @notice The on-chain scan visits IDs in ascending order intrinsically
+    ///         (the loop walks `id` from `startId` to `endId - 1`), so
+    ///         ordering is not a caller concern under the new flow. This
+    ///         test pins the behavioral property: regardless of mint order,
+    ///         the final aggregate is independent of any external sequencing.
+    function test_SeedAndFinalize_AggregateIndependentOfMintOrder() public {
+        (, uint256 s1, uint256 e1) = createLockedPosition(alice, 100 ether, LOCK_2Y);
+        (, uint256 s2, uint256 e2) = createLockedPosition(bob, 200 ether, LOCK_3Y);
 
-        // t1 < t2, so passing [t2, t1] is unsorted
-        uint256[] memory unsorted = new uint256[](2);
-        unsorted[0] = t2;
-        unsorted[1] = t1;
+        veHemi.markSeedingStarted();
+        veHemi.seedBatch(type(uint256).max);
+        veHemi.finalizeSeeding();
 
-        vm.expectRevert(VeHemi.UnsortedOrDuplicateTokenIds.selector);
-        veHemi.seedAndFinalizeLockedPositions(unsorted);
+        uint256 lockedSupply = veHemi.nonTransferableTotalVeHemiSupply();
+        uint256 expected = s1 * (e1 - block.timestamp) + s2 * (e2 - block.timestamp);
+        assertEq(lockedSupply, expected, "aggregate must match sum regardless of mint order");
     }
 
-    /// @notice Non-existent token ID should revert with a clear error.
-    function test_SeedAndFinalize_NonExistentTokenId_Reverts() public {
-        uint256[] memory ids = new uint256[](1);
-        ids[0] = 99999; // never minted
+    /// @notice IDs that don't exist (burned, never minted, gaps in the range)
+    ///         are silently skipped by the on-chain scan. The aggregate is
+    ///         unaffected.
+    function test_SeedAndFinalize_NonExistentTokenIdsAreSkipped() public {
+        // Mint position 1, withdraw to burn it, then mint position 2.
+        // After all this, position 1's slot exists but ownerOf reverts.
+        (uint256 t1,,) = createLockedPosition(alice, 11 ether, 2 * SIX_DAYS);
+        vm.warp(veHemi.getLockedBalance(t1).end + 1);
+        vm.prank(alice);
+        veHemi.withdraw(t1); // burns t1
+        (, uint256 s2, uint256 e2) = createLockedPosition(bob, 100 ether, LOCK_2Y);
 
-        vm.expectRevert(VeHemi.TokenDoesNotExist.selector);
-        veHemi.seedAndFinalizeLockedPositions(ids);
+        veHemi.markSeedingStarted();
+        veHemi.seedBatch(type(uint256).max);
+        veHemi.finalizeSeeding();
+
+        // Only the live position contributes.
+        uint256 lockedSupply = veHemi.nonTransferableTotalVeHemiSupply();
+        assertEq(lockedSupply, s2 * (e2 - block.timestamp), "burned ID must be silently skipped");
     }
 
     /// @notice After seeding, a new non-transferable position should update lockedSlopeChanges.

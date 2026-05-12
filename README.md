@@ -71,7 +71,7 @@ VeHemi V2 maintains parallel subcurves alongside the global supply curve to trac
 - `increaseUnlockTime` does NOT extend `transferableAfter` — the user's transferability promise is preserved
 - The forfeit window is bounded by `transferableAfter` — once a position becomes transferable, it can no longer be forfeited
 
-**Seeding:** The subcurves are initialized via a one-shot `seedAndFinalizeLockedPositions(tokenIds)` call that atomically computes and stores the aggregate bias/slope for all existing non-transferable positions. This function can only be called once (`lockedSeedingFinalized` gate).
+**Seeding:** The subcurves are initialized via a 3-phase on-chain enumeration: `markSeedingStarted()` opens the window and snapshots `nextTokenId` into `seedingTargetId`; `seedBatch(maxIterations)` (callable many times) iterates token IDs and accumulates per-position slope/bias deltas; `finalizeSeeding()` materializes the aggregate `LockedPoint`s for both subcurves and flips `lockedSeedingFinalized`. All three phases must execute in a single block (`block.timestamp == seedingStartedAt`), so the deploy script bundles them into one Gnosis Safe MultiSend. The on-chain scan replaces an earlier caller-supplied `tokenIds` array, eliminating both the operator-drift footgun and the adversarial front-run vector where someone could mint a non-transferable position into the gap between off-chain list derivation and Safe execution.
 
 **Combined supply view:** `supplyBreakdown()` returns `(total, locked, forfeitable, transferable)` in a single call with defensive caps enforcing the ordering invariant.
 
@@ -251,22 +251,27 @@ npx hardhat deploy --network hemi
 
 The V2 upgrade introduces parallel locked/forfeitable subcurves, hourly delegation epochs, and the Aragon adapter. Two deploy scripts handle this:
 
-1. **`deploy/04_upgrade_vehemi_v2.ts`** — bundles three transactions for the Gnosis Safe:
+1. **`deploy/04_upgrade_vehemi_v2.ts`** — bundles `4 + N` transactions into a single Gnosis Safe MultiSend (executed atomically; all share `block.timestamp`):
    - `upgrade(VeHemiVoteDelegation proxy, new delegation impl)` — upgrades the delegation contract to add hourly checkpoints, `autoDelegate`/`delegateAllFor`/`clearAutoDelegate`, and the trusted-adapter hook consumed by the Aragon adapter.
    - `upgrade(VeHemi proxy, new VeHemi V2 impl)` — upgrades VeHemi to the V2 implementation. The V2 locked-curve logic is gated by `lockedSeedingFinalized`, so the contract behaves identically to V1 until seeding completes.
-   - `seedAndFinalizeLockedPositions(tokenIds)` — initializes the locked + forfeitable subcurves with the aggregate bias/slope of all existing non-transferable positions.
+   - `markSeedingStarted()` — opens the seeding window, snapshots `nextTokenId` into `seedingTargetId`, and freezes `seedingStartedAt = block.timestamp`. While the window is open, `_createLock` rejects new non-transferable mints and `forfeit`/`increaseAmount`/`increaseUnlockTime` reject mutations of existing non-transferable positions, so the seeded set cannot drift mid-flow.
+   - `seedBatch(SEED_BATCH_SIZE)` × `N` — `N = ceil(nextTokenId / SEED_BATCH_SIZE) + 1`. Each call iterates a chunk of token IDs in `[lastProcessedId+1, seedingTargetId)`, skipping burned/transferable/expired entries and accumulating slope-change writes for the locked + forfeitable subcurves. The on-chain scan replaces the prior caller-supplied list. The `+1` slack absorbs any mints that race the off-chain `nextTokenId` snapshot — extra calls past the cursor are structural no-ops.
+   - `finalizeSeeding()` — requires the cursor to have reached `seedingTargetId - 1`, then advances the global epoch, writes the aggregate `LockedPoint`s for both subcurves, flips `lockedSeedingFinalized`, and clears the accumulator.
 
-   Both upgrades use bare `upgrade()` (not `upgradeAndCall`) — no initializer is called because the `initializer` modifier would revert on already-initialized proxies.
+   The two `upgrade()` calls use the bare form (not `upgradeAndCall`) — no initializer is called because the `initializer` modifier would revert on already-initialized proxies.
 
 2. **`deploy/05_aragon_adapter.ts`** — deploys the immutable `VeHemiAragonAdapter` and calls `setTrustedAdapter(adapter)` on `VeHemiVoteDelegation` (owner-only, batched for the Gnosis Safe). Includes pre-flight checks (`voteDelegation() != address(0)`, `totalVeHemiSupply() > 0`) and post-deploy ERC-165 verification (`IVotes`, `ERC165`, `ERC6372`).
 
-⚠️ **`seedAndFinalizeLockedPositions` is one-shot and irreversible.** The function can only be called once (gated by `lockedSeedingFinalized`). The `tokenIds` array MUST include ALL active non-transferable positions, sorted strictly ascending. If any position is missed, the locked subcurve will permanently understate its supply with no recovery path other than a full V3 upgrade. Until seeding completes, `nonTransferableTotalVeHemiSupply()` and `forfeitableTotalVeHemiSupply()` return zero.
+⚠️ **The seeding flow is one-shot and irreversible.** `markSeedingStarted` sets a latch that is never cleared and `finalizeSeeding` sets `lockedSeedingFinalized = true`; both latches are monotonic. The on-chain scan removes the operator-drift and front-run risks of the prior caller-supplied list, but the **atomicity guard** is load-bearing: `seedBatch` and `finalizeSeeding` revert with `SeedingInProgress` if `block.timestamp != seedingStartedAt`. Cross-block execution would leave slope-change entries at past `subEnd` values as dead storage (the forward-only `_checkpoint` catchup never visits past timestamps).
+
+⚠️ **NEVER submit `markSeedingStarted` outside the same transaction as `seedBatch`/`finalizeSeeding`.** The Safe MultiSend guarantees same-tx execution by construction — DO NOT manually decompose the bundle into separate proposals. If `markSeedingStarted` lands in a different block from the follow-ups, the contract enters a permanent stuck state: the `seedingStarted` latch can't be re-armed, the cross-block atomicity guard rejects every subsequent `seedBatch`/`finalizeSeeding`, and new non-transferable position mints stay blocked until an implementation upgrade migrates the latch state. Existing positions and transferable operations remain unaffected, but the V2 subcurve features and new locked-mint flow are bricked. Recovery requires a fresh proxy upgrade with a custom storage migration — high-friction emergency. Both the contract NatSpec on `markSeedingStarted` and the deploy script structure document this; verify Safe calldata before signing.
 
 **Pre-execution checklist:**
-- Re-derive the `LOCKED_TOKEN_IDS` array against current on-chain state (positions where `transferableAfter != 0`, `lock.end > block.timestamp`, `amount > 0`).
-- Verify the array is strictly sorted ascending and contains no duplicates.
+- **Delete any leftover Safe batch staging file** before re-running the deploy script: `rm -f multisig.batch.tmp.json`. The helper that persists the batch (`helpers/safe.ts::saveForSafeBatchExecution`) APPENDS to this file with exact-calldata dedup only — a stale file from a previous run can silently inject extra transactions into the Safe batch. This is the highest-impact pre-flight step.
+- Run `./scripts/check-storage-layouts.sh` to confirm the new implementation's storage layout matches the committed golden fixtures.
 - Run `forge test --match-path test/ForkUpgradeLockedCurve.t.sol --fork-url $HEMI_RPC_URL` to validate the upgrade against mainnet state.
-- Verify Gnosis Safe calldata against the script-generated batch before signing.
+- Fork-simulate the full MultiSend (e.g., via `./scripts/test-next-deployment-on-fork.sh`) and verify each `seedBatch` sub-call's gas estimate stays under ~25M. If any batch approaches 30M, lower `SEED_BATCH_SIZE` in `deploy/04_upgrade_vehemi_v2.ts` — the `+1` slack means smaller batches just produce a few more no-op calls.
+- Verify Gnosis Safe calldata against the script-generated batch before signing. Expected transaction count is `4 + N` where `N = ceil(nextTokenId / SEED_BATCH_SIZE) + 1` — a different count indicates either stale-file contamination, a script bug, or an unexpected mid-script `nextTokenId` drift.
 
 After both scripts complete, configure the Aragon TokenVoting plugin to use the deployed adapter address as its voting token.
 
