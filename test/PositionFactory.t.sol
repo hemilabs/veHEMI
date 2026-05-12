@@ -376,6 +376,60 @@ contract PositionFactoryTest is Test {
         assertEq(veHemi.provider(tokenId), address(factory));
     }
 
+    /// @notice End-to-end: PositionFactory → VeHemi.createLockFor → V2 subcurve
+    ///         tracking. Pre-fix this path had no integration coverage — the
+    ///         factory-side state was tested in isolation, but the resulting
+    ///         position's membership in `nonTransferableTotalVeHemiSupply` /
+    ///         `forfeitableTotalVeHemiSupply` was never asserted.
+    function test_factory_createsNonTransferableForfeitable_endToEnd() public {
+        // Run the V2 3-phase seeding flow first — non-transferable mints are
+        // blocked until `lockedSeedingFinalized` is true. Zero pre-seeding
+        // positions exist (this is a fresh deploy), so seedBatch is a no-op.
+        veHemi.markSeedingStarted();
+        veHemi.seedBatch(type(uint256).max);
+        veHemi.finalizeSeeding();
+
+        // Snapshot the V2 subcurve totals before the factory mint.
+        uint256 lockedBefore = veHemi.nonTransferableTotalVeHemiSupply();
+        uint256 forfeitableBefore = veHemi.forfeitableTotalVeHemiSupply();
+        uint256 totalLockedBefore = veHemi.totalLocked();
+
+        _whitelist(alice, AMOUNT, DURATION, false, true);
+
+        vm.prank(sponsor);
+        factory.create(alice, AMOUNT, DURATION, false, true);
+
+        uint256 tokenId = 1;
+
+        // Position fields are correctly populated.
+        assertEq(veHemi.ownerOf(tokenId), alice, "owner must be the whitelisted beneficiary");
+        assertFalse(veHemi.isTransferable(tokenId), "must be non-transferable");
+        assertTrue(veHemi.forfeitable(tokenId), "must be forfeitable");
+
+        // Both V2 subcurves picked up the new position with a non-zero,
+        // equal-magnitude delta — confirming joint membership in
+        // `nonTransferable ∩ forfeitable`.
+        uint256 lockedAfter = veHemi.nonTransferableTotalVeHemiSupply();
+        uint256 forfeitableAfter = veHemi.forfeitableTotalVeHemiSupply();
+        uint256 lockedDelta = lockedAfter - lockedBefore;
+        uint256 forfeitableDelta = forfeitableAfter - forfeitableBefore;
+        assertGt(lockedDelta, 0, "non-transferable subcurve must increment");
+        assertGt(forfeitableDelta, 0, "forfeitable subcurve must increment");
+        assertEq(
+            lockedDelta,
+            forfeitableDelta,
+            "non-transferable and forfeitable deltas must match for non-transferable+forfeitable position"
+        );
+
+        // totalLocked picks up the exact HEMI amount (token conservation).
+        assertEq(veHemi.totalLocked(), totalLockedBefore + AMOUNT, "totalLocked must equal sum of deposited HEMI");
+        assertEq(
+            hemi.balanceOf(address(veHemi)),
+            veHemi.totalLocked(),
+            "HEMI balance of veHemi must equal totalLocked"
+        );
+    }
+
     function test_create_revertsOnTransferableAndForfeitable() public {
         // Whitelist matching the (true, true) combo we are about to call create with.
         _whitelist(alice, AMOUNT, DURATION, true, true);

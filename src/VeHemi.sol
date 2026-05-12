@@ -1020,11 +1020,31 @@ contract VeHemi is
     }
 
     /// @dev Wrapped in try/catch for the same defensive reason as _reDelegate.
+    /// @dev The near-expiry skip below is correct for NEW delegations (a
+    ///      checkpoint that takes effect AFTER the lock ends is useless),
+    ///      but it MUST NOT apply to cleanup calls (`delegatee_ ==
+    ///      address(0)`, used by `forfeit`). Without the explicit
+    ///      `delegatee_ == address(0) ||` carve-out, forfeit-near-expiry
+    ///      silently skips the inner call and `voteDelegation.delegations
+    ///      [id]` stays stale forever after the NFT is burned. The cleanup
+    ///      branch inside `VeHemiVoteDelegation._delegate` is now
+    ///      expiry-tolerant (it skips `_getNormalizedLockedInfo` when
+    ///      `delegatee_ == address(0)`), so the call always succeeds for
+    ///      cleanup intent — regardless of whether the lock has reached
+    ///      the next checkpoint boundary.
+    /// @dev The `1 hours` literal below MUST stay in sync with
+    ///      `VeHemiVoteDelegation.CHECKPOINT_INTERVAL` and `EPOCH_OFFSET=0`
+    ///      so the outer guard threshold matches the inner
+    ///      `_checkpointTimestamp` formula. If either constant changes in
+    ///      VeHemiVoteDelegation, update this expression in lock-step.
     function _delegate(uint256 delegator_, address delegatee_) internal {
         // Delegation changes take effect at the next epoch boundary. If lock ends before that, skip delegation.
         // Example: User is increasing amount or transferring just before lock ends.
         uint256 _newDelegationStarts = ((block.timestamp / 1 hours) * 1 hours) + 1 hours;
-        if (_newDelegationStarts < locked[delegator_].end) {
+        // CRITICAL: DO NOT REMOVE the `delegatee_ == address(0) ||` carve-out.
+        // It routes forfeit-cleanup calls through unconditionally; removing it
+        // re-introduces the stale-delegation bug. See NatSpec above.
+        if (delegatee_ == address(0) || _newDelegationStarts < locked[delegator_].end) {
             try voteDelegation.delegate(delegator_, delegatee_) {} catch {
                 emit DelegationUpdateFailed(delegator_);
             }

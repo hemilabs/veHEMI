@@ -437,6 +437,79 @@ contract VeHemiForfeitableCurveTest is LockedCurveTestBase {
         assertEq(slopeAfter, int128(0), "Slope change should be unwound after forfeit");
     }
 
+    /// @notice Joint-accounting regression. forfeit() decrements THREE
+    ///         accumulators that must all balance:
+    ///           (a) nonTransferableTotalVeHemiSupply
+    ///           (b) forfeitableTotalVeHemiSupply
+    ///           (c) totalLocked (HEMI principal)
+    ///         AND must increment the forfeit admin's HEMI balance by the
+    ///         exact deposited amount. A bug class to guard against is
+    ///         "decrements one accumulator but forgets another" — easy to
+    ///         introduce on future edits to `_withdraw` / `_checkpoint`.
+    function test_Forfeit_JointAccountingDecrement() public {
+        _enableForfeitAdmin();
+
+        uint256 depositAmount = 100 ether;
+        (uint256 tokenId,,) = createForfeitablePosition(alice, depositAmount, LOCK_2Y);
+        // Second forfeitable position so the post-forfeit totals are NOT
+        // zero — exercises the "decrement-not-clear" pathway and ensures
+        // the assertion would have caught a "zero everything" bug.
+        (uint256 keeper,,) = createForfeitablePosition(bob, depositAmount, LOCK_2Y);
+        keeper; // silence unused
+        seedAndFinalize(_toArray(tokenId));
+
+        uint256 lockedBefore = veHemi.nonTransferableTotalVeHemiSupply();
+        uint256 forfeitableBefore = veHemi.forfeitableTotalVeHemiSupply();
+        uint256 totalLockedBefore = veHemi.totalLocked();
+        uint256 adminHemiBefore = hemi.balanceOf(admin);
+
+        // Capture alice's position weight BEFORE forfeit so we can pin the
+        // exact delta on the subcurves.
+        uint256 positionBias = veHemi.balanceOfNFT(tokenId);
+
+        veHemi.forfeit(tokenId);
+
+        uint256 lockedAfter = veHemi.nonTransferableTotalVeHemiSupply();
+        uint256 forfeitableAfter = veHemi.forfeitableTotalVeHemiSupply();
+        uint256 totalLockedAfter = veHemi.totalLocked();
+        uint256 adminHemiAfter = hemi.balanceOf(admin);
+
+        // (a) and (b): non-transferable and forfeitable subcurves must drop
+        // by exactly the position's bias.
+        assertEq(
+            lockedBefore - lockedAfter,
+            positionBias,
+            "non-transferable subcurve must drop by exact position bias"
+        );
+        assertEq(
+            forfeitableBefore - forfeitableAfter,
+            positionBias,
+            "forfeitable subcurve must drop by exact position bias"
+        );
+
+        // (c) totalLocked tracks HEMI principal, not bias — must drop by
+        // the deposited amount.
+        assertEq(
+            totalLockedBefore - totalLockedAfter,
+            depositAmount,
+            "totalLocked must drop by exact deposited HEMI"
+        );
+
+        // Admin receives the principal.
+        assertEq(
+            adminHemiAfter - adminHemiBefore,
+            depositAmount,
+            "forfeit admin must receive exact deposited HEMI"
+        );
+
+        // Cross-check: HEMI custody is consistent with totalLocked.
+        assertEq(
+            hemi.balanceOf(address(veHemi)),
+            totalLockedAfter,
+            "HEMI custody must match totalLocked post-forfeit"
+        );
+    }
+
     function test_Forfeit_ZerosOutSinglePosition() public {
         _enableForfeitAdmin();
 

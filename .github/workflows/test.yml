@@ -42,6 +42,16 @@ jobs:
               run: |
                   forge --version
 
+            - name: Forge clean (drop orphan artifacts)
+              # Defense-in-depth against phantom tests: if a feature branch
+              # ever ships with a stale `out/<scratch-test>/` directory whose
+              # source file has been deleted, forge will still pick up the
+              # compiled bytecode and run it. Cleaning here guarantees the
+              # build below starts from source.
+              run: |
+                  forge clean
+              id: clean
+
             - name: Run Forge build
               run: |
                   forge build --sizes

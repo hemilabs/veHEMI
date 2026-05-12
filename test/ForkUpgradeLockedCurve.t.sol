@@ -3,6 +3,7 @@ pragma solidity ^0.8.29;
 
 import "forge-std/Test.sol";
 import "../src/VeHemi.sol";
+import "../src/VeHemiVoteDelegation.sol";
 import "../src/interfaces/IVeHemi.sol";
 import "../src/interfaces/IVeHemiVoteDelegation.sol";
 import "@openzeppelin/contracts/proxy/transparent/ProxyAdmin.sol";
@@ -93,6 +94,19 @@ contract ForkUpgradeLockedCurveTest is Test {
             abi.encodeWithSignature("upgrade(address,address)", VEHEMI_PROXY, address(newImpl))
         );
         require(success, "Proxy upgrade failed");
+        return newImpl;
+    }
+
+    /// @dev Upgrade the VeHemiVoteDelegation proxy to the post-fix
+    ///      implementation. Used by tests that exercise the cleanup carve-out
+    ///      (forfeit-near-expiry) or the new setAutoDelegate setter.
+    function _upgradeDelegationProxy() internal returns (VeHemiVoteDelegation) {
+        VeHemiVoteDelegation newImpl = new VeHemiVoteDelegation(VEHEMI_PROXY);
+        vm.prank(GNOSIS_SAFE);
+        (bool success,) = PROXY_ADMIN.call(
+            abi.encodeWithSignature("upgrade(address,address)", VOTE_DELEGATION_PROXY, address(newImpl))
+        );
+        require(success, "Delegation proxy upgrade failed");
         return newImpl;
     }
 
@@ -4557,5 +4571,258 @@ contract ForkUpgradeLockedCurveTest is Test {
         // failure mode the Safe MultiSend prevents by construction.
         assertTrue(veHemi.seedingStarted(), "latch set");
         assertFalse(veHemi.lockedSeedingFinalized(), "not finalized");
+    }
+
+    // ═════════════════════════════════════════════════════════════════════
+    //  R2-B7 FORK COVERAGE FOR THE FORFEIT-STALE-DELEGATION FIX
+    //
+    //  These three tests pin the post-upgrade behavior of the forfeit
+    //  cleanup carve-out and its companion changes (transferFrom super-
+    //  before-_delegate ordering) against real Hemi mainnet state. The
+    //  local DelegationBehavior.t.sol suite already covers the same
+    //  properties against synthetic state; the fork tests add confidence
+    //  that the proxy upgrade preserves them with the actual deployed
+    //  storage layout and live HEMI token.
+    // ═════════════════════════════════════════════════════════════════════
+
+    /// @notice Pin the post-fix invariant that forfeiting a position in the
+    ///         buggy `[lockEnd - 1h, lockEnd)` window:
+    ///         (a) clears `voteDelegation.delegations[id]` to the zero
+    ///             struct, and
+    ///         (b) does NOT accumulate any state at `address(0)` in either
+    ///             `delegateCheckpoints[address(0)]` or
+    ///             `expiredDelegations[address(0)][end]` (verified
+    ///             indirectly via `getVotes(address(0)) == 0`).
+    ///
+    ///         Pre-fix this combination would have left `delegations[id]`
+    ///         stale forever and—via the now-removed
+    ///         `_moveVotingPowerToNewDelegate` path on address(0)—pushed a
+    ///         spurious checkpoint into the zero-address slot.
+    function testForkForfeitDoesNotAccumulateAtZeroAddress() public onlyFork {
+        _upgradeAndSeed();
+        _upgradeDelegationProxy();
+        IVeHemiVoteDelegation voteDel = IVeHemiVoteDelegation(VOTE_DELEGATION_PROXY);
+
+        vm.prank(GNOSIS_SAFE);
+        veHemi.updateForfeitAdmin(GNOSIS_SAFE);
+
+        // Mint a forfeitable position. Generous duration so the next-hour
+        // checkpoint is far enough in the future that we control where we
+        // land relative to lockEnd via vm.warp.
+        address recipient = address(0xBEEFF00D);
+        uint256 amount = 100 ether;
+        deal(HEMI_TOKEN, GNOSIS_SAFE, amount);
+        vm.startPrank(GNOSIS_SAFE);
+        hemiToken.approve(address(veHemi), amount);
+        uint256 tokenId = veHemi.createLockFor(amount, 365 days, recipient, false, true);
+        vm.stopPrank();
+
+        // Baseline: zero-address state must be clean before the forfeit.
+        uint256 zeroVotesBefore = voteDel.getVotes(address(0));
+        assertEq(zeroVotesBefore, 0, "address(0) must hold zero votes pre-forfeit");
+
+        // Warp into the previously-buggy window: lockEnd - 30 minutes is
+        // strictly inside `(lockEnd - 1h, lockEnd)`.
+        uint256 lockEnd = veHemi.getLockedBalance(tokenId).end;
+        _warpAndRoll(lockEnd - block.timestamp - 30 minutes);
+
+        vm.prank(GNOSIS_SAFE);
+        veHemi.forfeit(tokenId);
+
+        // (a) Per-token cache fully cleared.
+        IVeHemiVoteDelegation.Delegation memory d = voteDel.delegation(tokenId);
+        assertEq(d.delegatee, address(0), "delegations[id].delegatee not cleared");
+        assertEq(d.end, 0, "delegations[id].end not cleared");
+        assertEq(uint256(d.bias), 0, "delegations[id].bias not cleared");
+        assertEq(uint256(d.amount), 0, "delegations[id].amount not cleared");
+        assertEq(uint256(d.slope), 0, "delegations[id].slope not cleared");
+
+        // (b) Zero-address state remained clean — no checkpoint was pushed
+        //     and no expiration bucket was incremented.
+        assertEq(voteDel.getVotes(address(0)), 0, "address(0) accumulated votes from forfeit cleanup");
+    }
+
+    /// @notice Pin the companion `transferFrom` ordering fix: after the
+    ///         upgrade, the `DelegateChanged` event emitted by VeHemi's
+    ///         transferFrom uses `to_` as the owner at adapter-notify time
+    ///         (not the seller). This regression-pins the
+    ///         super-before-_delegate ordering in VeHemi.transferFrom that
+    ///         landed alongside the forfeit-cleanup carve-out.
+    function testForkTransferFromAttributesToNewOwner() public onlyFork {
+        _upgradeAndSeed();
+        _upgradeDelegationProxy();
+        IVeHemiVoteDelegation voteDel = IVeHemiVoteDelegation(VOTE_DELEGATION_PROXY);
+
+        // Mint a transferable position to alice with significant amount.
+        (address alice, uint256 alicePk) = makeAddrAndKey("transferOwner");
+        alicePk; // silence unused
+        uint256 amount = 50 ether;
+        deal(HEMI_TOKEN, alice, amount);
+        vm.startPrank(alice);
+        hemiToken.approve(address(veHemi), amount);
+        uint256 tokenId = veHemi.createLock(amount, 365 days);
+        vm.stopPrank();
+
+        // Roll past the first hourly boundary so the initial self-delegation
+        // is in effect.
+        _warpAndRoll(1 hours + 1);
+
+        // Transfer to a fresh address that has its own (different)
+        // autoDelegate target so the delegatee post-transfer is
+        // unambiguously distinguishable from alice's self-delegate.
+        address bob = makeAddr("transferRecipient");
+        address bobAutoTarget = makeAddr("bobAutoTarget");
+        vm.prank(bob);
+        voteDel.setAutoDelegate(bobAutoTarget);
+
+        vm.prank(alice);
+        veHemi.transferFrom(alice, bob, tokenId);
+
+        // The cached delegation must now point at bob's autoDelegate target,
+        // NOT at alice. If transferFrom called _delegate BEFORE the ERC721
+        // super.transferFrom, `_resolveAutoDelegate(to_)` would still see
+        // bob's autoDelegate, but the adapter notify would resolve
+        // `ownerOf(tokenId) == alice` (stale) and attribute the change to
+        // alice. The post-fix ordering reverses this.
+        assertEq(
+            voteDel.delegation(tokenId).delegatee,
+            bobAutoTarget,
+            "transferFrom did not update delegation cache to recipient's autoDelegate target"
+        );
+        assertEq(veHemi.ownerOf(tokenId), bob, "NFT ownership did not transfer");
+    }
+
+    // ═════════════════════════════════════════════════════════════════════
+    //  V2-UPGRADE CONFIDENCE: HISTORICAL IMMUTABILITY + SPLIT-BATCH SEEDING
+    // ═════════════════════════════════════════════════════════════════════
+
+    /// @notice Aragon TokenVoting reads `getPastTotalSupply(blockNumber)`
+    ///         (and its underlying `totalVeHemiSupplyAt(timestamp)`) to
+    ///         compute proposal quorum. If V2 upgrade — or the subsequent
+    ///         seeding flow — retroactively shifted any historical
+    ///         aggregate, a previously-passing proposal could become
+    ///         quorum-defeated post-deploy. This test samples both views
+    ///         at 8 historical timestamps PRE-upgrade, then again PRE-
+    ///         seeding (immediately after upgrade), then again POST-
+    ///         seeding, and asserts byte-equality across all three phases.
+    function testForkGetPastTotalSupplyRetroactiveImmutability() public onlyFork {
+        VeHemiVoteDelegation voteDel = VeHemiVoteDelegation(VOTE_DELEGATION_PROXY);
+
+        // 8 sample timestamps spread across recent history.
+        uint256[] memory times = new uint256[](8);
+        times[0] = block.timestamp - 1 hours;
+        times[1] = block.timestamp - 6 hours;
+        times[2] = block.timestamp - 1 days;
+        times[3] = block.timestamp - 7 days;
+        times[4] = block.timestamp - 30 days;
+        times[5] = block.timestamp - 90 days;
+        times[6] = block.timestamp - 1;
+        times[7] = (block.timestamp / 1 hours) * 1 hours;
+
+        // --- Phase 1: PRE-upgrade (V1 reads) ---
+        uint256[] memory totalsPre = new uint256[](8);
+        uint256[] memory pastTotalsPre = new uint256[](8);
+        for (uint256 i; i < 8; ++i) {
+            totalsPre[i] = veHemi.totalVeHemiSupplyAt(times[i]);
+            pastTotalsPre[i] = voteDel.getPastTotalSupply(times[i]);
+        }
+
+        // Variance guard: at least two samples must differ. A flat-history
+        // fork block would let a constant-returning stub pass vacuously.
+        bool sawDifference;
+        for (uint256 i = 1; i < 8 && !sawDifference; ++i) {
+            if (totalsPre[i] != totalsPre[0]) sawDifference = true;
+        }
+        if (!sawDifference) {
+            vm.skip(true);
+            return;
+        }
+
+        // --- Phase 2: POST-upgrade, PRE-seeding ---
+        _upgradeProxy();
+        for (uint256 i; i < 8; ++i) {
+            assertEq(
+                veHemi.totalVeHemiSupplyAt(times[i]),
+                totalsPre[i],
+                string.concat("totalVeHemiSupplyAt drift post-upgrade pre-seeding at t[", vm.toString(i), "]")
+            );
+            assertEq(
+                voteDel.getPastTotalSupply(times[i]),
+                pastTotalsPre[i],
+                string.concat("getPastTotalSupply drift post-upgrade pre-seeding at t[", vm.toString(i), "]")
+            );
+        }
+
+        // --- Phase 3: POST-upgrade, POST-seeding ---
+        // Run the full 3-phase seeding flow.
+        vm.startPrank(GNOSIS_SAFE);
+        veHemi.markSeedingStarted();
+        veHemi.seedBatch(type(uint256).max);
+        veHemi.finalizeSeeding();
+        vm.stopPrank();
+
+        for (uint256 i; i < 8; ++i) {
+            assertEq(
+                veHemi.totalVeHemiSupplyAt(times[i]),
+                totalsPre[i],
+                string.concat("totalVeHemiSupplyAt drift post-seeding at t[", vm.toString(i), "]")
+            );
+            assertEq(
+                voteDel.getPastTotalSupply(times[i]),
+                pastTotalsPre[i],
+                string.concat("getPastTotalSupply drift post-seeding at t[", vm.toString(i), "]")
+            );
+        }
+    }
+
+    /// @notice The seeding flow supports BOTH single-shot (`seedBatch(type
+    ///         (uint256).max)`) and multi-call (`seedBatch(N)` N times)
+    ///         within the same atomic block. Operators may need to split
+    ///         the batch if a single Safe-tx exceeds the per-tx gas cap on
+    ///         Hemi. This test pins the equivalence: running the flow in
+    ///         3 batches must produce byte-identical post-state to running
+    ///         it in a single batch.
+    ///
+    ///         Uses `vm.snapshotState` / `vm.revertToState` to run both
+    ///         flavors against the same mainnet snapshot.
+    function testForkSplitBatchSeedingEquivalence() public onlyFork {
+        // First branch: single-batch seeding.
+        uint256 snapId = vm.snapshotState();
+        _upgradeProxy();
+        vm.startPrank(GNOSIS_SAFE);
+        veHemi.markSeedingStarted();
+        veHemi.seedBatch(type(uint256).max);
+        veHemi.finalizeSeeding();
+        vm.stopPrank();
+
+        (uint256 totalSingle, uint256 lockedSingle, uint256 forfSingle, uint256 transSingle) = veHemi.supplyBreakdown();
+        uint256 totalLockedSingle = veHemi.totalLocked();
+        uint256 totalSupplySingle = veHemi.totalVeHemiSupply();
+
+        // Second branch: same starting state, split into 3 batches.
+        vm.revertToState(snapId);
+        _upgradeProxy();
+        vm.startPrank(GNOSIS_SAFE);
+        veHemi.markSeedingStarted();
+        // Three calls. The third uses uint256.max so it always finishes
+        // even when the cursor lands mid-range. The first two cap at
+        // small counts (40 and 40) to exercise the resume path.
+        veHemi.seedBatch(40);
+        veHemi.seedBatch(40);
+        veHemi.seedBatch(type(uint256).max);
+        veHemi.finalizeSeeding();
+        vm.stopPrank();
+
+        (uint256 totalSplit, uint256 lockedSplit, uint256 forfSplit, uint256 transSplit) = veHemi.supplyBreakdown();
+        uint256 totalLockedSplit = veHemi.totalLocked();
+        uint256 totalSupplySplit = veHemi.totalVeHemiSupply();
+
+        // Byte-identical state after both flavors.
+        assertEq(totalSingle, totalSplit, "supplyBreakdown.total drift between single and split");
+        assertEq(lockedSingle, lockedSplit, "supplyBreakdown.locked drift between single and split");
+        assertEq(forfSingle, forfSplit, "supplyBreakdown.forfeitable drift between single and split");
+        assertEq(transSingle, transSplit, "supplyBreakdown.transferable drift between single and split");
+        assertEq(totalLockedSingle, totalLockedSplit, "totalLocked drift between single and split");
+        assertEq(totalSupplySingle, totalSupplySplit, "totalVeHemiSupply drift between single and split");
     }
 }

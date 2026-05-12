@@ -8,7 +8,7 @@ import {MockERC20} from "./mocks/MockERC20.sol";
 import {VeHemiVoteDelegation} from "src/VeHemiVoteDelegation.sol";
 import {IVeHemi} from "src/interfaces/IVeHemi.sol";
 import {IVeHemiVoteDelegation} from "src/interfaces/IVeHemiVoteDelegation.sol";
-import {InvariantHandler} from "./InvariantHandler.sol";
+import {InvariantHandler, CountingAdapter} from "./InvariantHandler.sol";
 
 contract InvariantTest is Test {
     using SafeCast for int128;
@@ -430,4 +430,84 @@ contract InvariantTest is Test {
         }
     }
 
+    /// @notice `getPastVotes(addr, t)` is the load-bearing Aragon governance
+    ///         read: once a proposal is created at block `t`, the quorum and
+    ///         vote-weight calculation MUST return the same value for any
+    ///         future re-query at the SAME `t`. Any retroactive mutation
+    ///         (a delegate / forfeit / transfer / extend that goes back and
+    ///         rewrites the historical curve) would silently invalidate
+    ///         finalized proposals.
+    ///
+    ///         The handler captures `(account, timestamp, votes)` tuples
+    ///         throughout the fuzz sequence; this invariant re-queries
+    ///         `getPastVotes(account, timestamp)` after every tick and
+    ///         asserts byte-equality against the captured `votes`. Any
+    ///         drift fails the invariant.
+    function invariant_pastVotesImmutability() public {
+        // Advance time by 1 second so EVERY sampled timestamp is strictly
+        // in the past relative to the query — including samples taken at
+        // the most recent handler tick (where `sample.timestamp ==
+        // block.timestamp` at sample time). The pre-polish version of
+        // this invariant skipped same-block samples to avoid querying
+        // `getPastVotes(_, block.timestamp)`; that skip left a tail-
+        // coverage hole when no `warp` action lands between
+        // `samplePastVotes` and the invariant tick. The +1s warp closes
+        // that gap and exercises the strictly-historical binary-search
+        // branch on `delegateCheckpoints` for every captured sample.
+        // Same warp+restore idiom as `invariant_votingPower` above
+        // (line 66).
+        uint256 savedTimestamp = block.timestamp;
+        vm.warp(savedTimestamp + 1);
+
+        uint256 n = handler.pastVotesSamplesLength();
+        for (uint256 i; i < n; ++i) {
+            (address account, uint256 timestamp, uint256 expected) = handler.pastVotesSamples(i);
+            // Every sample is now strictly in the past (timestamp <= savedTimestamp < now).
+            uint256 actual = delegation.getPastVotes(account, timestamp);
+            assertEq(
+                actual,
+                expected,
+                "getPastVotes retroactively mutated - historical curve must be immutable"
+            );
+        }
+
+        vm.warp(savedTimestamp);
+    }
+
+    /// @notice The IAdapterNotify relay paths (`notifyDelegateChanged` and
+    ///         `notifyVotesChanged` callbacks from `VeHemiVoteDelegation`
+    ///         to the configured `trustedAdapter`) were previously DEAD
+    ///         under fuzz — `setTrustedAdapter` was never called by any
+    ///         handler action, so the three relay sites in
+    ///         `VeHemiVoteDelegation._delegate` / `_moveVotingPowerTo*` /
+    ///         `refreshVotingPower*` had zero fuzz exposure.
+    ///
+    ///         The handler now installs a `CountingAdapter` at construction
+    ///         time. This invariant asserts:
+    ///           (a) the adapter received at LEAST one notify call per
+    ///               forfeited token (every forfeit fires
+    ///               `notifyDelegateChanged(_, _, address(0))`), and
+    ///           (b) once any delegation mutation has occurred, the
+    ///               `notifyVotesChanged` counter is non-zero (proving
+    ///               the votes-changed relay path is live).
+    function invariant_adapterRelayParity() public view {
+        CountingAdapter adapter = CountingAdapter(handler.adapter());
+        uint256 forfeitCount = handler.forfeitedTokenIdsLength();
+        assertGe(
+            adapter.notifyDelegateChangedCount(),
+            forfeitCount,
+            "adapter received fewer DelegateChanged relays than forfeits - relay path is broken or skipped"
+        );
+        // If any token has ever been minted, at least one mint-time
+        // delegate auto-fires `_moveVotingPowerToNewDelegate` which calls
+        // `notifyVotesChanged`. So nextTokenId > 1 implies the votes-relay
+        // counter is non-zero.
+        if (veHemi.nextTokenId() > 1) {
+            assertGt(
+                adapter.notifyVotesChangedCount(),
+                0,
+                "adapter received zero VotesChanged relays despite minted positions - relay path is dead"
+            );
+        }
+    }
 }

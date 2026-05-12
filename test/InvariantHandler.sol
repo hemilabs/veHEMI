@@ -8,6 +8,23 @@ import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.s
 import {MockERC20} from "./mocks/MockERC20.sol";
 import {IVeHemi} from "src/interfaces/IVeHemi.sol";
 
+/// @notice Minimal IAdapterNotify-compatible adapter that counts every
+///         relay call. Used by the handler to drive the previously-dead
+///         `notifyDelegateChanged`/`notifyVotesChanged` paths and by
+///         `invariant_adapterRelayParity` to assert the relays fire.
+contract CountingAdapter {
+    uint256 public notifyDelegateChangedCount;
+    uint256 public notifyVotesChangedCount;
+
+    function notifyDelegateChanged(address, address, address) external {
+        unchecked { notifyDelegateChangedCount += 1; }
+    }
+
+    function notifyVotesChanged(address, uint256, uint256) external {
+        unchecked { notifyVotesChangedCount += 1; }
+    }
+}
+
 contract InvariantHandler is Test {
     VeHemi public veHemi;
     VeHemiVoteDelegation public delegation;
@@ -61,6 +78,32 @@ contract InvariantHandler is Test {
         return forfeitedTokenIds.length;
     }
 
+    /// @notice Counting adapter installed as trustedAdapter on VVD. Every
+    ///         `notifyDelegateChanged` / `notifyVotesChanged` call from the
+    ///         delegation contract bumps a counter. Used by
+    ///         `invariant_adapterRelayParity` to prove the relay paths are
+    ///         being exercised under fuzz (pre-addition, the entire
+    ///         IAdapterNotify code branch was dead in the invariant suite).
+    CountingAdapter public adapter;
+
+    /// @notice Past-votes ring buffer for `invariant_pastVotesImmutability`.
+    ///         `samplePastVotes(rand)` captures `(addr, timestamp, votes)`
+    ///         tuples; the invariant later asserts each tuple's `votes`
+    ///         field is byte-identical when re-queried — pinning the
+    ///         retroactive immutability of `getPastVotes` across every
+    ///         subsequent handler tick (delegate/forfeit/transfer/extend
+    ///         must not retroactively rewrite history).
+    struct PastVotesSample {
+        address account;
+        uint256 timestamp;
+        uint256 votes;
+    }
+    PastVotesSample[] public pastVotesSamples;
+
+    function pastVotesSamplesLength() external view returns (uint256) {
+        return pastVotesSamples.length;
+    }
+
     constructor(address admin_, address[5] memory _users) {
         users = _users;
         admin = admin_;
@@ -81,6 +124,13 @@ contract InvariantHandler is Test {
         veHemi.updateVoteDelegation(delegation);
         veHemi.updateForfeitAdmin(admin_);
         vm.stopPrank();
+
+        // Install a counting adapter as the trustedAdapter so the
+        // IAdapterNotify relay paths (previously dead under fuzz) are
+        // exercised on every delegation mutation.
+        adapter = new CountingAdapter();
+        vm.prank(admin_);
+        delegation.setTrustedAdapter(address(adapter));
     }
 
     // Return 0x0 instead of reverting if the NFT does not exist anymore
@@ -269,6 +319,47 @@ contract InvariantHandler is Test {
         }
     }
 
+    /// @notice Deliberately warp into the previously-buggy
+    ///         `[lock.end - CHECKPOINT_INTERVAL, lock.end)` window and forfeit.
+    ///         Pre-fix, this window silently skipped the delegation cleanup
+    ///         call and left `voteDelegation.delegations[id]` stale forever.
+    ///         The generic `forfeit()` handler above almost never lands here
+    ///         under uniform warps (1-hour window out of multi-year horizon),
+    ///         so this dedicated action gives the fuzzer determined coverage
+    ///         of the previously-broken regime.
+    function forfeitNearExpiry(uint256 seed) public {
+        for (uint256 id = 1; id < veHemi.nextTokenId(); id++) {
+            if (!veHemi.forfeitable(id)) continue;
+            IVeHemi.LockedBalance memory _lock = veHemi.getLockedBalance(id);
+            // Need at least one full checkpoint interval of headroom and a
+            // live (not-yet-expired) lock to land inside the buggy window.
+            if (_lock.end <= block.timestamp + 1) continue;
+            if (_lock.end <= 1 hours) continue;
+
+            // Pick an offset in [1, 1 hours - 1) so we land strictly inside
+            // (lockEnd - 1h, lockEnd). The 1-tick boundaries (0 and exactly
+            // 1 hour out) are already pinned by unit tests in
+            // DelegationBehavior.t.sol; here we sweep the interior.
+            uint256 offset = (seed % (1 hours - 1)) + 1;
+            if (_lock.end <= offset) continue;
+            uint256 target = _lock.end - offset;
+            if (target <= block.timestamp) continue;
+            if (target >= veHemi.transferableAfter(id)) continue;
+
+            vm.warp(target);
+            // Re-check the forfeit-window precondition after the warp.
+            if (block.timestamp >= veHemi.transferableAfter(id)) continue;
+
+            vm.prank(veHemi.forfeitAdmin());
+            veHemi.forfeit(id);
+            forfeitedTokenIds.push(id);
+
+            maxWarp = MAX_ACCUMULATED_WARP;
+
+            return;
+        }
+    }
+
     function increaseAmount(uint256 amount) public {
         amount = bound(amount, MIN_AMOUNT, MAX_AMOUNT);
 
@@ -399,6 +490,45 @@ contract InvariantHandler is Test {
         vm.warp(block.timestamp + time);
 
         maxWarp -= time;
+    }
+
+    /// @dev Companion to `warp()` biased toward sub-CHECKPOINT_INTERVAL
+    ///      jumps. The generic `warp` draws uniformly from `[1, ~4 years]`
+    ///      so most ticks overshoot every hour boundary at once and the
+    ///      fuzzer rarely probes inter-checkpoint edges. `warpSmall`
+    ///      restricts to `[1, 3 hours]` so the fuzzer can land between
+    ///      hour buckets and exercise the boundary code paths that the
+    ///      forfeit-stale-delegation fix specifically targeted.
+    function warpSmall(uint256 time) public {
+        if (maxWarp == 0) return;
+
+        uint256 cap = maxWarp < 3 hours ? maxWarp : 3 hours;
+        time = bound(time, 1, cap);
+        vm.warp(block.timestamp + time);
+
+        maxWarp -= time;
+    }
+
+    /// @notice Capture a `(account, timestamp, votes)` snapshot for the
+    ///         `invariant_pastVotesImmutability` assertion. Drawn from
+    ///         the `users` array; the captured timestamp is `block.timestamp`
+    ///         at sample time. Subsequent invariant ticks will re-query
+    ///         `getPastVotes(account, timestamp)` and assert byte-equality
+    ///         against the saved `votes` — pinning retroactive immutability.
+    ///
+    ///         Bounded to 32 samples to keep invariant gas modest; once full,
+    ///         new samples overwrite the oldest entry (ring-buffer semantics).
+    function samplePastVotes(uint256 rand) public {
+        address account = users[rand % users.length];
+        uint256 votes = delegation.getVotes(account);
+        uint256 ts = block.timestamp;
+
+        if (pastVotesSamples.length < 32) {
+            pastVotesSamples.push(PastVotesSample({account: account, timestamp: ts, votes: votes}));
+        } else {
+            uint256 slot = rand % 32;
+            pastVotesSamples[slot] = PastVotesSample({account: account, timestamp: ts, votes: votes});
+        }
     }
 
     /// @dev Permissionless bare-checkpoint path. Exercises `_checkpoint(0, ...)`

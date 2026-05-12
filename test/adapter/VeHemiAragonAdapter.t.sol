@@ -1714,6 +1714,55 @@ contract VeHemiAragonAdapterTest is Test {
         assertTrue(foundDc, "forfeit must relay DelegateChanged from adapter");
     }
 
+    /// @notice Regression for FR2-B5: pre-fix, forfeit-near-expiry silently
+    ///         skipped the inner `voteDelegation.delegate(id, address(0))`
+    ///         call, so the adapter never received `DelegateChanged` /
+    ///         `DelegateVotesChanged` for the cleanup. Post-fix, the relay
+    ///         must fire even when the forfeit lands in the last hour of
+    ///         the lock's lifetime.
+    function test_relay_onForfeit_nearExpiry() public {
+        veHemi.updateForfeitAdmin(address(this));
+
+        hemiToken.mint(address(this), 10e18);
+        hemiToken.approve(address(veHemi), 10e18);
+        uint256 tokenId = veHemi.createLockFor(10e18, 2 * YEAR, ALICE, false, true);
+
+        vm.prank(ALICE);
+        delegation.delegate(tokenId, BOB);
+        uint256 delegationStarts = ((block.timestamp / CHECKPOINT_INTERVAL) * CHECKPOINT_INTERVAL) + CHECKPOINT_INTERVAL;
+        vm.warp(delegationStarts);
+
+        // Warp into the previously-buggy `[lockEnd - 1h, lockEnd)` window.
+        uint256 lockEnd = veHemi.getLockedBalance(tokenId).end;
+        vm.warp(lockEnd - 30 minutes);
+
+        vm.recordLogs();
+        veHemi.forfeit(tokenId);
+
+        Vm.Log[] memory entries = vm.getRecordedLogs();
+        bytes32 dvcSig = keccak256("DelegateVotesChanged(address,uint256,uint256)");
+        bytes32 dcSig = keccak256("DelegateChanged(address,address,address)");
+
+        bool foundDvcFromAdapter;
+        bool foundDcCleanup;
+        for (uint256 i; i < entries.length; i++) {
+            if (entries[i].emitter == address(adapter)) {
+                if (entries[i].topics[0] == dvcSig) {
+                    foundDvcFromAdapter = true;
+                }
+                if (entries[i].topics[0] == dcSig) {
+                    // Decode toDelegatee from topic[3].
+                    address toDelegatee = address(uint160(uint256(entries[i].topics[3])));
+                    if (toDelegatee == address(0)) {
+                        foundDcCleanup = true;
+                    }
+                }
+            }
+        }
+        assertTrue(foundDvcFromAdapter, "near-expiry forfeit must relay DelegateVotesChanged from adapter");
+        assertTrue(foundDcCleanup, "near-expiry forfeit must relay DelegateChanged(_, _, address(0)) from adapter");
+    }
+
     function test_relay_createLock_decodedValues() public {
         vm.recordLogs();
         _createLock(ALICE, 10e18, YEAR);

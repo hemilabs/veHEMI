@@ -316,6 +316,167 @@ contract DelegationBehaviorTest is Test {
     }
 
     // -------------------------------------------------------------------------
+    // NEAR-EXPIRY FORFEIT CLEANUP — regression for the stale-delegation bug
+    // -------------------------------------------------------------------------
+    //
+    // Bug (pre-fix, observed via fuzz seed perturbation): when `forfeit(id)`
+    // ran with `block.timestamp + 1 hour > locked[id].end`, VeHemi's
+    // `_delegate` outer guard (`_newDelegationStarts < locked.end`) skipped
+    // the inner `voteDelegation.delegate(id, address(0))` call entirely.
+    // `delegations[id]` was left populated even though the NFT was burned.
+    //
+    // The fix is two parts:
+    //   1. VeHemi._delegate now lets `delegatee_ == address(0)` ALWAYS pass
+    //      the outer guard (cleanup intent is never expiry-blocked).
+    //   2. VeHemiVoteDelegation._delegate now invokes
+    //      `_getNormalizedLockedInfo` ONLY inside the new-delegatee branch,
+    //      so the cleanup branch tolerates locks at/past expiry without
+    //      reverting `CanNotDelegateExpiredLocks`.
+    //
+    // Together they ensure `delegations[id]` is cleared on EVERY forfeit
+    // path, regardless of how close to lock-end the forfeit lands.
+
+    /// @notice Forfeit invoked within ~1 hour of `lock.end` MUST still clear
+    ///         `delegations[id]`. This is the exact bug the original fuzz
+    ///         surfaced: pre-fix, the cached delegatee stayed pointing at the
+    ///         original owner after the NFT was burned.
+    function test_forfeit_nearLockEnd_clearsDelegationCache() public {
+        veHemi.updateForfeitAdmin(owner);
+
+        // Mint a forfeitable, non-transferable position with a SHORT lock
+        // (must be ≥ MIN_LOCK_DURATION but small enough that we can warp
+        // to within an hour of lock-end without crossing transferableAfter).
+        // SIX_DAYS bucket size = ~6.087 days; 2 buckets ≈ 12 days.
+        uint256 SIX_DAYS = YEAR / 60;
+        hemi.mint(alice, LOCK_AMOUNT);
+        vm.startPrank(alice);
+        hemi.approve(address(veHemi), LOCK_AMOUNT);
+        uint256 tokenId = veHemi.createLockFor(LOCK_AMOUNT, 2 * SIX_DAYS, alice, false, true);
+        vm.stopPrank();
+
+        // Pre-state: delegation cache populated with alice (self-delegate default).
+        assertEq(delegation.delegation(tokenId).delegatee, alice, "pre-forfeit: cache points at alice");
+
+        // Warp to 30 minutes before lock-end — strictly within the buggy
+        // window where the prior `_newDelegationStarts < locked.end` guard
+        // would have short-circuited the cleanup call.
+        uint256 lockEnd = veHemi.getLockedBalance(tokenId).end;
+        vm.warp(lockEnd - 30 minutes);
+
+        // Forfeit. With the fix, the cleanup call now propagates through
+        // BOTH the outer VeHemi guard (carve-out for address(0)) AND the
+        // inner `_getNormalizedLockedInfo` skip (cleanup branch doesn't
+        // need normalized values). `delegations[id]` must be fully zeroed.
+        veHemi.forfeit(tokenId);
+
+        IVeHemiVoteDelegation.Delegation memory d = delegation.delegation(tokenId);
+        assertEq(d.delegatee, address(0), "post-forfeit: delegatee MUST be cleared");
+        assertEq(uint256(d.bias), 0, "post-forfeit: bias MUST be cleared");
+        assertEq(uint256(d.amount), 0, "post-forfeit: amount MUST be cleared");
+        assertEq(uint256(d.slope), 0, "post-forfeit: slope MUST be cleared");
+        assertEq(uint256(d.end), 0, "post-forfeit: end MUST be cleared");
+    }
+
+    /// @notice SANITY companion: forfeit FAR from lock-end (the historically
+    ///         working path) still clears the cache. Confirms the fix didn't
+    ///         break the originally-correct case.
+    function test_forfeit_farFromLockEnd_clearsDelegationCache() public {
+        veHemi.updateForfeitAdmin(owner);
+
+        hemi.mint(alice, LOCK_AMOUNT);
+        vm.startPrank(alice);
+        hemi.approve(address(veHemi), LOCK_AMOUNT);
+        uint256 tokenId = veHemi.createLockFor(LOCK_AMOUNT, YEAR, alice, false, true);
+        vm.stopPrank();
+
+        // Warp only 1 day forward — months until lock-end. The pre-fix code
+        // ALREADY worked here; this test pins that the fix preserves it.
+        vm.warp(block.timestamp + 1 days);
+
+        veHemi.forfeit(tokenId);
+
+        IVeHemiVoteDelegation.Delegation memory d = delegation.delegation(tokenId);
+        assertEq(d.delegatee, address(0), "far-from-expiry: delegatee cleared");
+        assertEq(uint256(d.bias), 0, "far-from-expiry: bias cleared");
+    }
+
+    /// @notice Parametric sweep across the boundary: forfeit at
+    ///         `lock.end - {1, 60, 3599, 3600, 3601}` seconds. The exact
+    ///         off-by-one matters for the guard rewrite: `_newDelegationStarts`
+    ///         is `(now/1h)*1h + 1h`, so the boundary where the prior guard
+    ///         flipped is `block.timestamp ∈ [lock.end - 1h, lock.end)`.
+    ///         All five samples must clear the cache post-fix.
+    function test_forfeit_nearLockEnd_boundarySweep_clearsCache() public {
+        veHemi.updateForfeitAdmin(owner);
+
+        uint256[5] memory offsets = [uint256(1), 60, 3599, 3600, 3601];
+        for (uint256 i; i < offsets.length; ++i) {
+            address user = address(uint160(uint256(0xBEEF0000) + i));
+            hemi.mint(user, LOCK_AMOUNT);
+            vm.startPrank(user);
+            hemi.approve(address(veHemi), LOCK_AMOUNT);
+            uint256 tokenId = veHemi.createLockFor(LOCK_AMOUNT, YEAR, user, false, true);
+            vm.stopPrank();
+
+            uint256 lockEnd = veHemi.getLockedBalance(tokenId).end;
+            // Skip samples where the offset would not produce a valid pre-end
+            // warp (block.timestamp must remain strictly less than lockEnd).
+            if (offsets[i] >= lockEnd) continue;
+            vm.warp(lockEnd - offsets[i]);
+
+            veHemi.forfeit(tokenId);
+
+            IVeHemiVoteDelegation.Delegation memory d = delegation.delegation(tokenId);
+            assertEq(
+                d.delegatee,
+                address(0),
+                string.concat("boundary sweep: cache not cleared at lock.end - ", vm.toString(offsets[i]), "s")
+            );
+        }
+    }
+
+    /// @notice POST-EXPIRY BOUND: forfeit is bounded by `transferableAfter`,
+    ///         which equals `lock.end` at mint (see `_createLock`,
+    ///         `transferableAfter[_tokenId] = unlockTime` in VeHemi.sol).
+    ///         Forfeit MUST revert at and beyond `lock.end`, proving the
+    ///         post-expiry forfeit path is UNREACHABLE. The `address(0)`
+    ///         cleanup carve-out in `_delegate` is therefore purely
+    ///         defense-in-depth for the `[lock.end - 1h, lock.end)` window.
+    ///
+    ///         At `block.timestamp == lock.end`: `LockExpired` checks
+    ///         `lock.end < block.timestamp` (strict <), so it does NOT fire
+    ///         at exact equality; `ForfeitWindowExpired` (`>=`) DOES fire.
+    ///         At `block.timestamp > lock.end`: `LockExpired` fires first
+    ///         (source-order earlier in `forfeit`).
+    function test_forfeit_atAndAfterLockEnd_reverts() public {
+        veHemi.updateForfeitAdmin(owner);
+
+        uint256[3] memory offsets = [uint256(0), 1, 365 days];
+        for (uint256 i; i < offsets.length; ++i) {
+            address user = address(uint160(uint256(0xDEAD0000) + i));
+            hemi.mint(user, LOCK_AMOUNT);
+            vm.startPrank(user);
+            hemi.approve(address(veHemi), LOCK_AMOUNT);
+            uint256 tokenId = veHemi.createLockFor(LOCK_AMOUNT, YEAR, user, false, true);
+            vm.stopPrank();
+
+            uint256 lockEnd = veHemi.getLockedBalance(tokenId).end;
+            vm.warp(lockEnd + offsets[i]);
+
+            if (offsets[i] == 0) {
+                vm.expectRevert(VeHemi.ForfeitWindowExpired.selector);
+            } else {
+                vm.expectRevert(VeHemi.LockExpired.selector);
+            }
+            veHemi.forfeit(tokenId);
+
+            // No state mutation occurred — cache still reflects original delegation.
+            IVeHemiVoteDelegation.Delegation memory d = delegation.delegation(tokenId);
+            assertEq(d.delegatee, user, "post-expiry forfeit must not mutate cache");
+        }
+    }
+
+    // -------------------------------------------------------------------------
     // setAutoDelegate / clearAutoDelegate
     // -------------------------------------------------------------------------
 
@@ -446,6 +607,118 @@ contract DelegationBehaviorTest is Test {
         delegation.clearAutoDelegate();
         uint256 tokenId3 = _createLock(alice, LOCK_AMOUNT, YEAR);
         assertEq(delegation.delegation(tokenId3).delegatee, alice, "post-clear mint must self-delegate");
+    }
+
+    // -------------------------------------------------------------------------
+    // FR2-B4: expiredDelegations slope-change bookkeeping under near-expiry
+    //         forfeit. Verifies no double-apply / double-reverse occurs when
+    //         a rollover checkpoint lands between delegation creation and
+    //         the forfeit cleanup call.
+    // -------------------------------------------------------------------------
+
+    /// @notice After rollover materializes alice's expiration, a subsequent
+    ///         forfeit MUST be a strict no-op on alice's voting power — the
+    ///         expiration weight was already consumed by the rollover and
+    ///         the cleanup path must NOT subtract it a second time.
+    function test_forfeit_afterRollover_noDoubleSubtractOnAlice() public {
+        veHemi.updateForfeitAdmin(owner);
+
+        // Mint a forfeitable lock that ends ~12 days out (2 SIX_DAYS buckets).
+        // Self-delegated by default → alice IS the delegatee.
+        uint256 SIX_DAYS = YEAR / 60;
+        hemi.mint(alice, LOCK_AMOUNT);
+        vm.startPrank(alice);
+        hemi.approve(address(veHemi), LOCK_AMOUNT);
+        uint256 tokenId = veHemi.createLockFor(LOCK_AMOUNT, 2 * SIX_DAYS, alice, false, true);
+        vm.stopPrank();
+
+        uint256 lockEnd = veHemi.getLockedBalance(tokenId).end;
+
+        // Warp to JUST BEFORE lockEnd, but past the prior hour boundary so
+        // that the rollover's checkpoint timestamp (next hour) lands at or
+        // after lockEnd. This makes the rollover walk fold the expiration
+        // bucket into the checkpoint. forfeit() requires block.timestamp
+        // <= lockEnd, so we stay strictly inside the window.
+        vm.warp(lockEnd - 1);
+
+        // Anyone can call. This pushes a new checkpoint whose timestamp
+        // is the next hour boundary (>= lockEnd) and whose deltas fold in
+        // alice's expiration. The expiredDelegations[alice][lockEnd]
+        // bucket entries remain in storage but are now "consumed" by the
+        // new checkpoint.
+        delegation.writeNewCheckpointForExpiredDelegations(alice);
+
+        // Snapshot alice's votes at block.timestamp = lockEnd - 1.
+        // A small residual sliver of bias remains; the forfeit must leave
+        // this value unchanged.
+        uint256 votesPreForfeit = delegation.getVotes(alice);
+
+        // Now forfeit. forfeit's _checkpointTimestamp is `next hour > now`
+        // (>= lockEnd, same boundary the rollover just wrote at). The two
+        // guards (`previousDelegation_.end > checkpointTimestamp_` at the
+        // bucket subtraction and `previousDelegationEnd_ >
+        // checkpointTimestamp_` inside _calculateCheckpoint) MUST both
+        // gate-out — neither the expiredDelegations bucket nor the
+        // checkpoint deltas should be touched a second time.
+        veHemi.forfeit(tokenId);
+
+        // Strict no-op invariant: votes at the current block are unchanged.
+        // A double-subtract would underflow (revert) inside
+        // _moveVotingPowerFromPreviousDelegate; a phantom add would skew
+        // the number upward.
+        assertEq(
+            delegation.getVotes(alice),
+            votesPreForfeit,
+            "post-forfeit: votes unchanged - no double-apply on bookkeeping"
+        );
+
+        // Cache cleared (defense-in-depth — same property as the existing
+        // near-expiry test, but specifically AFTER a rollover).
+        IVeHemiVoteDelegation.Delegation memory d = delegation.delegation(tokenId);
+        assertEq(d.delegatee, address(0), "post-forfeit: cache cleared after rollover path");
+    }
+
+    /// @notice Symmetric companion: forfeit BEFORE lock-end (so end >
+    ///         checkpoint) MUST subtract from expiredDelegations exactly
+    ///         once. A subsequent rollover walk that reaches the bucket
+    ///         must see zeros (no residual phantom expiration).
+    function test_forfeit_beforeRollover_bucketDrainedExactlyOnce() public {
+        veHemi.updateForfeitAdmin(owner);
+
+        uint256 SIX_DAYS = YEAR / 60;
+        hemi.mint(alice, LOCK_AMOUNT);
+        vm.startPrank(alice);
+        hemi.approve(address(veHemi), LOCK_AMOUNT);
+        uint256 tokenId = veHemi.createLockFor(LOCK_AMOUNT, 2 * SIX_DAYS, alice, false, true);
+        vm.stopPrank();
+
+        uint256 lockEnd = veHemi.getLockedBalance(tokenId).end;
+
+        // Forfeit WHILE the lock is still live (end > now). The cleanup
+        // path subtracts from expiredDelegations[alice][lockEnd] and from
+        // the running checkpoint deltas.
+        vm.warp(lockEnd - 30 minutes);
+        veHemi.forfeit(tokenId);
+
+        // Voting power already zero (the only delegated weight was alice's
+        // own, which we just removed at the next epoch boundary).
+        // Now warp PAST lockEnd. If the bucket retained ANY residual
+        // entries, the rollover walk would either revert (underflow) or
+        // produce a checkpoint with phantom negative deltas applied to a
+        // new delegation arriving in the same bucket. We assert the
+        // rollover is a strict no-op: writeNewCheckpointForExpiredDelegations
+        // must revert with NoExpirations because the bucket is now empty
+        // AND no live checkpoint deltas remain to flip.
+        vm.warp(lockEnd + 1 hours);
+
+        // Expect no-expirations revert (alice's bucket is fully drained).
+        // If a residual entry leaked through, this call would either
+        // succeed (writing a phantom-decrement checkpoint) or revert with
+        // an arithmetic underflow — both detectable failures.
+        vm.expectRevert(VeHemiVoteDelegation.NoExpirations.selector);
+        delegation.writeNewCheckpointForExpiredDelegations(alice);
+
+        assertEq(delegation.getVotes(alice), 0, "alice votes remain 0 after burn + post-end query");
     }
 
     // -------------------------------------------------------------------------

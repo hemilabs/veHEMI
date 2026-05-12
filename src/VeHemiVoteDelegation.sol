@@ -615,28 +615,44 @@ contract VeHemiVoteDelegation is ReentrancyGuardTransientUpgradeable, VeHemiDele
 
         uint256 _checkpointTimestamp = (((block.timestamp - EPOCH_OFFSET) / CHECKPOINT_INTERVAL) * CHECKPOINT_INTERVAL) + CHECKPOINT_INTERVAL + EPOCH_OFFSET;
 
-        NormalizedVeHemiLockInfo memory _normalizedVeLockInfo = _getNormalizedLockedInfo(
-            delegator_,
-            _checkpointTimestamp
-        );
-
         _moveVotingPowerFromPreviousDelegate({
             previousDelegation_: _previousDelegation,
             checkpointTimestamp_: _checkpointTimestamp
         });
 
-        // When delegatee_ is address(0) (forfeit cleanup), skip the
+        // When delegatee_ is address(0) (forfeit / burn cleanup), skip the
         // _moveVotingPowerToNewDelegate path entirely. Otherwise that helper
         // would push a checkpoint into delegateCheckpoints[address(0)] and
         // increment expiredDelegations[address(0)][end] every forfeit,
         // accumulating non-trivial state at the zero address over the
         // protocol's lifetime — making getVotes(address(0)) return real
         // values, bloating storage, and inflating gas on any view that walks
-        // address(0)'s expirations. The only path that reaches here with
-        // address(0) is VeHemi.forfeit → _delegate(tokenId, address(0)).
+        // address(0)'s expirations. The cleanup branch ONLY deletes the
+        // stale per-token record; it MUST work even when the lock is at or
+        // past expiry, because forfeit-near-expiry and any future cleanup
+        // path on a fully-expired lock would otherwise revert inside
+        // `_getNormalizedLockedInfo` (`CanNotDelegateExpiredLocks`) and
+        // leave `delegations[delegator_]` stale forever. That is why
+        // `_getNormalizedLockedInfo` is now invoked ONLY in the
+        // new-delegatee branch — its normalized values are not needed to
+        // delete a record.
+        //
+        // See `VeHemi._delegate` for the symmetric outer-guard carve-out
+        // (`delegatee_ == address(0) ||`) that ensures this cleanup branch
+        // is reached for forfeit-near-expiry in the first place.
+        //
+        // CRITICAL: DO NOT REMOVE the address(0) branch or move
+        // `_getNormalizedLockedInfo` back above this if/else. Either change
+        // reintroduces the stale-delegations[id] bug: cleanup of expired
+        // locks would revert inside _getNormalizedLockedInfo and leave
+        // `delegations[delegator_]` populated forever after the NFT burns.
         if (delegatee_ == address(0)) {
             delete delegations[delegator_];
         } else {
+            NormalizedVeHemiLockInfo memory _normalizedVeLockInfo = _getNormalizedLockedInfo(
+                delegator_,
+                _checkpointTimestamp
+            );
             _moveVotingPowerToNewDelegate({
                 newDelegatee_: delegatee_,
                 delegatorVeLockInfo_: _normalizedVeLockInfo,

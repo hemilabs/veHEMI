@@ -81,7 +81,16 @@ VeHemi V2 maintains parallel subcurves alongside the global supply curve to trac
 - **Forfeit admin**: A privileged address (set by the contract owner) that can claw back forfeitable positions
 - **Forfeit window**: Only valid when `block.timestamp < transferableAfter` — once the position becomes transferable, it can no longer be forfeited
 - **Token destination**: Forfeited HEMI is transferred to the forfeit admin (`msg.sender`), not the position owner
-- **Cleanup**: Forfeit burns the NFT and cleans up all associated storage (locked balance, transferableAfter, forfeitable flag, provider)
+- **Cleanup**: Forfeit burns the NFT and cleans up all associated storage (locked balance, transferableAfter, forfeitable flag, provider) AND the per-token delegation cache in `VeHemiVoteDelegation.delegations[id]`
+
+### V2.1 Patch Notes (Delegation Cleanup)
+
+The V2.1 implementation upgrade fixes a stale-cache bug in the forfeit path:
+
+- **Bug**: when `forfeit(id)` ran within the last hour of a lock's lifetime (`block.timestamp + 1h > lock.end`), the outer near-expiry guard short-circuited the `voteDelegation.delegate(id, address(0))` cleanup call, leaving `delegations[id]` populated forever after the NFT was burned. Vote tallies were unaffected (slope-change roll-off still handled by the checkpoint walk), but `delegation(burnedId)` returned stale data for indexers and frontends.
+- **Fix**: two-part — `VeHemi._delegate` now lets `delegatee_ == address(0)` cleanup calls pass through the guard unconditionally, and `VeHemiVoteDelegation._delegate` invokes `_getNormalizedLockedInfo` only in the new-delegatee branch so cleanup tolerates at-or-near-expiry locks.
+- **Indexer impact**: post-upgrade, near-expiry forfeits emit `DelegateChanged(id, prev, address(0))` and `DelegateVotesChanged` events from the Aragon adapter that pre-upgrade were silently dropped. Event signatures are unchanged; consumers that already handle the regular forfeit path will absorb the new cases automatically. No back-fill events are emitted for pre-upgrade stale records (they remain frozen and benign — the NFT is burned, so `ownerOf` reverts and downstream reads can gate on that).
+- **Tests**: regression coverage lives in `test/DelegationBehavior.t.sol` (3 boundary tests including a sub-hour sweep at `{1, 60, 3599, 3600, 3601}` seconds before lock end), `test/VeHemiForfeitableCurve.t.sol::test_Forfeit_JointAccountingDecrement` (per-accumulator exact-delta pin), and `test/adapter/VeHemiAragonAdapter.t.sol::test_relay_onForfeit_nearExpiry` (adapter relay liveness on the previously-buggy path). Fuzzed by `invariant_pastVotesImmutability` and `invariant_adapterRelayParity` in `test/Invariant.t.sol` (20 invariants × 1024 runs × 128 depth).
 
 ### Aragon Governance Integration
 
