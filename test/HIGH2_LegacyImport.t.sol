@@ -497,11 +497,15 @@ contract HIGH2_LegacyImportTest is Test {
             "withdraw should zero locked amount"
         );
 
-        // Legacy still has Alice's old delegation record (storage stays).
+        // LOW-9: withdraw now clears the legacy delegation record as well
+        // (the legacy VVD is the live `voteDelegation` in this test setup,
+        // so its delegations[id] is cleaned up by the cleanup path). Both
+        // guards in import — `legacyD.delegatee == 0` AND `_lock.amount == 0`
+        // — independently make this token a no-op for the importer.
         assertEq(
             legacyVVD.delegation(aliceId).delegatee,
-            DAVE,
-            "legacy delegation record persists after withdraw"
+            address(0),
+            "LOW-9: withdraw clears legacy delegation cache"
         );
 
         // Import must skip silently (no revert) and write no record.

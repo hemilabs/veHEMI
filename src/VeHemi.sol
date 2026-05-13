@@ -453,6 +453,13 @@ contract VeHemi is
     function withdraw(uint256 tokenId_) external nonReentrant {
         if (_ownerOf(tokenId_) != _msgSender()) revert NotOwner();
         if (block.timestamp < locked[tokenId_].end) revert LockNotExpired();
+        // LOW-9 (2026-05-04 audit): clear the stale per-tokenId delegation
+        // cache on natural expiry and emit DelegateChanged(tokenId, X, 0)
+        // so indexers see a clean lifecycle for the burned token. Mirrors
+        // forfeit's pattern. The outer guard in `_delegate` routes
+        // `delegatee_ == address(0)` through unconditionally, so this
+        // works even when the lock has just expired.
+        _delegate(tokenId_, address(0));
         _withdraw(tokenId_);
     }
 

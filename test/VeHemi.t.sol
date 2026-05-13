@@ -1446,6 +1446,95 @@ contract VeHemiTest is Test {
         assertEq(veHemi.ownerOf(tokenId), alice, "transfer should still update ownership");
     }
 
+    function test_withdraw_succeedsWhenDelegationReverts() public {
+        // L9R2-G13 (DelegationUpdateFailed behaviour, withdraw arm):
+        // PROPERTY: withdraw() is robust even when the live voteDelegation
+        // contract reverts on every entry point.
+        //
+        // Per LOW-9 fix, withdraw() routes through `_delegate(id, address(0))`
+        // BEFORE `_withdraw` (see VeHemi.withdraw). When the live VVD reverts,
+        // the try/catch in `_delegate` swallows the revert and emits
+        // DelegationUpdateFailed(tokenId), and withdraw completes normally —
+        // burning the NFT and transferring HEMI back to the owner.
+
+        uint256 amount = 11 ether;
+        uint256 duration = 2 * 365 days;
+        (uint256 tokenId, , uint256 end) = createLock(user, amount, duration);
+
+        // Swap in the reverting voteDelegation as the live pointer.
+        RevertingVoteDelegation reverting = _swapInRevertingDelegation();
+        assertEq(address(veHemi.voteDelegation()), address(reverting), "VVD swap should succeed");
+
+        // Warp past the lock end so withdraw passes the LockNotExpired guard.
+        vm.warp(end + 1);
+
+        uint256 hemiBefore = hemi.balanceOf(user);
+
+        // Withdraw must succeed and emit DelegationUpdateFailed(tokenId)
+        // because the LOW-9 cleanup `_delegate(id, 0)` reverts on the
+        // reverting VVD and the try/catch in `VeHemi._delegate` catches it.
+        vm.expectEmit(true, false, false, false);
+        emit IVeHemi.DelegationUpdateFailed(tokenId);
+        vm.prank(user);
+        veHemi.withdraw(tokenId);
+
+        // NFT burned, HEMI returned, lock cleared.
+        assertEq(veHemi.balanceOf(user), 0, "user should hold no veHEMI NFTs after withdraw");
+        vm.expectRevert();
+        veHemi.ownerOf(tokenId);
+        assertEq(
+            hemi.balanceOf(user) - hemiBefore,
+            amount,
+            "withdraw should return the full locked HEMI to the owner"
+        );
+    }
+
+    function test_forfeit_emitsDelegationUpdateFailedWhenDelegationReverts() public {
+        // L9R2-G13 (DelegationUpdateFailed behaviour, forfeit arm):
+        // PROPERTY: forfeit() routes through `_delegate(id, address(0))`
+        // BEFORE `_withdraw` (see VeHemi.forfeit, lines ~222-233). When the
+        // live VVD reverts, the try/catch in `_delegate` swallows the revert
+        // and emits DelegationUpdateFailed(tokenId), and forfeit completes
+        // normally — burning the NFT and transferring HEMI to the forfeit
+        // admin. This is the entry point that exercises the
+        // DelegationUpdateFailed code path on an exit.
+
+        address forfeitAdminAddr = address(0x5678);
+        veHemi.updateForfeitAdmin(forfeitAdminAddr);
+
+        uint256 amount = 100 ether;
+        // Forfeitable position; needs non-transferable + forfeitable=true.
+        vm.prank(user);
+        uint256 tokenId = veHemi.createLockFor(amount, 2 * 365 days, alice, false, true);
+
+        // Seed legacy mock with a non-zero delegatee.
+        mockDelegation.delegate(tokenId, bob);
+        assertEq(mockDelegation.delegation(tokenId).delegatee, bob, "legacy VVD seeded");
+
+        // Swap in the reverting VVD.
+        _swapInRevertingDelegation();
+
+        // forfeit must still succeed and must emit DelegationUpdateFailed
+        // from the try/catch wrapping voteDelegation.delegate.
+        vm.expectEmit(true, false, false, false);
+        emit IVeHemi.DelegationUpdateFailed(tokenId);
+
+        vm.prank(forfeitAdminAddr);
+        veHemi.forfeit(tokenId);
+
+        // Lock cleared, NFT burned, HEMI sent to the forfeit admin.
+        assertEq(uint256(uint128(veHemi.getLockedBalance(tokenId).amount)), 0, "lock cleared");
+        assertEq(hemi.balanceOf(forfeitAdminAddr), amount, "forfeit admin received HEMI");
+
+        // Legacy VVD entry is unchanged — still bob, still stale. Harmless:
+        // the legacy mock is no longer the live pointer.
+        assertEq(
+            mockDelegation.delegation(tokenId).delegatee,
+            bob,
+            "legacy VVD entry remains stale (acceptable)"
+        );
+    }
+
     function test_createLock_succeedsWhenRewardDistributorReverts() public {
         RevertingRewardDistributor revertingDistributor = new RevertingRewardDistributor();
         veHemi.updateRewardDistributor(IRewardDistributor(address(revertingDistributor)));

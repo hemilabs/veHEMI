@@ -5,6 +5,7 @@ import {Test, Vm} from "forge-std/Test.sol";
 import {VeHemi} from "../src/VeHemi.sol";
 import {VeHemiVoteDelegation} from "../src/VeHemiVoteDelegation.sol";
 import {IVeHemiVoteDelegation} from "../src/interfaces/IVeHemiVoteDelegation.sol";
+import {VeHemiAragonAdapter} from "../src/adapter/VeHemiAragonAdapter.sol";
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import {MockERC20} from "./mocks/MockERC20.sol";
 
@@ -719,6 +720,255 @@ contract DelegationBehaviorTest is Test {
         delegation.writeNewCheckpointForExpiredDelegations(alice);
 
         assertEq(delegation.getVotes(alice), 0, "alice votes remain 0 after burn + post-end query");
+    }
+
+    // -------------------------------------------------------------------------
+    // LOW-9 / L9R2-G9: multi-NFT-per-address — withdrawing ONE expired token
+    // must not touch the delegations of the holder's OTHER tokens, and the
+    // address-level IVotes view exposed by the Aragon adapter must drop by
+    // exactly that token's (residual) contribution.
+    // -------------------------------------------------------------------------
+
+    /// @notice A single address can own multiple veHEMI NFTs with independent
+    ///         per-tokenId delegations. Withdrawing one expired token must
+    ///         clear ONLY that token's delegation cache and leave the other
+    ///         tokens' caches and the corresponding delegatees' vote balances
+    ///         completely untouched.
+    ///
+    ///         Two layers:
+    ///           * Part A — different delegatees: alice owns 3 tokens at
+    ///             staggered ends, delegated to bob / carol / dave. Withdraw
+    ///             token 1 (the only one past expiry); assert token 2 and
+    ///             token 3 caches AND carol's / dave's vote balances are
+    ///             unchanged in the same block.
+    ///           * Part B — adapter.getVotes(holder) drop: eve owns 3
+    ///             self-delegated tokens. The address-level IVotes view from
+    ///             the Aragon adapter (which proxies to
+    ///             VeHemiVoteDelegation.getVotes) reflects the sum of the
+    ///             three tokens' decayed contributions. After withdrawing
+    ///             token 1 (already past expiry → residual ~0), eve's
+    ///             adapter.getVotes drops by at most token 1's residual.
+    ///             Tokens 2 + 3 remain.
+    function test_withdraw_doesNotAffectOtherTokenDelegations() public {
+        address dave = makeAddr("dave");
+
+        // -------- PART A: per-token cache independence --------
+        // Three locks at staggered ends; stagger by 30 days so token 1 can
+        // expire alone (one SIX_DAYS bucket ≈ 6.087 days, so 30-day gaps
+        // guarantee strictly later rounded ends).
+        uint256 t0 = block.timestamp;
+        uint256 id1 = _createLock(alice, LOCK_AMOUNT, 90 days);
+        vm.warp(t0 + 30 days);
+        uint256 id2 = _createLock(alice, LOCK_AMOUNT, 180 days);
+        vm.warp(t0 + 60 days);
+        uint256 id3 = _createLock(alice, LOCK_AMOUNT, 270 days);
+
+        // Re-delegate each to a different party.
+        vm.startPrank(alice);
+        delegation.delegate(id1, bob);
+        delegation.delegate(id2, carol);
+        delegation.delegate(id3, dave);
+        vm.stopPrank();
+
+        uint256 end1 = veHemi.getLockedBalance(id1).end;
+        uint256 end2 = veHemi.getLockedBalance(id2).end;
+        uint256 end3 = veHemi.getLockedBalance(id3).end;
+        assertLt(end1, end2, "monotonic ends: 1 < 2");
+        assertLt(end2, end3, "monotonic ends: 2 < 3");
+
+        assertEq(delegation.delegation(id1).delegatee, bob, "pre: id1 -> bob");
+        assertEq(delegation.delegation(id2).delegatee, carol, "pre: id2 -> carol");
+        assertEq(delegation.delegation(id3).delegatee, dave, "pre: id3 -> dave");
+
+        // Warp past lock 1's end ONLY — lock 2 and lock 3 are still live.
+        vm.warp(end1 + 1 hours);
+        assertLt(block.timestamp, end2, "still inside lock 2 window");
+        assertLt(block.timestamp, end3, "still inside lock 3 window");
+
+        // Snapshot carol's and dave's votes immediately before the withdraw
+        // (same block as the post-withdraw read → eliminates decay drift).
+        uint256 carolVotesPre = delegation.getVotes(carol);
+        uint256 daveVotesPre = delegation.getVotes(dave);
+        assertGt(carolVotesPre, 0, "carol must have nonzero votes pre-withdraw");
+        assertGt(daveVotesPre, 0, "dave must have nonzero votes pre-withdraw");
+
+        vm.prank(alice);
+        veHemi.withdraw(id1);
+
+        // id1 cache cleared; id2 and id3 caches and bookkeeping untouched.
+        assertEq(delegation.delegation(id1).delegatee, address(0), "post: id1 cleared");
+        assertEq(delegation.delegation(id2).delegatee, carol, "post: id2 STILL carol");
+        assertEq(delegation.delegation(id3).delegatee, dave, "post: id3 STILL dave");
+
+        IVeHemiVoteDelegation.Delegation memory d2 = delegation.delegation(id2);
+        IVeHemiVoteDelegation.Delegation memory d3 = delegation.delegation(id3);
+        assertGt(uint256(d2.amount), 0, "id2 amount intact");
+        assertGt(uint256(d2.end), 0, "id2 end intact");
+        assertGt(uint256(d3.amount), 0, "id3 amount intact");
+        assertGt(uint256(d3.end), 0, "id3 end intact");
+
+        // Same-block read: carol's and dave's votes are unchanged by id1's
+        // withdraw (id1 was delegated to bob, not them).
+        assertEq(delegation.getVotes(carol), carolVotesPre, "carol votes UNCHANGED by id1 withdraw");
+        assertEq(delegation.getVotes(dave), daveVotesPre, "dave votes UNCHANGED by id1 withdraw");
+
+        // NFT burned.
+        vm.expectRevert();
+        veHemi.ownerOf(id1);
+
+        // -------- PART B: address-level adapter.getVotes drops by id1 only --------
+        // Fresh holder (eve) self-delegates all three positions, so eve IS
+        // the delegatee of all three and adapter.getVotes(eve) reflects the
+        // sum of the three tokens' decayed contributions.
+        address eve = makeAddr("eve");
+
+        uint256 e0 = block.timestamp;
+        uint256 jid1 = _createLock(eve, LOCK_AMOUNT, 90 days);
+        vm.warp(e0 + 30 days);
+        uint256 jid2 = _createLock(eve, LOCK_AMOUNT, 180 days);
+        vm.warp(e0 + 60 days);
+        uint256 jid3 = _createLock(eve, LOCK_AMOUNT, 270 days);
+
+        assertEq(delegation.delegation(jid1).delegatee, eve, "jid1 self-delegated by mint");
+        assertEq(delegation.delegation(jid2).delegatee, eve, "jid2 self-delegated by mint");
+        assertEq(delegation.delegation(jid3).delegatee, eve, "jid3 self-delegated by mint");
+
+        VeHemiAragonAdapter adapter = new VeHemiAragonAdapter(address(veHemi));
+
+        // Warp past jid1 only.
+        uint256 jend1 = veHemi.getLockedBalance(jid1).end;
+        vm.warp(jend1 + 1 hours);
+
+        // Snapshot eve's adapter.getVotes at the EXACT pre-withdraw timestamp.
+        uint256 votesPre = adapter.getVotes(eve);
+        assertGt(votesPre, 0, "eve has votes from (still-live) jid2 + jid3");
+
+        // jid1 is past its end → its bias has fully decayed to zero on the
+        // veHEMI curve. Its "residual contribution" at this timestamp is 0,
+        // so the withdraw's cleanup should be a vote-balance no-op for eve
+        // (it merely zeroes already-zero bookkeeping for jid1).
+        vm.prank(eve);
+        veHemi.withdraw(jid1);
+
+        uint256 votesPost = adapter.getVotes(eve);
+
+        // STRICT property: the drop is exactly jid1's residual (≈ 0 post-expiry).
+        // Tolerate ≤1% slippage to absorb any rounding inside the
+        // checkpoint write at the SAME block (in practice this is 0).
+        assertLe(votesPost, votesPre, "votes monotone non-increasing across withdraw");
+        uint256 minExpected = (votesPre * 99) / 100;
+        assertGe(votesPost, minExpected, "drop bounded by jid1's residual (~0 post-expiry)");
+
+        // jid2 and jid3 still self-delegated to eve → eve still has votes.
+        assertGt(votesPost, 0, "eve still has votes from jid2 + jid3");
+        assertEq(delegation.delegation(jid1).delegatee, address(0), "jid1 cleared");
+        assertEq(delegation.delegation(jid2).delegatee, eve, "jid2 still eve");
+        assertEq(delegation.delegation(jid3).delegatee, eve, "jid3 still eve");
+    }
+
+    // -------------------------------------------------------------------------
+    // LOW-9 (L9R2-G11): event-order pin for natural-expiry withdraw
+    // -------------------------------------------------------------------------
+
+    /// @notice Pin the exact ORDER of events emitted during a natural-expiry
+    ///         withdraw. R1-G11 verified the intended sequence by reading the
+    ///         source; this test pins it on-chain so any future refactor that
+    ///         re-orders the cleanup steps (e.g., emitting `Withdraw` before
+    ///         the delegation cleanup, or flipping `DelegateVotesChanged`
+    ///         past `DelegateChanged`) fails loudly.
+    ///
+    ///         Expected order in the recorded log stream:
+    ///           1. `DelegateVotesChanged(oldDelegate, prev, new)`
+    ///              from `address(delegation)` — checkpoint subtracts the
+    ///              forfeited voting weight from the delegatee.
+    ///           2. `DelegateChanged(tokenId, oldDelegate, address(0))`
+    ///              from `address(delegation)` — cache retirement marker.
+    ///           3. `Withdraw(provider, tokenId, amount, timestamp)`
+    ///              from `address(veHemi)` — token-burn / refund.
+    ///
+    ///         We assert by topic0 hash + emitter so any event re-rename
+    ///         surfaces as a topic mismatch rather than a silent skip.
+    function test_withdraw_emitsExpectedEventOrder() public {
+        uint256 tokenId = _createLock(alice, LOCK_AMOUNT, YEAR);
+        // Explicit delegate to bob so the cleanup-time
+        // `_moveVotingPowerFromPreviousDelegate` has a non-zero previousVotes
+        // to subtract — guarantees DelegateVotesChanged emission.
+        vm.prank(alice);
+        delegation.delegate(tokenId, bob);
+
+        assertEq(delegation.delegation(tokenId).delegatee, bob, "pre: delegated to bob");
+        // Note: getVotes(bob) is 0 at this exact second because checkpoints
+        // apply at the NEXT hour boundary. The DelegateVotesChanged event is
+        // still emitted unconditionally inside _moveVotingPowerFromPreviousDelegate,
+        // so we don't need a non-zero precondition to pin the order.
+
+        // Warp past expiry and capture the log stream around the withdraw.
+        vm.warp(veHemi.getLockedBalance(tokenId).end + 1 hours);
+
+        vm.recordLogs();
+        vm.prank(alice);
+        veHemi.withdraw(tokenId);
+        Vm.Log[] memory logs = vm.getRecordedLogs();
+
+        // Canonical topic0 hashes for the three events we expect, in order.
+        bytes32 dvcSig = keccak256("DelegateVotesChanged(address,uint256,uint256)");
+        bytes32 dcSig = keccak256("DelegateChanged(uint256,address,address)");
+        bytes32 wSig = keccak256("Withdraw(address,uint256,uint256,uint256)");
+
+        // Locate the FIRST occurrence of each expected event by topic0 +
+        // emitter, then assert their indices are strictly increasing.
+        int256 idxDvc = -1;
+        int256 idxDc = -1;
+        int256 idxW = -1;
+
+        for (uint256 i; i < logs.length; ++i) {
+            Vm.Log memory l = logs[i];
+            if (l.topics.length == 0) continue;
+            bytes32 sig = l.topics[0];
+
+            if (idxDvc == -1 && sig == dvcSig && l.emitter == address(delegation)) {
+                // DelegateVotesChanged(address indexed delegatee, uint256 prev, uint256 new)
+                // topics[1] = bob (the old delegate at cleanup time).
+                assertEq(
+                    address(uint160(uint256(l.topics[1]))),
+                    bob,
+                    "DelegateVotesChanged: indexed delegatee must be bob"
+                );
+                idxDvc = int256(i);
+            } else if (idxDc == -1 && sig == dcSig && l.emitter == address(delegation)) {
+                // DelegateChanged(uint256 indexed delegator, address indexed from, address indexed to)
+                assertEq(uint256(l.topics[1]), tokenId, "DelegateChanged: indexed tokenId mismatch");
+                assertEq(
+                    address(uint160(uint256(l.topics[2]))),
+                    bob,
+                    "DelegateChanged: indexed from must be bob"
+                );
+                assertEq(
+                    address(uint160(uint256(l.topics[3]))),
+                    address(0),
+                    "DelegateChanged: indexed to must be address(0)"
+                );
+                idxDc = int256(i);
+            } else if (idxW == -1 && sig == wSig && l.emitter == address(veHemi)) {
+                // Withdraw(address indexed provider, uint256 indexed tokenId, ...)
+                assertEq(
+                    address(uint160(uint256(l.topics[1]))),
+                    alice,
+                    "Withdraw: indexed provider must be alice"
+                );
+                assertEq(uint256(l.topics[2]), tokenId, "Withdraw: indexed tokenId mismatch");
+                idxW = int256(i);
+            }
+        }
+
+        // Each event must occur at least once.
+        assertGt(idxDvc, -1, "DelegateVotesChanged not emitted");
+        assertGt(idxDc, -1, "DelegateChanged not emitted");
+        assertGt(idxW, -1, "Withdraw not emitted");
+
+        // Strict ordering: DelegateVotesChanged < DelegateChanged < Withdraw.
+        assertLt(idxDvc, idxDc, "order: DelegateVotesChanged must precede DelegateChanged");
+        assertLt(idxDc, idxW, "order: DelegateChanged must precede Withdraw");
     }
 
     // -------------------------------------------------------------------------
