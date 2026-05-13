@@ -52,6 +52,22 @@ const VOTE_DELEGATION = "VeHemiVoteDelegation";
 // and the adversarial front-run vector where someone could mint a
 // non-transferable position into the gap between off-chain list derivation
 // and Safe execution.
+//
+// ── LOW-10 (2026-05-04 audit): bundle with script 05 ──────────────────────
+// This script MUST be invoked in the same `hardhat deploy` run as script 05
+// (`05_aragon_adapter.ts`) so the adapter deployment + `setTrustedAdapter`
+// land in the SAME Safe MultiSend as the V2 upgrade. Splitting them creates
+// a window where the upgraded VVD is live but `trustedAdapter == address(0)`,
+// silently dropping every `_delegate` notify hook and bricking
+// `adapter.delegate(X)` (which calls `delegateAllFor`, gated on
+// `msg.sender == trustedAdapter`). Both scripts append to the same
+// `multisig.batch.tmp.json`; script 99 (`runAtTheEnd`) proposes the
+// accumulated batch as one MultiSend.
+//
+// OPERATOR MANDATE: run `npx hardhat --network hemi deploy` (no `--tags`
+// filter). Script 05's pre-flight enforces this with a defense-in-depth
+// check: if VVD is still V1 on-chain AND the Safe batch file is empty
+// when 05 starts, deployment aborts.
 
 // Maximum token IDs scanned per `seedBatch` call. Sized against the Hemi
 // 30M block gas limit with margin for low-density (mostly-burned or

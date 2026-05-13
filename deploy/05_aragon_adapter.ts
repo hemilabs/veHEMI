@@ -1,5 +1,6 @@
+import fs from "fs";
 import { DeployFunction } from "hardhat-deploy/types";
-import { saveForSafeBatchExecution } from "../helpers/safe";
+import { MULTI_SIG_TXS_FILE, saveForSafeBatchExecution } from "../helpers/safe";
 
 const ADAPTER = "VeHemiAragonAdapter";
 const VOTE_DELEGATION = "VeHemiVoteDelegation";
@@ -29,6 +30,29 @@ const IFACE_ID_ERC6372 = "0xda287a1d";
 //     Aragon-compatible implementation with autoDelegate, delegateAllFor,
 //     hourly checkpoints, and setTrustedAdapter (script 04)
 //   - markSeedingStarted + seedBatch(...) + finalizeSeeding have run (script 04)
+//
+// ── LOW-10 (2026-05-04 audit): adapter-bootstrap window ───────────────────
+// The audit flagged that splitting scripts 04 and 05 into two separate Safe
+// proposals creates a window where the new VVD is live but `trustedAdapter`
+// is still `address(0)`. During the window:
+//   - every `_delegate` notify hook is silently skipped
+//   - Aragon's subgraph sees ZERO DelegateChanged/DelegateVotesChanged events
+//     from the adapter address (on-chain state still mutates)
+//   - `delegateAllFor` reverts with `NotTrustedAdapter`, bricking
+//     `adapter.delegate(X)` entirely
+// The window can stretch days/weeks if the Safe quorum is slow.
+//
+// FIX: scripts 04 and 05 both queue Safe transactions via
+// `saveForSafeBatchExecution`, which appends to a SHARED batch file
+// (`multisig.batch.tmp.json`). Script 99 (`runAtTheEnd: true`) then proposes
+// the accumulated batch as a SINGLE Safe MultiSend. As long as both scripts
+// run in the SAME `hardhat deploy` invocation, the bundling is automatic.
+//
+// OPERATOR MANDATE: run `npx hardhat --network hemi deploy` (no `--tags`
+// filter) so the entire 00→07→99 sequence executes in one invocation. The
+// pre-flight check below catches a missed-bundling attempt: if VVD is still
+// V1 on-chain AND the Safe batch file is empty when 05 starts, we abort
+// rather than create a standalone adapter-registration proposal.
 
 const func: DeployFunction = async function (hre) {
     const { deployments, getNamedAccounts, network } = hre;
@@ -65,6 +89,65 @@ const func: DeployFunction = async function (hre) {
         throw new Error("VeHemi.totalVeHemiSupply() is zero — wrong network or fresh proxy?");
     }
     console.log("VeHemi.totalSupply:      ", totalSupply.toString());
+
+    // 3. LOW-10: ensure script 05 is bundled with script 04. If VVD is still
+    //    V1 on-chain, the V2 upgrade transaction (queued by script 04) MUST
+    //    already be in the Safe batch file from this same `hardhat deploy`
+    //    invocation. Otherwise we'd produce a standalone setTrustedAdapter
+    //    proposal that creates the adapter-bootstrap window the audit flagged.
+    //
+    //    Probe: call `trustedAdapter()` against the live VVD. If it reverts,
+    //    VVD is still V1 (selector doesn't exist). If it returns, VVD is V2
+    //    and 05 is safe to run standalone (just a one-shot setter).
+    let vvdIsV2 = true;
+    try {
+        await read(VOTE_DELEGATION, "trustedAdapter");
+    } catch {
+        vvdIsV2 = false;
+    }
+
+    if (!vvdIsV2) {
+        // VVD is still V1. The V2 upgrade must be queued in this same batch.
+        // `helpers/safe.ts` auto-cleans any stale `MULTI_SIG_TXS_FILE` at
+        // module-load time (the very first `import` of the helper, before
+        // any deploy script body runs), so a non-empty file here means
+        // script 04 (or another script earlier in this same invocation) just
+        // queued real txs.
+        const batchHasContent =
+            fs.existsSync(MULTI_SIG_TXS_FILE) &&
+            fs.statSync(MULTI_SIG_TXS_FILE).size > 0;
+        if (!batchHasContent) {
+            throw new Error(
+                "\n" +
+                "[LOW-10 (2026-05-04 audit)] adapter-bootstrap window detected.\n" +
+                "\n" +
+                "FIX:   npx hardhat --network hemi deploy   (no `--tags` filter)\n" +
+                "\n" +
+                "WHY:   VeHemiVoteDelegation is still V1 on-chain AND the Safe batch\n" +
+                "       file is empty. Running script 05 now would create a STANDALONE\n" +
+                "       `setTrustedAdapter` Safe proposal, leaving an adapter-bootstrap\n" +
+                "       window during which `trustedAdapter == address(0)` on the\n" +
+                "       upgraded VVD: every `_delegate` notify hook is silently\n" +
+                "       skipped (Aragon's subgraph sees zero DelegateChanged events),\n" +
+                "       and `delegateAllFor` reverts with `NotTrustedAdapter`,\n" +
+                "       bricking `adapter.delegate(X)` entirely.\n" +
+                "\n" +
+                "       Scripts 04 and 05 must run in the SAME `hardhat deploy`\n" +
+                "       invocation so their Safe txs accumulate into\n" +
+                "       `" + MULTI_SIG_TXS_FILE + "` and script 99 (`runAtTheEnd`)\n" +
+                "       proposes them as ONE Safe MultiSend.\n" +
+                "\n" +
+                "FILES: deploy/04_upgrade_vehemi_v2.ts  (V2 upgrade + seeding)\n" +
+                "       deploy/05_aragon_adapter.ts    (this script)\n" +
+                "       deploy/99_safe-txs.ts          (MultiSend proposer)\n" +
+                "       helpers/safe.ts                (batch accumulator)\n" +
+                "       VeHemi_FinalAudit_2026-05-04.pdf  (LOW-10 finding)\n"
+            );
+        }
+        console.log("LOW-10 bundling:         OK (VVD V1 + Safe batch populated → bundled with 04)");
+    } else {
+        console.log("LOW-10 bundling:         OK (VVD already V2 — 05 can run standalone safely)");
+    }
 
     console.log("");
 

@@ -19,6 +19,38 @@ type MultiSigTx = {
 
 const { log } = console;
 
+// LOW-10 (2026-05-04 audit) — stale-batch defense:
+// Script 99 (`runAtTheEnd: true`) unlinks `MULTI_SIG_TXS_FILE` only after a
+// successful Safe proposal. If a prior `hardhat deploy` invocation crashed,
+// was Ctrl-C'd, or was invoked with a `--tags` filter that excluded 99, the
+// file persists to disk. Subsequent runs would silently append to that stale
+// batch, potentially mixing yesterday's V2 upgrade tx with today's
+// `setTrustedAdapter` — and the LOW-10 pre-flight in `deploy/05_aragon_adapter.ts`
+// (which checks "is the batch file non-empty?") would falsely report
+// bundling-OK.
+//
+// Fix: when this module first loads in a Node process, if the batch file
+// pre-exists from a prior run, log a warning and delete it. Module-load
+// timing (rather than first-save timing) is critical so that even
+// `--tags`-filtered runs where no script ends up queuing a Safe tx before
+// `deploy/05_aragon_adapter.ts`'s pre-flight gate check still get a clean
+// slate. ESM/CJS module cache guarantees this fires exactly once per
+// Node process; every deploy script that imports anything from this file
+// triggers the cleanup eagerly.
+if (fs.existsSync(MULTI_SIG_TXS_FILE)) {
+    const size = fs.statSync(MULTI_SIG_TXS_FILE).size;
+    if (size > 0) {
+        log(
+            chalk.yellow(
+                `[LOW-10 safety] Stale '${MULTI_SIG_TXS_FILE}' (${size} bytes) ` +
+                `from a prior aborted deploy detected. Deleting before this run ` +
+                `to prevent cross-run batch contamination.`
+            )
+        );
+    }
+    fs.unlinkSync(MULTI_SIG_TXS_FILE);
+}
+
 export const saveForSafeBatchExecution = async (rawTx: MultiSigTx): Promise<void> => {
     if (!fs.existsSync(MULTI_SIG_TXS_FILE)) {
         fs.closeSync(fs.openSync(MULTI_SIG_TXS_FILE, "w"));
