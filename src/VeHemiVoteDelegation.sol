@@ -55,6 +55,21 @@ contract VeHemiVoteDelegation is ReentrancyGuardTransientUpgradeable, VeHemiDele
     bytes32 private constant DOMAIN_TYPEHASH =
         keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)");
     /// @notice The EIP-712 typehash for the delegation struct used by the contract.
+    /// @dev LOW-2 (2026-05-04 audit): this typehash deliberately diverges from
+    ///      OpenZeppelin's canonical IVotes Delegation hash —
+    ///      `Delegation(address delegatee,uint256 nonce,uint256 expiry)` — by
+    ///      adding a `uint256 delegator` (tokenId) field, because veHEMI's
+    ///      native delegation is per-tokenId, not account-wide. A signer
+    ///      authorizes the redelegation of ONE specific NFT, not all positions
+    ///      they own. Tooling and wallets that assume the canonical IVotes
+    ///      typehash will produce digests that fail signature verification
+    ///      here. Integrators that want an account-wide signed flow should
+    ///      issue per-tokenId signatures and submit them in a batch, or wait
+    ///      for a future `delegateAllBySig` (not in scope for this bundle —
+    ///      see audit LOW-2 for the deferred path).
+    ///
+    ///      The adapter's `delegateBySig` is declared but reverts for the same
+    ///      reason; see `VeHemiAragonAdapter.delegateBySig` NatSpec.
     bytes32 private constant DELEGATION_TYPEHASH =
         keccak256("Delegation(uint256 delegator,address delegatee,uint256 nonce,uint256 expiry)");
 
@@ -77,6 +92,9 @@ contract VeHemiVoteDelegation is ReentrancyGuardTransientUpgradeable, VeHemiDele
     error NotVeHemiOwner();
     error MigrationFinalizedError();
     error LegacyAddressInvalid();
+    error InvalidAdapter();
+    error AdditiveBranchExpectsZeroEnd();
+    error DelegationSlopeOverflow();
 
     modifier onlyAuthorized(uint256 tokenId_) {
         address _msgSender = msg.sender;
@@ -155,11 +173,35 @@ contract VeHemiVoteDelegation is ReentrancyGuardTransientUpgradeable, VeHemiDele
     }
 
     /**
-     * @notice Set the trusted adapter contract that can call delegateAllFor
+     * @notice Set the trusted adapter contract that can call delegateAllFor.
+     * @dev LOW-5 (2026-05-04 audit): when `adapter_` is non-zero, require it
+     *      to be a contract (`code.length > 0`). Without this check, an
+     *      operator typo that supplies an EOA (or any zero-code address) is
+     *      accepted silently: every notify-relay (`notifyVotesChanged` /
+     *      `notifyDelegateChanged`) is wrapped in try/catch and the CALL to a
+     *      zero-code address returns success with empty data, so the relays
+     *      no-op without surfacing any signal. Aragon's subgraph would stop
+     *      seeing events from the configured adapter address while on-chain
+     *      delegation state continues to mutate, eventually drifting
+     *      irrecoverably.
+     *
+     *      `address(0)` is preserved as an explicit, documented disable —
+     *      consumers can monitor `TrustedAdapterUpdated(_, address(0))` to
+     *      detect a deliberate teardown vs. a misconfiguration.
+     *
+     *      We DO NOT staticcall the candidate adapter's `notifyVotesChanged`
+     *      as a liveness probe: the canonical adapter emits a log inside
+     *      that function, and `LOG2` is forbidden inside a STATICCALL — so a
+     *      well-behaved adapter would always fail the probe. A full
+     *      ERC-165 check for an `IAdapterNotify` interfaceId is possible but
+     *      requires the adapter to advertise the id; the simple code.length
+     *      check catches the dominant operator-error case (EOA / wrong
+     *      address) without coupling to that registration.
      * @param adapter_ The adapter address (or address(0) to disable)
      */
     function setTrustedAdapter(address adapter_) external {
         if (msg.sender != IOwnable(address(veHemi)).owner()) revert NotVeHemiOwner();
+        if (adapter_ != address(0) && adapter_.code.length == 0) revert InvalidAdapter();
         address oldAdapter = trustedAdapter;
         trustedAdapter = adapter_;
         emit TrustedAdapterUpdated(oldAdapter, adapter_);
@@ -403,6 +445,15 @@ contract VeHemiVoteDelegation is ReentrancyGuardTransientUpgradeable, VeHemiDele
         bytes32 r,
         bytes32 s
     ) external nonReentrant {
+        // LOW-3 (2026-05-04 audit): expiry check moved to top — short-circuit
+        // on stale signatures before paying ECDSA.recover (~3k gas), the
+        // ownerOf SLOAD, and the nonce SLOAD/SSTORE pair (~5k). Replay
+        // protection is unaffected: the nonce is consumed only AFTER a valid
+        // signature for a non-expired window is proven, so an attacker
+        // submitting an expired signature still cannot burn the signer's
+        // nonce slot.
+        if (block.timestamp > expiry) revert SignatureExpired();
+
         bytes32 domainSeparator = keccak256(
             abi.encode(
                 DOMAIN_TYPEHASH,
@@ -423,7 +474,6 @@ contract VeHemiVoteDelegation is ReentrancyGuardTransientUpgradeable, VeHemiDele
         if (_signer == address(0)) revert InvalidSignature();
         if (veHemi.ownerOf(delegator_) != _signer) revert NotOwner();
         if (nonce != nonces[_signer]++) revert InvalidNonce();
-        if (block.timestamp > expiry) revert SignatureExpired();
         _delegate(delegator_, delegatee_);
     }
 
@@ -626,6 +676,14 @@ contract VeHemiVoteDelegation is ReentrancyGuardTransientUpgradeable, VeHemiDele
         }
     }
 
+    /// @dev LOW-15 (2026-05-04 audit): `previousDelegationEnd_` is meaningful ONLY in the
+    ///      subtractive branch (`isDeltaPositive_ == false`), where it gates the
+    ///      "don't subtract an already-expired contribution" check. The additive branch
+    ///      ignores the parameter; current additive callers pass 0 unconditionally. The
+    ///      explicit revert below catches a future engineer who extends the additive
+    ///      branch to consult `previousDelegationEnd_` and forgets to update callers —
+    ///      without it, all existing additive sites would silently misbehave as if the
+    ///      previous delegation had expired at unix 0.
     function _calculateCheckpoint(
         DelegateCheckpoint memory previousCheckpoint_,
         address delegatee_,
@@ -636,7 +694,16 @@ contract VeHemiVoteDelegation is ReentrancyGuardTransientUpgradeable, VeHemiDele
         uint256 checkpointTimestamp_,
         uint256 previousDelegationEnd_
     ) private view returns (DelegateCheckpoint memory _newCheckpoint) {
-        // If this is the first checkpoint, create a new one and early return
+        if (isDeltaPositive_ && previousDelegationEnd_ != 0) {
+            revert AdditiveBranchExpectsZeroEnd();
+        }
+        // If this is the first checkpoint, create a new one and early return.
+        // MED-2 (2026-05-04 audit): an individual lock's slope is the
+        // amount/MAX_TIME quotient and structurally cannot approach uint64 max
+        // on its own (would require >2^64·MAX_TIME wei locked at once, which
+        // exceeds the entire HEMI supply many times over), so the toUint64
+        // here is safe in practice. The aggregate cap is enforced on the
+        // additive branch below.
         if (previousCheckpoint_.timestamp == 0) {
             return
                 DelegateCheckpoint({
@@ -656,8 +723,21 @@ contract VeHemiVoteDelegation is ReentrancyGuardTransientUpgradeable, VeHemiDele
 
         // Add or subtract the delta to the previous checkpoint
         if (isDeltaPositive_) {
+            // MED-2 (2026-05-04 audit): the aggregate per-delegate slope is
+            // stored as uint64 and saturates at uint64.max·MAX_TIME ≈ 2.328 B
+            // HEMI delegated to a single delegatee. Beyond that, SafeCast or
+            // Solidity's overflow check would revert with an opaque message;
+            // this explicit bound check produces a self-describing
+            // `DelegationSlopeOverflow` so wallets and indexers can surface
+            // the failure mode cleanly. Bias/amount have uint128 (checkpoint)
+            // and uint96 (expiration) ceilings that are unreachable given
+            // HEMI's circulating supply (uint96 ≈ 7.9×10^28 wei ≈ 79 B HEMI
+            // per bucket; uint128 is many orders of magnitude higher), so
+            // those casts continue to rely on SafeCast.
+            uint256 _newSlope = uint256(_newCheckpoint.normalizedSlope) + deltaSlope_;
+            if (_newSlope > type(uint64).max) revert DelegationSlopeOverflow();
             _newCheckpoint.normalizedBias += deltaBias_.toUint128();
-            _newCheckpoint.normalizedSlope += deltaSlope_.toUint64();
+            _newCheckpoint.normalizedSlope = uint64(_newSlope);
             _newCheckpoint.totalAmount += deltaAmount_.toUint128();
         } else {
             // only subtract the weight from this tokenID if it has not already expired
@@ -1004,7 +1084,15 @@ contract VeHemiVoteDelegation is ReentrancyGuardTransientUpgradeable, VeHemiDele
         // Calculations
         Expiration memory _expiration = expiredDelegations[newDelegatee_][delegatorVeLockInfo_.end];
         _expiration.bias += delegatorVeLockInfo_.bias.toUint96();
-        _expiration.slope += delegatorVeLockInfo_.slope.toUint64();
+        // MED-2 (2026-05-04 audit): explicit overflow check so the failure
+        // mode mirrors the `_calculateCheckpoint` additive guard — the
+        // aggregate slope expiring at `delegatorVeLockInfo_.end` shares the
+        // same uint64 ceiling as the per-delegate checkpoint slope.
+        {
+            uint256 _newExpSlope = uint256(_expiration.slope) + delegatorVeLockInfo_.slope;
+            if (_newExpSlope > type(uint64).max) revert DelegationSlopeOverflow();
+            _expiration.slope = uint64(_newExpSlope);
+        }
         _expiration.amount += delegatorVeLockInfo_.amount.toUint96();
 
         // Effects

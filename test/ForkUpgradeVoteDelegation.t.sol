@@ -270,7 +270,10 @@ contract ForkUpgradeVoteDelegationTest is Test {
     function testForkDelegationSetTrustedAdapterPostUpgrade() public onlyFork {
         _upgradeDelegationProxy();
 
-        address newAdapter = makeAddr("newTrustedAdapter");
+        // LOW-5 (2026-05-04 audit): setTrustedAdapter rejects zero-code
+        // addresses, so the new adapter must be a real contract. Use the
+        // in-test MockAdapter stub (defined at the bottom of this file).
+        address newAdapter = address(new MockAdapter());
 
         // Only the VeHemi owner (Gnosis Safe on mainnet) can call.
         vm.prank(GNOSIS_SAFE);

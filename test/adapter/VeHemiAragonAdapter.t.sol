@@ -1119,9 +1119,12 @@ contract VeHemiAragonAdapterTest is Test {
     }
 
     function test_setTrustedAdapter_succeedsForOwner() public {
-        // address(this) is the veHemi owner (set in setUp via initialize)
+        // address(this) is the veHemi owner (set in setUp via initialize).
+        // LOW-5: setTrustedAdapter rejects zero-code addresses (EOAs), so the
+        // placeholder needs bytecode for the success path.
         address oldAdapter = delegation.trustedAdapter();
         address newAdapter = address(0xADA);
+        vm.etch(newAdapter, hex"60006000");
 
         vm.expectEmit(true, true, false, true);
         emit IVeHemiVoteDelegation.TrustedAdapterUpdated(oldAdapter, newAdapter);
@@ -1153,8 +1156,11 @@ contract VeHemiAragonAdapterTest is Test {
     function test_delegateAllFor_revertsForPreviousTrustedAdapter() public {
         _createLock(ALICE, 11e18, YEAR);
 
-        // Replace the trusted adapter with a new one
+        // Replace the trusted adapter with a new one. LOW-5 requires
+        // the candidate to be a contract; etch dummy bytecode at the
+        // placeholder address.
         address newAdapter = address(0xADA);
+        vm.etch(newAdapter, hex"60006000");
         delegation.setTrustedAdapter(newAdapter);
 
         // The old adapter should no longer be authorized

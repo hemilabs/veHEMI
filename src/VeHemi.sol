@@ -313,7 +313,16 @@ contract VeHemi is
      * @dev Returns true for: (a) positions created with transferable=true (transferableAfter == 0),
      *      or (b) non-transferable positions whose transferableAfter timestamp has been reached.
      *      Uses <= so the position becomes transferable AT the exact transferableAfter timestamp.
-     *      Note: returns true for non-existent/burned token IDs (transferableAfter defaults to 0).
+     *
+     *      LOW-6 (2026-05-04 audit): returns true for non-existent/burned token IDs
+     *      (`transferableAfter` defaults to 0). Internally harmless — `transferFrom`
+     *      reverts on `_ownerOf == 0` — but external consumers using `isTransferable`
+     *      as a membership test get the wrong answer. The audit-recommended
+     *      `_ownerOf(tokenId_) != address(0)` membership check was prototyped but
+     *      deferred from the audit-LOW bundle: VeHemi sits a few bytes below
+     *      EIP-170 with `optimizer_runs=1` and the additional SLOAD pushes the
+     *      runtime size over the limit. Belongs in a future hardening PR
+     *      alongside V3 library extraction that creates bytecode headroom.
      * @param tokenId_ The token ID
      * @return True if the token is transferable, false if still within non-transferability window
      */
@@ -1119,6 +1128,14 @@ contract VeHemi is
     ///      `_checkpointTimestamp` formula. If either constant changes in
     ///      VeHemiVoteDelegation, update this expression in lock-step.
     function _delegate(uint256 delegator_, address delegatee_) internal {
+        // LOW-16 (2026-05-04 audit): a bootstrap-window guard
+        // (`if address(voteDelegation) == address(0) emit-and-return`) was
+        // prototyped here but DEFERRED from this bundle because VeHemi sits a
+        // few bytes from EIP-170 (24,576B) and the audit notes the window is
+        // already mitigated in practice by deploy-script ordering. The fix
+        // belongs in a future hardening PR paired with bytecode savings
+        // elsewhere in this contract (or in V3 once VeHemi is unfrozen for
+        // library extraction).
         // Delegation changes take effect at the next epoch boundary. If lock ends before that, skip delegation.
         // Example: User is increasing amount or transferring just before lock ends.
         uint256 _newDelegationStarts = ((block.timestamp / 1 hours) * 1 hours) + 1 hours;
