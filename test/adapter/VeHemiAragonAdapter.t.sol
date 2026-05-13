@@ -2124,6 +2124,608 @@ contract VeHemiAragonAdapterTest is Test {
         assertGt(delegation.getVotes(BOB), 0, "BOB should have votes");
         assertEq(delegation.getVotes(ALICE), 0, "ALICE should have 0 votes");
     }
+
+    // ─── MED-7 (2026-05-04 audit) ───────────────────────────────────────
+    //
+    // Per-tokenId `voteDelegation.delegate(tokenId, X)` on a multi-token
+    // owner moves only ONE token. The adapter MUST NOT emit
+    // `DelegateChanged(owner, prev, X)` in that case — it would falsely
+    // advertise an account-wide change and diverge from
+    // `adapter.delegates(owner)` (which returns address(0) for mixed states).
+    //
+    // The three following tests pin the corrected event behavior:
+    //
+    //   1. Multi-token owner does a per-tokenId delegate that leaves a
+    //      mixed state → adapter emits NO `DelegateChanged`.
+    //   2. Single-token owner does a per-tokenId delegate → adapter emits
+    //      `DelegateChanged(owner, prev, new)` once (account-wide truth).
+    //   3. `adapter.delegate(addr)` on a multi-token owner emits exactly
+    //      ONE `DelegateChanged(owner, prevAccountWide, newDelegate)` at
+    //      batch end (not N events) — preserves O(N) gas profile.
+
+    function test_MED7_perTokenDelegate_multiToken_skipsAdapterEmit() public {
+        // Alice owns 3 tokens, all self-delegated by default.
+        uint256 t1 = _createLock(ALICE, 11 ether, YEAR);
+        uint256 t2 = _createLock(ALICE, 11 ether, YEAR);
+        _createLock(ALICE, 11 ether, YEAR); // t3, kept self-delegated
+
+        // Pre-state: all three delegate to ALICE → consistent → delegates() == ALICE
+        assertEq(adapter.delegates(ALICE), ALICE, "pre: consistent self-delegation");
+
+        // Alice re-delegates ONLY t1 to BOB via the per-tokenId VVD path.
+        // This creates a mixed state (t1→BOB, t2→ALICE, t3→ALICE).
+        vm.recordLogs();
+        vm.prank(ALICE);
+        delegation.delegate(t1, BOB);
+        Vm.Log[] memory entries = vm.getRecordedLogs();
+
+        // Post-state: mixed.
+        assertEq(adapter.delegates(ALICE), address(0), "post: mixed state");
+
+        // MED-7 INVARIANT: no IVotes-shaped DelegateChanged from the adapter.
+        bytes32 ivotesDelegateChangedTopic = keccak256(
+            "DelegateChanged(address,address,address)"
+        );
+        for (uint256 i; i < entries.length; ++i) {
+            if (entries[i].emitter == address(adapter)) {
+                assertTrue(
+                    entries[i].topics.length == 0 ||
+                    entries[i].topics[0] != ivotesDelegateChangedTopic,
+                    "adapter must NOT emit DelegateChanged on mixed-state per-token call"
+                );
+            }
+        }
+
+        // Sanity: re-delegating t2 also goes to mixed-to-mixed (still skip).
+        vm.recordLogs();
+        vm.prank(ALICE);
+        delegation.delegate(t2, BOB);
+        entries = vm.getRecordedLogs();
+        for (uint256 i; i < entries.length; ++i) {
+            if (entries[i].emitter == address(adapter)) {
+                assertTrue(
+                    entries[i].topics.length == 0 ||
+                    entries[i].topics[0] != ivotesDelegateChangedTopic,
+                    "still mixed (t3 self-delegated) - adapter must not emit"
+                );
+            }
+        }
+        assertEq(adapter.delegates(ALICE), address(0), "still mixed");
+    }
+
+    function test_MED7_perTokenDelegate_singleToken_emitsAdapterEvent() public {
+        // Single-token owner: their per-tokenId delegate IS an account-wide
+        // change. Adapter should emit once with the correct toDelegate.
+        uint256 tokenId = _createLock(ALICE, 11 ether, YEAR);
+        assertEq(adapter.delegates(ALICE), ALICE, "pre: self-delegated default");
+
+        vm.recordLogs();
+        vm.prank(ALICE);
+        delegation.delegate(tokenId, BOB);
+        Vm.Log[] memory entries = vm.getRecordedLogs();
+
+        // Post-state: consistent at BOB.
+        assertEq(adapter.delegates(ALICE), BOB, "post: account-wide at BOB");
+
+        bytes32 ivotesDelegateChangedTopic = keccak256(
+            "DelegateChanged(address,address,address)"
+        );
+        bool sawAdapterEvent;
+        for (uint256 i; i < entries.length; ++i) {
+            if (
+                entries[i].emitter == address(adapter) &&
+                entries[i].topics.length >= 4 &&
+                entries[i].topics[0] == ivotesDelegateChangedTopic
+            ) {
+                // topic1 = delegator, topic2 = fromDelegate, topic3 = toDelegate
+                assertEq(
+                    address(uint160(uint256(entries[i].topics[1]))),
+                    ALICE,
+                    "delegator = ALICE"
+                );
+                assertEq(
+                    address(uint160(uint256(entries[i].topics[3]))),
+                    BOB,
+                    "toDelegate = BOB (account-wide)"
+                );
+                sawAdapterEvent = true;
+            }
+        }
+        assertTrue(sawAdapterEvent, "adapter MUST emit DelegateChanged for single-token account-wide change");
+    }
+
+    function test_MED7_adapterDelegate_multiToken_emitsExactlyOnce() public {
+        // Multi-token owner uses adapter.delegate(addr). Batch flag should
+        // suppress per-iter relays; adapter emits ONE consolidated event.
+        _createLock(ALICE, 11 ether, YEAR);
+        _createLock(ALICE, 11 ether, YEAR);
+        _createLock(ALICE, 11 ether, YEAR);
+
+        vm.recordLogs();
+        vm.prank(ALICE);
+        adapter.delegate(BOB);
+        Vm.Log[] memory entries = vm.getRecordedLogs();
+
+        bytes32 ivotesDelegateChangedTopic = keccak256(
+            "DelegateChanged(address,address,address)"
+        );
+        uint256 adapterEventCount;
+        for (uint256 i; i < entries.length; ++i) {
+            if (
+                entries[i].emitter == address(adapter) &&
+                entries[i].topics.length >= 4 &&
+                entries[i].topics[0] == ivotesDelegateChangedTopic
+            ) {
+                assertEq(
+                    address(uint160(uint256(entries[i].topics[1]))),
+                    ALICE,
+                    "delegator topic = ALICE"
+                );
+                // fromDelegate topic should be the pre-batch account-wide
+                // delegate (ALICE — self-delegated default for all 3 tokens).
+                assertEq(
+                    address(uint160(uint256(entries[i].topics[2]))),
+                    ALICE,
+                    "fromDelegate topic = ALICE (pre-batch account-wide)"
+                );
+                assertEq(
+                    address(uint160(uint256(entries[i].topics[3]))),
+                    BOB,
+                    "toDelegate topic = BOB"
+                );
+                adapterEventCount++;
+            }
+        }
+        assertEq(adapterEventCount, 1, "adapter MUST emit DelegateChanged exactly once per delegate(addr) call");
+        assertEq(adapter.delegates(ALICE), BOB, "post-batch consistent at BOB");
+    }
+
+    /// @notice MED-7 coverage: mixed → consistent re-alignment via per-tokenId calls.
+    ///         Three tokens land in a mixed state, then the user re-aligns the
+    ///         outlier with a single per-tokenId `delegate(tokenId, X)` call.
+    ///         That final call's `notifyDelegateChanged` post-state is
+    ///         consistent at BOB, so the adapter MUST emit exactly one
+    ///         IVotes-shaped `DelegateChanged(ALICE, _, BOB)` event.
+    function test_MED7_perTokenDelegate_mixedToConsistent_emitsAccountWide() public {
+        uint256 t1 = _createLock(ALICE, 11 ether, YEAR);
+        uint256 t2 = _createLock(ALICE, 11 ether, YEAR);
+        uint256 t3 = _createLock(ALICE, 11 ether, YEAR);
+
+        // Step 1: move t1 + t2 to BOB; t3 stays self-delegated → mixed.
+        vm.prank(ALICE);
+        delegation.delegate(t1, BOB);
+        vm.prank(ALICE);
+        delegation.delegate(t2, BOB);
+        assertEq(adapter.delegates(ALICE), address(0), "pre-consolidation: mixed (t3 still at ALICE)");
+
+        // Step 2: re-align t3 to BOB — the post-state is now consistent at BOB.
+        vm.recordLogs();
+        vm.prank(ALICE);
+        delegation.delegate(t3, BOB);
+        Vm.Log[] memory entries = vm.getRecordedLogs();
+
+        assertEq(adapter.delegates(ALICE), BOB, "post-consolidation: account-wide at BOB");
+
+        bytes32 ivotesDelegateChangedTopic = keccak256(
+            "DelegateChanged(address,address,address)"
+        );
+        uint256 adapterEventCount;
+        for (uint256 i; i < entries.length; ++i) {
+            if (
+                entries[i].emitter == address(adapter) &&
+                entries[i].topics.length >= 4 &&
+                entries[i].topics[0] == ivotesDelegateChangedTopic
+            ) {
+                assertEq(
+                    address(uint160(uint256(entries[i].topics[1]))),
+                    ALICE,
+                    "delegator topic = ALICE"
+                );
+                assertEq(
+                    address(uint160(uint256(entries[i].topics[3]))),
+                    BOB,
+                    "toDelegate topic = BOB (consolidated post-state)"
+                );
+                adapterEventCount++;
+            }
+        }
+        assertEq(adapterEventCount, 1, "consolidating final outlier must emit exactly ONE adapter DelegateChanged");
+    }
+
+    /// @notice MED-7 coverage: forfeit of one token from a multi-token owner
+    ///         leaves the other tokens still delegated to their original
+    ///         delegate. The post-state is MIXED (forfeited token at 0, others
+    ///         at BOB), so the adapter MUST NOT emit `DelegateChanged` from
+    ///         the relay path. (The address-shaped `DelegateVotesChanged` for
+    ///         the unbinding token is still relayed — only `DelegateChanged`
+    ///         is gated by the MED-7 consistency check.)
+    function test_MED7_forfeit_multiToken_skipsAdapterEmit() public {
+        veHemi.updateForfeitAdmin(address(this));
+
+        // Three forfeitable, non-transferable positions for ALICE.
+        hemiToken.mint(address(this), 30 ether);
+        hemiToken.approve(address(veHemi), 30 ether);
+        uint256 t1 = veHemi.createLockFor(10 ether, 2 * YEAR, ALICE, false, true);
+        uint256 t2 = veHemi.createLockFor(10 ether, 2 * YEAR, ALICE, false, true);
+        veHemi.createLockFor(10 ether, 2 * YEAR, ALICE, false, true); // t3, stays at ALICE (default self-delegated)
+
+        // Delegate t1 + t2 to BOB; t3 keeps the default self-delegation to ALICE.
+        // After this, account is MIXED (t1,t2 → BOB; t3 → ALICE).
+        vm.prank(ALICE);
+        delegation.delegate(t1, BOB);
+        vm.prank(ALICE);
+        delegation.delegate(t2, BOB);
+        uint256 delegationStarts = ((block.timestamp / CHECKPOINT_INTERVAL) * CHECKPOINT_INTERVAL) + CHECKPOINT_INTERVAL;
+        vm.warp(delegationStarts);
+
+        assertEq(adapter.delegates(ALICE), address(0), "pre-forfeit: mixed account state");
+
+        // Forfeit t1 — internally calls _delegate(t1, address(0)) which relays
+        // notifyDelegateChanged. Post-state: t1→0, t2→BOB, t3→ALICE — still mixed.
+        vm.recordLogs();
+        veHemi.forfeit(t1);
+        Vm.Log[] memory entries = vm.getRecordedLogs();
+
+        assertEq(adapter.delegates(ALICE), address(0), "post-forfeit: still mixed");
+
+        bytes32 ivotesDelegateChangedTopic = keccak256(
+            "DelegateChanged(address,address,address)"
+        );
+        bytes32 dvcTopic = keccak256("DelegateVotesChanged(address,uint256,uint256)");
+        bool sawAdapterDelegateChanged;
+        bool sawAdapterDvc;
+        for (uint256 i; i < entries.length; ++i) {
+            if (entries[i].emitter != address(adapter)) continue;
+            if (entries[i].topics.length == 0) continue;
+            if (entries[i].topics[0] == ivotesDelegateChangedTopic) {
+                sawAdapterDelegateChanged = true;
+            }
+            if (entries[i].topics[0] == dvcTopic) {
+                sawAdapterDvc = true;
+            }
+        }
+        assertFalse(
+            sawAdapterDelegateChanged,
+            "forfeit on multi-token mixed-state owner must NOT emit IVotes DelegateChanged from adapter"
+        );
+        // Sanity: the votes-change relay is independent of MED-7 gating and
+        // should still fire so indexers can refresh BOB's voting power.
+        assertTrue(sawAdapterDvc, "forfeit must still relay DelegateVotesChanged from adapter");
+    }
+
+    /// @notice MED-7 (M7R1-G2 / G16 follow-up): expired-but-unwithdrawn NFTs
+    ///         can leave `delegateAllFor` with a residual mixed state because
+    ///         `delegateAllFor` skips tokens whose `lock.end <= checkpointTs`.
+    ///         If the adapter emitted `DelegateChanged(_, _, delegatee)`
+    ///         unconditionally after the batch, the IVotes event would claim
+    ///         account-wide delegation that does not actually hold —
+    ///         `adapter.delegates(owner)` would still return `address(0)`
+    ///         (mixed). The post-batch recompute in `delegate(address)` must
+    ///         detect this and skip the emit.
+    function test_MED7_adapterDelegate_expiredStale_skipsEmit() public {
+        // ALICE locks a short-duration token, delegates it to BOB, lets it
+        // expire (NEVER withdraws), then mints a second long-duration token.
+        // She then calls adapter.delegate(CAROL) — only the active token
+        // moves to CAROL; the expired one keeps its stale delegations[id]
+        // pointing at BOB. Post-state is genuinely mixed.
+        uint256 shortDuration = 4 weeks;
+        uint256 shortTid = _createLock(ALICE, 11 ether, shortDuration);
+        vm.prank(ALICE);
+        delegation.delegate(shortTid, BOB);
+
+        // Warp past short-token's lock end so it's expired (but not withdrawn).
+        uint256 shortEnd = veHemi.getLockedBalance(shortTid).end;
+        vm.warp(shortEnd + 1 days);
+
+        // Mint a long-duration token AFTER the warp so it's active.
+        uint256 longTid = _createLock(ALICE, 11 ether, 2 * YEAR);
+        // longTid auto-self-delegates on mint (default). Stale: shortTid → BOB.
+        assertEq(delegation.delegation(shortTid).delegatee, BOB, "shortTid stale at BOB");
+        assertEq(delegation.delegation(longTid).delegatee, ALICE, "longTid self-delegated default");
+
+        // ALICE calls adapter.delegate(CAROL) — batches.
+        vm.recordLogs();
+        vm.prank(ALICE);
+        adapter.delegate(CAROL);
+        Vm.Log[] memory entries = vm.getRecordedLogs();
+
+        // delegateAllFor skipped shortTid (expired). longTid was moved to CAROL.
+        // Resulting state: shortTid → BOB (stale), longTid → CAROL → MIXED.
+        assertEq(delegation.delegation(shortTid).delegatee, BOB, "shortTid stays stale post-batch");
+        assertEq(delegation.delegation(longTid).delegatee, CAROL, "longTid moved to CAROL");
+        assertEq(adapter.delegates(ALICE), address(0), "delegates() returns 0 (mixed)");
+
+        // The adapter MUST NOT emit DelegateChanged in this case, otherwise
+        // the Aragon subgraph would think ALICE delegates to CAROL while the
+        // on-chain view says address(0) (mixed) — re-introducing the exact
+        // MED-7 divergence the fix is supposed to close.
+        bytes32 ivotesDelegateChangedTopic = keccak256(
+            "DelegateChanged(address,address,address)"
+        );
+        for (uint256 i; i < entries.length; ++i) {
+            if (entries[i].emitter == address(adapter)) {
+                assertTrue(
+                    entries[i].topics.length == 0 ||
+                    entries[i].topics[0] != ivotesDelegateChangedTopic,
+                    "adapter must NOT emit DelegateChanged when stale-expired records leave mixed post-state"
+                );
+            }
+        }
+
+        // Operator escape hatch: ALICE can withdraw the expired token to
+        // clear its stale delegation record (LOW-9 cleanup). After that, a
+        // retry of adapter.delegate(CAROL) should emit cleanly.
+        vm.prank(ALICE);
+        veHemi.withdraw(shortTid);
+
+        vm.recordLogs();
+        vm.prank(ALICE);
+        adapter.delegate(CAROL);
+        entries = vm.getRecordedLogs();
+
+        // Now ALICE has only longTid (already at CAROL). adapter.delegate
+        // re-affirms CAROL → consistent at CAROL → emit fires.
+        assertEq(adapter.delegates(ALICE), CAROL, "post-withdraw+retry: consistent at CAROL");
+        bool sawEmit;
+        for (uint256 i; i < entries.length; ++i) {
+            if (
+                entries[i].emitter == address(adapter) &&
+                entries[i].topics.length >= 4 &&
+                entries[i].topics[0] == ivotesDelegateChangedTopic
+            ) {
+                sawEmit = true;
+                assertEq(
+                    address(uint160(uint256(entries[i].topics[3]))),
+                    CAROL,
+                    "post-cleanup emit: toDelegate = CAROL"
+                );
+            }
+        }
+        assertTrue(sawEmit, "post-cleanup retry MUST emit DelegateChanged");
+    }
+
+    /// @notice MED-7 boundary: `adapter.delegate(addr)` on a caller who owns
+    ///         zero veHEMI positions. `_delegatesOf` returns `address(0)` both
+    ///         before and after (count == 0 early-return), `delegateAllFor`
+    ///         loops zero times. The post-state recompute is `address(0)` so
+    ///         the adapter MUST skip the `DelegateChanged` emit — otherwise
+    ///         the IVotes view would claim ALICE delegates to BOB while the
+    ///         on-chain `delegates(ALICE)` returns `address(0)`.
+    function test_MED7_adapterDelegate_zeroPositions_skipsEmit() public {
+        // Sanity: ALICE owns nothing.
+        assertEq(veHemi.balanceOf(ALICE), 0, "pre: zero positions");
+        assertEq(adapter.delegates(ALICE), address(0), "pre: delegates() == 0");
+
+        vm.recordLogs();
+        vm.prank(ALICE);
+        adapter.delegate(BOB);
+        Vm.Log[] memory entries = vm.getRecordedLogs();
+
+        // Post-state: still zero positions, delegates() still 0.
+        assertEq(adapter.delegates(ALICE), address(0), "post: delegates() still 0");
+
+        bytes32 ivotesDelegateChangedTopic = keccak256(
+            "DelegateChanged(address,address,address)"
+        );
+        for (uint256 i; i < entries.length; ++i) {
+            if (entries[i].emitter == address(adapter)) {
+                assertTrue(
+                    entries[i].topics.length == 0 ||
+                    entries[i].topics[0] != ivotesDelegateChangedTopic,
+                    "zero-positions caller must NOT trigger adapter DelegateChanged"
+                );
+            }
+        }
+    }
+
+    /// @notice MED-7 idempotency: a multi-token owner already consistent at
+    ///         BOB calls `adapter.delegate(BOB)` again. `delegateAllFor`
+    ///         re-writes each position's delegate (a no-op in semantic terms),
+    ///         and the post-state remains consistent at BOB. The adapter MUST
+    ///         emit exactly one `DelegateChanged(ALICE, BOB, BOB)` event —
+    ///         indexers may rely on idempotent re-affirmation signals to
+    ///         resync without diverging from `delegates(ALICE)`.
+    function test_MED7_adapterDelegate_idempotent_emitsConsistentAtSameTarget() public {
+        _createLock(ALICE, 11 ether, YEAR);
+        _createLock(ALICE, 11 ether, YEAR);
+        _createLock(ALICE, 11 ether, YEAR);
+
+        // First call: consolidate at BOB.
+        vm.prank(ALICE);
+        adapter.delegate(BOB);
+        assertEq(adapter.delegates(ALICE), BOB, "post-first: consistent at BOB");
+
+        // Second call: same target. Should still emit (fromDelegate = BOB,
+        // toDelegate = BOB) — consistent terminal case.
+        vm.recordLogs();
+        vm.prank(ALICE);
+        adapter.delegate(BOB);
+        Vm.Log[] memory entries = vm.getRecordedLogs();
+
+        assertEq(adapter.delegates(ALICE), BOB, "post-second: still at BOB");
+
+        bytes32 ivotesDelegateChangedTopic = keccak256(
+            "DelegateChanged(address,address,address)"
+        );
+        uint256 adapterEventCount;
+        for (uint256 i; i < entries.length; ++i) {
+            if (
+                entries[i].emitter == address(adapter) &&
+                entries[i].topics.length >= 4 &&
+                entries[i].topics[0] == ivotesDelegateChangedTopic
+            ) {
+                assertEq(
+                    address(uint160(uint256(entries[i].topics[1]))),
+                    ALICE,
+                    "delegator = ALICE"
+                );
+                assertEq(
+                    address(uint160(uint256(entries[i].topics[2]))),
+                    BOB,
+                    "fromDelegate = BOB (pre-state)"
+                );
+                assertEq(
+                    address(uint160(uint256(entries[i].topics[3]))),
+                    BOB,
+                    "toDelegate = BOB (idempotent re-affirmation)"
+                );
+                adapterEventCount++;
+            }
+        }
+        assertEq(adapterEventCount, 1, "idempotent re-affirmation MUST emit exactly one DelegateChanged");
+    }
+
+    // ─── M7R4-G14: consistency walk fuzz ────────────────────────────────
+
+    address constant DAVE = address(0xDadaDadadadadadaDaDadAdaDADAdadAdADaDADA);
+
+    /// @dev Pick a delegatee out of {ALICE, BOB, CAROL, DAVE} from a random byte.
+    function _pickDelegatee(uint8 sel) internal pure returns (address) {
+        uint8 mod = sel % 4;
+        if (mod == 0) return ALICE;
+        if (mod == 1) return BOB;
+        if (mod == 2) return CAROL;
+        return DAVE;
+    }
+
+    /// @dev Recompute `delegates(account)` purely from on-chain state, mirroring
+    ///      the adapter's `_delegatesOf` walk. Used as the oracle.
+    function _expectedDelegates(address account) internal view returns (address) {
+        uint256 count = veHemi.balanceOf(account);
+        if (count == 0) return address(0);
+        uint256 firstTid = veHemi.tokenOfOwnerByIndex(account, 0);
+        address first = delegation.delegation(firstTid).delegatee;
+        for (uint256 i = 1; i < count; i++) {
+            uint256 tid = veHemi.tokenOfOwnerByIndex(account, i);
+            if (delegation.delegation(tid).delegatee != first) return address(0);
+        }
+        return first;
+    }
+
+    /// @notice Fuzz the consistency walk under varied delegation states.
+    ///         1. Create 2-10 tokens for ALICE with random delegations across
+    ///            {ALICE, BOB, CAROL, DAVE}.
+    ///         2. Assert `adapter.delegates(ALICE)` matches the Solidity oracle
+    ///            computed via the same walk.
+    ///         3. For each subsequent per-token `delegation.delegate(tid, X)`
+    ///            call, assert that an adapter-emitted `DelegateChanged` fires
+    ///            iff the post-state is consistent (all tokens share the same
+    ///            delegatee), and is skipped otherwise.
+    function testFuzz_consistencyWalkVariedDelegations(
+        uint8 nSeed,
+        bytes32 delegSeed,
+        bytes32 mutationSeed
+    ) public {
+        uint256 n = (uint256(nSeed) % 9) + 2; // 2..10
+
+        // (1) Mint N tokens, each with an initial random delegation.
+        uint256[] memory tids = new uint256[](n);
+        for (uint256 i; i < n; i++) {
+            tids[i] = _createLock(ALICE, 10e18 + i * 1e18, 2 * YEAR);
+            uint8 sel = uint8(delegSeed[i % 32]);
+            address d = _pickDelegatee(sel);
+            // _createLock auto-delegates to ALICE; re-delegate to the random pick.
+            vm.prank(ALICE);
+            delegation.delegate(tids[i], d);
+        }
+
+        // (2) Oracle check: adapter walk == Solidity walk.
+        address expected = _expectedDelegates(ALICE);
+        assertEq(adapter.delegates(ALICE), expected, "adapter.delegates must match oracle walk");
+
+        // (3) Per-token mutations: for each random (token, target) pair,
+        // capture the post-state oracle prediction and assert event emission
+        // matches it precisely.
+        bytes32 ivotesDelegateChangedTopic = keccak256(
+            "DelegateChanged(address,address,address)"
+        );
+
+        for (uint256 step; step < n; step++) {
+            uint256 tidIdx = uint256(uint8(mutationSeed[step % 32])) % n;
+            uint256 tid = tids[tidIdx];
+            uint8 sel = uint8(mutationSeed[(step + 1) % 32]);
+            address target = _pickDelegatee(sel);
+
+            address preWide = _expectedDelegates(ALICE);
+
+            // Simulate the mutation against a local copy of delegatees to
+            // predict the post-state without actually applying it twice.
+            address oldDelegatee = delegation.delegation(tid).delegatee;
+
+            // Predict post-state by temporarily reading the chain, mutating
+            // our prediction, then comparing.
+            address predicted;
+            {
+                // Walk all tokens, substituting `target` for tid index.
+                uint256 count = veHemi.balanceOf(ALICE);
+                address first;
+                bool mixed;
+                for (uint256 j; j < count; j++) {
+                    uint256 jTid = veHemi.tokenOfOwnerByIndex(ALICE, j);
+                    address d = (jTid == tid) ? target : delegation.delegation(jTid).delegatee;
+                    if (j == 0) {
+                        first = d;
+                    } else if (d != first) {
+                        mixed = true;
+                        break;
+                    }
+                }
+                predicted = mixed ? address(0) : first;
+            }
+
+            vm.recordLogs();
+            vm.prank(ALICE);
+            delegation.delegate(tid, target);
+            Vm.Log[] memory entries = vm.getRecordedLogs();
+
+            // Count adapter-emitted IVotes DelegateChanged events.
+            uint256 adapterEmits;
+            address emittedFrom;
+            address emittedTo;
+            for (uint256 i; i < entries.length; i++) {
+                if (
+                    entries[i].emitter == address(adapter) &&
+                    entries[i].topics.length >= 4 &&
+                    entries[i].topics[0] == ivotesDelegateChangedTopic
+                ) {
+                    emittedFrom = address(uint160(uint256(entries[i].topics[2])));
+                    emittedTo = address(uint160(uint256(entries[i].topics[3])));
+                    adapterEmits++;
+                }
+            }
+
+            // Post-state oracle.
+            address postWide = _expectedDelegates(ALICE);
+            assertEq(postWide, predicted, "prediction must match on-chain post-state");
+
+            if (postWide == address(0)) {
+                // Mixed post-state -> adapter must skip the IVotes emission.
+                assertEq(
+                    adapterEmits,
+                    0,
+                    "adapter must NOT emit DelegateChanged on mixed post-state"
+                );
+            } else {
+                // Consistent post-state -> exactly one adapter emission, and
+                // its topics must reflect (preWide, postWide). Note: the
+                // delegation contract passes `oldDelegatee` of the mutated
+                // token as `fromDelegate`, NOT the account-wide preWide.
+                // The adapter forwards this as-is in `notifyDelegateChanged`.
+                assertEq(
+                    adapterEmits,
+                    1,
+                    "adapter must emit exactly one DelegateChanged on consistent post-state"
+                );
+                assertEq(emittedTo, postWide, "toDelegate must equal account-wide post-state");
+                assertEq(emittedFrom, oldDelegatee, "fromDelegate must equal mutated token's prior delegatee");
+            }
+
+            // Sanity: adapter.delegates view stays consistent with the walk.
+            assertEq(adapter.delegates(ALICE), postWide, "adapter.delegates must track walk");
+            // Silence unused-var warning when assertions above branch out.
+            preWide;
+        }
+    }
 }
 
 /// @dev Helper contract that always reverts on notify calls, for testing relay resilience.
