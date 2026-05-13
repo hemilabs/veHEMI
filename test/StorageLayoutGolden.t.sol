@@ -416,6 +416,8 @@ contract StorageLayoutGoldenTest is Test {
         _assertDelegationEntry(4, "4", "autoDelegate");
         _assertDelegationEntry(5, "5", "trustedAdapter");
         _assertDelegationEntry(6, "6", "__gapV2");
+        _assertDelegationEntry(7, "50", "migrationFinalized");
+        _assertDelegationEntry(8, "51", "__gapV3");
     }
 
     /// @dev Pin the critical types for the Aragon-added slots. A narrowing of
@@ -528,11 +530,14 @@ contract StorageLayoutGoldenTest is Test {
         assertEq(vm.parseJsonString(json, string.concat(idx, ".type")), typeStr, string.concat(label, ".type"));
     }
 
-    /// @dev VeHemiVoteDelegation has exactly 7 storage entries (6 named + 1 gap).
-    function test_VeHemiVoteDelegation_TotalSlotsExactly7() public {
+    /// @dev VeHemiVoteDelegation has exactly 9 storage entries (6 V1+V2 named +
+    ///      V2 gap + V3 named `migrationFinalized` + V3 gap).
+    function test_VeHemiVoteDelegation_TotalSlotsExactly9() public {
         uint256 count = _countStorageEntries(delegationJson, 16);
-        assertEq(count, 7, "VeHemiVoteDelegation must have exactly 7 storage entries");
+        assertEq(count, 9, "VeHemiVoteDelegation must have exactly 9 storage entries");
         _assertDelegationEntry(6, "6", "__gapV2");
+        _assertDelegationEntry(7, "50", "migrationFinalized");
+        _assertDelegationEntry(8, "51", "__gapV3");
     }
 
     function _assertDelegationEntry(

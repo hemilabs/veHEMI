@@ -362,8 +362,82 @@ contract VeHemi is
     }
 
     /**
-     * @notice Update the vote delegation contract address
-     * @param newVoteDelegation_ The new vote delegation contract address
+     * @notice Replace the vote delegation contract pointer.
+     *
+     * @dev    ⚠️ CRITICAL: this is a single-SSTORE pointer swap that performs
+     *         ZERO state migration. Every cached delegation (per-tokenId
+     *         `delegations[id]`, per-account `autoDelegate[owner]`,
+     *         `delegateCheckpoints[delegatee][]` history, slope-change
+     *         buckets, EIP-712 nonces, and `trustedAdapter`) lives entirely
+     *         inside the OLD VeHemiVoteDelegation proxy's storage. The NEW
+     *         contract starts empty. After this call:
+     *
+     *         1. `_reDelegate(tokenId)` reads the NEW contract, sees
+     *            `delegations[id].delegatee == address(0)`, and SILENTLY
+     *            SKIPS re-delegation (no event, no revert). Every voter's
+     *            stake is effectively undelegated until each user manually
+     *            calls `delegate()` on the new contract.
+     *
+     *         2. Aragon proposals snapshotted BEFORE this call read
+     *            `getPastVotes(voter, snapshotBlock)` against the NEW
+     *            (empty) contract and return 0 for every voter. In-flight
+     *            proposals can become unwinnable — even users who
+     *            re-delegate immediately after the swap cannot vote on
+     *            them, because the snapshot block is fixed in the past.
+     *            NOTE: `importDelegationsFromLegacy` builds FORWARD-ONLY
+     *            checkpoints starting at the next epoch boundary; it does
+     *            not back-fill historical `getPastVotes`. Pre-swap snapshot
+     *            queries are unrecoverable on the new contract.
+     *
+     *         3. The Aragon event relay (`notifyDelegateChanged`,
+     *            `notifyVotesChanged`) stops firing until `setTrustedAdapter`
+     *            is called on the new contract.
+     *
+     *         4. `autoDelegate[owner]` mappings are empty — users who had
+     *            "auto-delegate all future mints to X" lose that config.
+     *
+     *      ⚠️ MANDATORY OPERATOR RUNBOOK (single Gnosis Safe MultiSend):
+     *         1. Deploy the new VeHemiVoteDelegation proxy + implementation.
+     *         2. Snapshot every live (tokenId, delegatee) and (owner,
+     *            autoDelegate) pair from the OLD proxy off-chain (via
+     *            `VeHemiVoteDelegation.delegation(id)` and
+     *            `.autoDelegate(owner)` on the live OLD proxy).
+     *         3. Call `newVoteDelegation.importDelegationsFromLegacy(oldProxy,
+     *            tokenIds)` in paginated batches to replay the snapshot.
+     *            Recommended batch size: ≤ 150 tokenIds per call. Empirical
+     *            cost is ~165k gas/iter worst-case (cold checkpoint write +
+     *            slope-bucket update + two STATICCALLs), so 150 IDs ≈ 25M
+     *            gas — within Hemi's 30M block limit with ~5M headroom.
+     *            Multiple calls inside one MultiSend remain atomic, and
+     *            each call is idempotent.
+     *         4. Call `newVoteDelegation.importAutoDelegatesFromLegacy(
+     *            oldProxy, owners)` for the autoDelegate map.
+     *         5. Call `newVoteDelegation.setTrustedAdapter(adapter)` to
+     *            re-wire the Aragon event relay.
+     *         6. Call `newVoteDelegation.finalizeMigration()` to seal the
+     *            import path so no further state can be injected.
+     *         7. Call `veHemi.updateVoteDelegation(newProxy)` LAST — only
+     *            after steps 1–6 are complete in the SAME Safe MultiSend.
+     *
+     *      ⚠️ DO NOT call this function while Aragon proposals are in
+     *         flight (snapshotted but not yet executed). Wait for all
+     *         pending proposals to resolve, OR schedule the migration
+     *         during a deliberate governance freeze.
+     *
+     *      ⚠️ This function is a RECOVERY PRIMITIVE for when the deployed
+     *         VeHemiVoteDelegation proxy is irreparably broken. For routine
+     *         implementation changes, prefer the TransparentProxy upgrade
+     *         path which preserves all storage.
+     *
+     * @custom:audit HIGH-2 (2026-05-04 audit): pointer swap with no
+     *               migration. Mitigation: `importDelegationsFromLegacy`
+     *               + `importAutoDelegatesFromLegacy` on the new proxy
+     *               + this NatSpec warning + Safe MultiSend operator runbook.
+     *
+     * @param newVoteDelegation_ Address of the new VeHemiVoteDelegation
+     *        proxy. Must have its `delegations[]` / `autoDelegate[]` /
+     *        `trustedAdapter` already populated via the new contract's
+     *        import functions BEFORE this swap lands.
      */
     function updateVoteDelegation(IVeHemiVoteDelegation newVoteDelegation_) external onlyOwner {
         if (address(newVoteDelegation_) == address(0)) revert AddressIsNull();

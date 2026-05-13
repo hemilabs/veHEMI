@@ -48,6 +48,20 @@
       "offset": 0,
       "slot": "6",
       "type": "t_array(t_uint256)44_storage"
+    },
+    {
+      "contract": "src/VeHemiVoteDelegation.sol:VeHemiVoteDelegation",
+      "label": "migrationFinalized",
+      "offset": 0,
+      "slot": "50",
+      "type": "t_bool"
+    },
+    {
+      "contract": "src/VeHemiVoteDelegation.sol:VeHemiVoteDelegation",
+      "label": "__gapV3",
+      "offset": 0,
+      "slot": "51",
+      "type": "t_array(t_uint256)49_storage"
     }
   ],
   "types": {
@@ -76,6 +90,24 @@
       "label": "uint256[44]",
       "members": null,
       "numberOfBytes": "1408",
+      "value": null
+    },
+    "t_array(t_uint256)49_storage": {
+      "base": "t_uint256",
+      "encoding": "inplace",
+      "key": null,
+      "label": "uint256[49]",
+      "members": null,
+      "numberOfBytes": "1568",
+      "value": null
+    },
+    "t_bool": {
+      "base": null,
+      "encoding": "inplace",
+      "key": null,
+      "label": "bool",
+      "members": null,
+      "numberOfBytes": "1",
       "value": null
     },
     "t_mapping(t_address,t_address)": {

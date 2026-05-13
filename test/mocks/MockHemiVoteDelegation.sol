@@ -38,4 +38,19 @@ contract MockHemiVoteDelegation is IVeHemiVoteDelegation {
     function refreshVotingPower(address) external override {}
 
     function refreshVotingPowerBatch(address[] calldata) external override {}
+
+    // HIGH-2 migration interface stubs — mock VVD ignores migration calls.
+    function importDelegationsFromLegacy(
+        IVeHemiVoteDelegation, uint256[] calldata
+    ) external override {}
+
+    function importAutoDelegatesFromLegacy(
+        IVeHemiVoteDelegation, address[] calldata
+    ) external override {}
+
+    function finalizeMigration() external override {}
+
+    function migrationFinalized() external pure override returns (bool) {
+        return false;
+    }
 }

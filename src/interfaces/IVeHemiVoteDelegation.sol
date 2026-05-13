@@ -108,4 +108,40 @@ interface IVeHemiVoteDelegation {
     function refreshVotingPower(address delegatee_) external;
 
     function refreshVotingPowerBatch(address[] calldata delegatees_) external;
+
+    // ─── HIGH-2 mitigation: legacy state import ──────────────────────────
+
+    /// @notice Emitted when a legacy per-tokenId delegation is imported from
+    ///         an older VeHemiVoteDelegation contract into this one as part
+    ///         of an `updateVoteDelegation` migration.
+    event LegacyDelegationImported(
+        uint256 indexed tokenId, address indexed delegatee, address indexed legacy
+    );
+
+    /// @notice Emitted when a legacy `autoDelegate[owner]` value is imported.
+    event LegacyAutoDelegateImported(
+        address indexed owner, address indexed delegatee, address indexed legacy
+    );
+
+    /// @notice One-time flip to `true` when the migration window is sealed.
+    event MigrationFinalizedEvent();
+
+    /// @notice Replay per-tokenId delegations from a legacy VeHemiVoteDelegation
+    ///         contract into this contract's storage. Owner-only (the VeHemi
+    ///         owner). Idempotent. Reverts after `finalizeMigration()`.
+    function importDelegationsFromLegacy(
+        IVeHemiVoteDelegation legacy_, uint256[] calldata tokenIds_
+    ) external;
+
+    /// @notice Replay per-owner `autoDelegate` config from a legacy contract.
+    ///         Owner-only. Idempotent. Reverts after `finalizeMigration()`.
+    function importAutoDelegatesFromLegacy(
+        IVeHemiVoteDelegation legacy_, address[] calldata owners_
+    ) external;
+
+    /// @notice Permanently seal the import functions. One-way latch.
+    function finalizeMigration() external;
+
+    /// @notice Whether `finalizeMigration()` has been called.
+    function migrationFinalized() external view returns (bool);
 }

@@ -39,4 +39,24 @@ contract RevertingVoteDelegation is IVeHemiVoteDelegation {
     function refreshVotingPower(address) external override {}
 
     function refreshVotingPowerBatch(address[] calldata) external override {}
+
+    function importDelegationsFromLegacy(
+        IVeHemiVoteDelegation, uint256[] calldata
+    ) external pure override {
+        revert AlwaysReverts();
+    }
+
+    function importAutoDelegatesFromLegacy(
+        IVeHemiVoteDelegation, address[] calldata
+    ) external pure override {
+        revert AlwaysReverts();
+    }
+
+    function finalizeMigration() external pure override {
+        revert AlwaysReverts();
+    }
+
+    function migrationFinalized() external pure override returns (bool) {
+        return false;
+    }
 }

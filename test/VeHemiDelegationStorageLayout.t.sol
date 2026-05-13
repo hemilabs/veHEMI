@@ -204,22 +204,33 @@ contract VeHemiDelegationStorageLayoutTest is Test {
     }
 
     // =========================================================================
-    // Gap integrity: __gapV2[44] occupies slots 6–49.
+    // Gap integrity: __gapV2[44] occupies slots 6–49; V3 latch sits at slot 50;
+    // __gapV3[49] occupies slots 51–99. On a fresh proxy all gap slots and the
+    // latch read as zero.
     // =========================================================================
 
     function test_gap_isClean() public view {
         for (uint256 i = 6; i <= 49; ++i) {
             bytes32 val = vm.load(delegationProxy, bytes32(i));
-            assertEq(val, bytes32(0), string.concat("Gap slot ", vm.toString(i), " is not zero"));
+            assertEq(val, bytes32(0), string.concat("V2 gap slot ", vm.toString(i), " is not zero"));
+        }
+        // V3 latch slot reads as false on a fresh proxy.
+        assertEq(vm.load(delegationProxy, bytes32(uint256(50))), bytes32(0), "V3 latch slot 50 is not zero");
+        // V3 gap slots.
+        for (uint256 i = 51; i <= 99; ++i) {
+            bytes32 val = vm.load(delegationProxy, bytes32(i));
+            assertEq(val, bytes32(0), string.concat("V3 gap slot ", vm.toString(i), " is not zero"));
         }
     }
 
-    function test_totalSlots_is50() public pure {
-        // 6 named slots + 44 gap = 50 total.
-        uint256 namedSlots = 6; // delegations, delegateCheckpoints, expiredDelegations,
-                                // nonces, autoDelegate, trustedAdapter
-        uint256 gapSlots = 44;
-        assertEq(namedSlots + gapSlots, 50, "Total delegation storage slots must be 50");
+    function test_totalSlots_is100() public pure {
+        // V1: 4 named (delegations, delegateCheckpoints, expiredDelegations, nonces)
+        // V2: 2 named (autoDelegate, trustedAdapter) + 44 gap
+        // V3: 1 named (migrationFinalized) + 49 gap
+        // Total reserved: 100 slots.
+        uint256 namedSlots = 4 + 2 + 1;
+        uint256 gapSlots = 44 + 49;
+        assertEq(namedSlots + gapSlots, 100, "Total delegation storage slots must be 100");
     }
 
     // =========================================================================

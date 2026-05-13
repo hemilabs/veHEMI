@@ -6,7 +6,8 @@ import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 import {IERC5267} from "@openzeppelin/contracts/interfaces/IERC5267.sol";
 import {IVeHemi} from "./interfaces/IVeHemi.sol";
-import {VeHemiDelegationStorageV2} from "./storage/VeHemiDelegationStorageV2.sol";
+import {IVeHemiVoteDelegation} from "./interfaces/IVeHemiVoteDelegation.sol";
+import {VeHemiDelegationStorageV3} from "./storage/VeHemiDelegationStorageV3.sol";
 import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
 
 /// @dev Minimal interface for reading VeHemi's Ownable2Step owner.
@@ -27,7 +28,7 @@ interface IAdapterNotify {
  * boundary and expire when the delegator's lock expires.
  * @dev Based on veFXS and veCRV delegation mechanism with adaptations for veHemi
  */
-contract VeHemiVoteDelegation is ReentrancyGuardTransientUpgradeable, VeHemiDelegationStorageV2, IERC5267 {
+contract VeHemiVoteDelegation is ReentrancyGuardTransientUpgradeable, VeHemiDelegationStorageV3, IERC5267 {
     using SafeCast for uint256;
     using SafeCast for int128;
     using SafeCast for int256;
@@ -74,6 +75,8 @@ contract VeHemiVoteDelegation is ReentrancyGuardTransientUpgradeable, VeHemiDele
     error CallerIsNotAuthorized();
     error NotTrustedAdapter();
     error NotVeHemiOwner();
+    error MigrationFinalizedError();
+    error LegacyAddressInvalid();
 
     modifier onlyAuthorized(uint256 tokenId_) {
         address _msgSender = msg.sender;
@@ -160,6 +163,153 @@ contract VeHemiVoteDelegation is ReentrancyGuardTransientUpgradeable, VeHemiDele
         address oldAdapter = trustedAdapter;
         trustedAdapter = adapter_;
         emit TrustedAdapterUpdated(oldAdapter, adapter_);
+    }
+
+    // ═════════════════════════════════════════════════════════════════════
+    //  HIGH-2 mitigation: legacy state import
+    //
+    //  When the VeHemi owner calls `veHemi.updateVoteDelegation(newVVD)`,
+    //  the pointer swap performs ZERO state migration — every voter's
+    //  cached delegation lives in the OLD VVD's storage and the NEW
+    //  contract starts empty. To prevent silent vote-zeroing, operators
+    //  MUST seed this contract from the legacy one BEFORE the swap.
+    //
+    //  Recommended operator runbook (single Gnosis Safe MultiSend):
+    //    1. Deploy new VVD proxy + impl.
+    //    2. Off-chain enumerate live (tokenId, delegatee) and
+    //       (owner, autoDelegate) pairs from the legacy contract.
+    //    3. `newVVD.importDelegationsFromLegacy(legacy, tokenIds)` in
+    //       paginated batches.
+    //    4. `newVVD.importAutoDelegatesFromLegacy(legacy, owners)`.
+    //    5. `newVVD.setTrustedAdapter(adapter)` to restore Aragon relay.
+    //    6. `newVVD.finalizeMigration()` to seal the import path.
+    //    7. `veHemi.updateVoteDelegation(newVVD)` to flip the pointer.
+    //
+    //  Sealing semantics:
+    //    `migrationFinalized` is a one-way latch (slot 50 in V3 storage).
+    //    Initially `false`; flipped by `finalizeMigration()`. Both import
+    //    functions check `!migrationFinalized` and revert with
+    //    `MigrationFinalizedError` once flipped. The latch can NOT be
+    //    cleared by any caller (including the owner) — preventing
+    //    post-migration state injection that would corrupt the
+    //    `getPastVotes` history for snapshots taken after finalize.
+    // ═════════════════════════════════════════════════════════════════════
+
+    /**
+     * @notice Replay per-tokenId delegations from a legacy VVD into this
+     *         contract. Owner-only. Idempotent (already-populated tokenIds
+     *         are skipped). Reverts after `finalizeMigration()`.
+     *
+     * @dev Each (tokenId, delegatee) is replayed via the normal `_delegate`
+     *      flow so checkpoint history begins building forward from this
+     *      block. Historical `getPastVotes` queries against this contract
+     *      for blocks BEFORE the import return zero — that is a fundamental
+     *      limitation of the pointer-swap model. Operators should schedule
+     *      the migration during a governance freeze (no in-flight
+     *      proposals) to avoid bricking active proposals.
+     *
+     *      Why not bypass `_delegate`? Replaying via `_delegate`:
+     *        (a) emits the standard `DelegateChanged` + `DelegateVotesChanged`
+     *            events so indexers see the import as ordinary delegation;
+     *        (b) re-runs the same slope/bias math used by future updates,
+     *            so the resulting checkpoint state is byte-identical to
+     *            what a fresh delegate() call would produce; (c) keeps
+     *            this function's storage-write surface tiny — the heavy
+     *            lifting lives in `_delegate`'s already-audited code.
+     *
+     * @param legacy_  The OLD VeHemiVoteDelegation contract to read from.
+     *                 MUST be non-zero. No check that it's the contract
+     *                 currently pointed at by `veHemi.voteDelegation()`,
+     *                 since this contract typically runs the import
+     *                 BEFORE the pointer swap.
+     * @param tokenIds_ Pagination cursor — token IDs to replay. Caller is
+     *                 responsible for enumeration; operator should run
+     *                 this function repeatedly in chunks until the full
+     *                 set is covered.
+     */
+    function importDelegationsFromLegacy(
+        IVeHemiVoteDelegation legacy_, uint256[] calldata tokenIds_
+    ) external {
+        if (msg.sender != IOwnable(address(veHemi)).owner()) revert NotVeHemiOwner();
+        if (migrationFinalized) revert MigrationFinalizedError();
+        if (address(legacy_) == address(0)) revert LegacyAddressInvalid();
+        if (address(legacy_) == address(this)) revert LegacyAddressInvalid();
+
+        uint256 n = tokenIds_.length;
+        // Compute next-epoch boundary once — matches the gate that
+        // `_getNormalizedLockedInfo` would apply on each call inside
+        // `_delegate`'s else branch. Pre-checking here lets us skip
+        // expired/empty locks BEFORE `_delegate` reverts the whole batch.
+        uint256 _nextCheckpoint = (((block.timestamp - EPOCH_OFFSET) / CHECKPOINT_INTERVAL) * CHECKPOINT_INTERVAL)
+            + CHECKPOINT_INTERVAL + EPOCH_OFFSET;
+        for (uint256 i; i < n; ++i) {
+            uint256 id = tokenIds_[i];
+            // Idempotency: skip tokenIds we've already imported / written.
+            if (delegations[id].delegatee != address(0)) continue;
+            Delegation memory legacyD = legacy_.delegation(id);
+            if (legacyD.delegatee == address(0)) continue;
+            // Skip locks that would cause `_getNormalizedLockedInfo` to revert
+            // (expired before next checkpoint, or burned/withdrawn). Their
+            // voting power is already 0; skipping is correct, not a loss.
+            IVeHemi.LockedBalance memory _lock = veHemi.getLockedBalance(id);
+            if (_lock.amount == 0) continue;
+            if (_lock.end <= _nextCheckpoint) continue;
+            // Replay via the standard delegation flow. Reads current
+            // locked state from veHemi for the (slope, bias, end) tuple.
+            _delegate(id, legacyD.delegatee);
+            emit LegacyDelegationImported(id, legacyD.delegatee, address(legacy_));
+        }
+    }
+
+    /**
+     * @notice Replay per-owner `autoDelegate` config from a legacy contract.
+     *         Owner-only. Idempotent. Reverts after `finalizeMigration()`.
+     *
+     * @dev Owner enumeration must happen off-chain (no on-chain owner
+     *      registry). Operators typically derive the owners set from the
+     *      ERC721 transfer history of the VeHemi NFT.
+     *
+     * @param legacy_ The OLD VeHemiVoteDelegation contract to read from.
+     * @param owners_ Pagination cursor — owner addresses to migrate.
+     */
+    function importAutoDelegatesFromLegacy(
+        IVeHemiVoteDelegation legacy_, address[] calldata owners_
+    ) external {
+        if (msg.sender != IOwnable(address(veHemi)).owner()) revert NotVeHemiOwner();
+        if (migrationFinalized) revert MigrationFinalizedError();
+        if (address(legacy_) == address(0)) revert LegacyAddressInvalid();
+        if (address(legacy_) == address(this)) revert LegacyAddressInvalid();
+
+        uint256 n = owners_.length;
+        for (uint256 i; i < n; ++i) {
+            address o = owners_[i];
+            if (o == address(0)) continue;
+            if (autoDelegate[o] != address(0)) continue; // idempotent
+            address t = legacy_.autoDelegate(o);
+            if (t == address(0)) continue;
+            autoDelegate[o] = t;
+            emit AutoDelegateSet(o, address(0), t);
+            emit LegacyAutoDelegateImported(o, t, address(legacy_));
+        }
+    }
+
+    /**
+     * @notice Permanently seal the import functions. Owner-only. One-way.
+     *
+     * @dev Called once, AFTER the legacy state import is complete and
+     *      BEFORE `veHemi.updateVoteDelegation(newVVD)` flips the pointer.
+     *      After this call, neither `importDelegationsFromLegacy` nor
+     *      `importAutoDelegatesFromLegacy` can ever run again, preventing
+     *      post-migration state injection that would corrupt the
+     *      `getPastVotes` history for snapshots taken after finalize.
+     *
+     *      Idempotent: a second call is a no-op. Does not emit on no-op.
+     */
+    function finalizeMigration() external {
+        if (msg.sender != IOwnable(address(veHemi)).owner()) revert NotVeHemiOwner();
+        if (migrationFinalized) return; // idempotent
+        migrationFinalized = true;
+        emit MigrationFinalizedEvent();
     }
 
     /**

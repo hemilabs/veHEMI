@@ -92,6 +92,23 @@ The V2.1 implementation upgrade fixes a stale-cache bug in the forfeit path:
 - **Indexer impact**: post-upgrade, near-expiry forfeits emit `DelegateChanged(id, prev, address(0))` and `DelegateVotesChanged` events from the Aragon adapter that pre-upgrade were silently dropped. Event signatures are unchanged; consumers that already handle the regular forfeit path will absorb the new cases automatically. No back-fill events are emitted for pre-upgrade stale records (they remain frozen and benign — the NFT is burned, so `ownerOf` reverts and downstream reads can gate on that).
 - **Tests**: regression coverage lives in `test/DelegationBehavior.t.sol` (3 boundary tests including a sub-hour sweep at `{1, 60, 3599, 3600, 3601}` seconds before lock end), `test/VeHemiForfeitableCurve.t.sol::test_Forfeit_JointAccountingDecrement` (per-accumulator exact-delta pin), and `test/adapter/VeHemiAragonAdapter.t.sol::test_relay_onForfeit_nearExpiry` (adapter relay liveness on the previously-buggy path). Fuzzed by `invariant_pastVotesImmutability` and `invariant_adapterRelayParity` in `test/Invariant.t.sol` (20 invariants × 1024 runs × 128 depth).
 
+### V2.1 Patch Notes (HIGH-2 Mitigation — updateVoteDelegation Safety)
+
+The V2.1 implementation also addresses audit finding HIGH-2: `VeHemi.updateVoteDelegation` is a single-SSTORE pointer swap that performs zero state migration. Calling it on a freshly-deployed `VeHemiVoteDelegation` proxy silently zeros every voter's stake, breaks in-flight Aragon proposals, and severs the event-relay path until each user manually re-delegates. The mitigation has three parts:
+
+- **Strong NatSpec warning** on `VeHemi.updateVoteDelegation` documenting the silent-orphaning failure mode, the in-flight-proposal brick risk, and the mandatory operator runbook. Operators reading the source see the exact pre-flight checklist (deploy new VVD → snapshot → import → seal → swap).
+- **State-migration tooling on `VeHemiVoteDelegation`** (new `VeHemiDelegationStorageV3` chain at slot 50):
+  - `importDelegationsFromLegacy(legacy, tokenIds)` — owner-only (VeHemi owner). Reads `delegation(id)` from the legacy VVD and replays it via `_delegate` so checkpoint history begins building forward in the new contract. Idempotent. Emits `LegacyDelegationImported`.
+  - `importAutoDelegatesFromLegacy(legacy, owners)` — same pattern for `autoDelegate` mappings. Emits `AutoDelegateSet` + `LegacyAutoDelegateImported`.
+  - `finalizeMigration()` — one-way latch sealing the import path. After this call, the import functions revert permanently with `MigrationFinalizedError`, preventing any post-migration state injection that would corrupt future `getPastVotes` history.
+- **Mandatory Safe MultiSend operator runbook** (encoded in NatSpec on `updateVoteDelegation`): the new VVD's `importDelegationsFromLegacy` + `importAutoDelegatesFromLegacy` + `setTrustedAdapter` + `finalizeMigration` must all execute in the **same Safe MultiSend** as the final `veHemi.updateVoteDelegation(newVVD)` call. This makes the migration atomic from chain-state's perspective — no window where the new VVD is empty and live.
+- **Tests**: end-to-end runbook coverage in `test/HIGH2_LegacyImport.t.sol` (28 tests), including:
+  - `test_endToEndMigrationRunbook_preservesVotes` — full operator flow → delegate votes preserved post-swap
+  - `test_withoutImport_swapZerosVotes_documentedBug` — proves the original HIGH-2 bug AND that operators who skip the import path lose state
+  - Idempotency, access control (only VeHemi owner), legacy-address validation, finalize semantics, post-finalize reverts
+- **Bytecode impact**: zero on VeHemi (NatSpec only). VeHemiVoteDelegation grew from 14,185B to 16,364B (+2,179B), leaving an 8,212B EIP-170 margin (down from 10,391B pre-fix).
+- **Limitation (out-of-scope for V2)**: historical `getPastVotes` queries for blocks BEFORE the migration return zero on the new contract — the import replays delegations via `_delegate` which builds NEW checkpoints starting at the next epoch boundary. Operators MUST schedule the migration during a governance freeze (no in-flight proposals) to avoid bricking proposals whose snapshot block precedes the swap. The audit's strongest fix (full historical checkpoint copy) is deferred to V3 alongside the planned library extraction.
+
 ### Aragon Governance Integration
 
 The `VeHemiAragonAdapter` enables veHEMI to be used as the voting token for Aragon's TokenVoting plugin. The adapter is a stateless, immutable contract that translates veHEMI's per-NFT delegation model into the standard IVotes interface that Aragon expects.
