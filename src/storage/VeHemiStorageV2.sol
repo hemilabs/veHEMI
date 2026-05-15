@@ -78,21 +78,16 @@ abstract contract VeHemiStorageV2 is VeHemiStorageV1 {
     bool public seedingStarted;
 
     /// @notice `block.timestamp` at the moment `markSeedingStarted()` ran.
-    ///         INFORMATIONAL ONLY since the multi-block refactor — the prior
-    ///         single-block atomicity gate (`block.timestamp ==
-    ///         seedingStartedAt` in `_requireSeedingActive`) was removed
-    ///         because the catchup loop at Hemi mainnet scale (30K+
-    ///         non-transferable positions) cannot fit in one block.
-    ///         The field is retained for storage-layout compatibility and
-    ///         so off-chain monitors can observe when the window opened.
-    ///         Operators MUST drive `seedBatch` → `finalizeSeeding` to
-    ///         completion within hours of this timestamp to keep finalize
-    ///         ahead of any seeded position's `subEnd`. `_createLock`
-    ///         enforces a `2 * SIX_DAYS` minimum at mint; after the
-    ///         SIX_DAYS rounding in `unlockTime`, the worst-case floor is
-    ///         ~6 days (one bucket) for newly-minted positions, with the
-    ///         typical case closer to ~12 days. See `VeHemi.finalizeSeeding`
-    ///         NatSpec for the precise constraint.
+    ///         Informational only — exposes the window-open time to
+    ///         off-chain monitors. Operators MUST drive `seedBatch` →
+    ///         `finalizeSeeding` to completion within hours of this
+    ///         timestamp to keep finalize ahead of any seeded position's
+    ///         `subEnd`. `_createLock` enforces a `2 * SIX_DAYS` minimum
+    ///         at mint; after the SIX_DAYS rounding in `unlockTime`, the
+    ///         worst-case floor is ~6 days (one bucket) for newly-minted
+    ///         positions and ~12 days typical. See
+    ///         `VeHemi.finalizeSeeding` NatSpec for the precise
+    ///         constraint.
     uint64 public seedingStartedAt;
 
     /// @notice Exclusive upper bound on token IDs that `seedBatch` iterates.

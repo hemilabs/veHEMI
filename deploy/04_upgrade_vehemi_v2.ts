@@ -61,7 +61,7 @@ const VOTE_DELEGATION = "VeHemiVoteDelegation";
 //     position past its true expiry. MIN_LOCK_DURATION (~12 days) gives
 //     the operator a comfortable margin; do not wait days to finalize.
 //
-// ── LOW-10 (2026-05-04 audit): bundle with script 05 ──────────────────────
+// ── Bundle with script 05 ─────────────────────────────────────────────────
 // This script MUST be invoked in the same `hardhat deploy` run as script 05
 // (`05_aragon_adapter.ts`) so the adapter deployment + `setTrustedAdapter`
 // land in the SAME Safe MultiSend as the V2 upgrade. Splitting them creates

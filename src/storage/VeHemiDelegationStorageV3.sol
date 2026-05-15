@@ -13,7 +13,7 @@ import {VeHemiDelegationStorageV2} from "./VeHemiDelegationStorageV2.sol";
  *      slots 6–49) remain BYTE-IDENTICAL — V3's new field lands at the
  *      first slot AFTER V2's reserved range.
  *
- *      V3 additions (HIGH-2 mitigation — `updateVoteDelegation` migration tooling):
+ *      V3 additions (`updateVoteDelegation` migration tooling):
  *        - `migrationFinalized`: one-way latch flipped by `finalizeMigration()`.
  *          While `false`, the VeHemi owner may call `importDelegationsFromLegacy`
  *          and `importAutoDelegatesFromLegacy` to seed this contract from a

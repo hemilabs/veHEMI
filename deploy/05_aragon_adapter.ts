@@ -31,10 +31,10 @@ const IFACE_ID_ERC6372 = "0xda287a1d";
 //     hourly checkpoints, and setTrustedAdapter (script 04)
 //   - markSeedingStarted + seedBatch(...) + finalizeSeeding have run (script 04)
 //
-// ── LOW-10 (2026-05-04 audit): adapter-bootstrap window ───────────────────
-// The audit flagged that splitting scripts 04 and 05 into two separate Safe
-// proposals creates a window where the new VVD is live but `trustedAdapter`
-// is still `address(0)`. During the window:
+// ── Adapter-bootstrap window ──────────────────────────────────────────────
+// Splitting scripts 04 and 05 into two separate Safe proposals creates a
+// window where the new VVD is live but `trustedAdapter` is still
+// `address(0)`. During the window:
 //   - every `_delegate` notify hook is silently skipped
 //   - Aragon's subgraph sees ZERO DelegateChanged/DelegateVotesChanged events
 //     from the adapter address (on-chain state still mutates)
@@ -90,11 +90,12 @@ const func: DeployFunction = async function (hre) {
     }
     console.log("VeHemi.totalSupply:      ", totalSupply.toString());
 
-    // 3. LOW-10: ensure script 05 is bundled with script 04. If VVD is still
-    //    V1 on-chain, the V2 upgrade transaction (queued by script 04) MUST
-    //    already be in the Safe batch file from this same `hardhat deploy`
-    //    invocation. Otherwise we'd produce a standalone setTrustedAdapter
-    //    proposal that creates the adapter-bootstrap window the audit flagged.
+    // 3. Bundling enforcement: ensure script 05 runs with script 04. If VVD
+    //    is still V1 on-chain, the V2 upgrade transaction (queued by script
+    //    04) MUST already be in the Safe batch file from this same
+    //    `hardhat deploy` invocation. Otherwise we would produce a
+    //    standalone `setTrustedAdapter` proposal that opens the
+    //    adapter-bootstrap window described in the header.
     //
     //    Probe: call `trustedAdapter()` against the live VVD. If it reverts,
     //    VVD is still V1 (selector doesn't exist). If it returns, VVD is V2
@@ -119,7 +120,7 @@ const func: DeployFunction = async function (hre) {
         if (!batchHasContent) {
             throw new Error(
                 "\n" +
-                "[LOW-10 (2026-05-04 audit)] adapter-bootstrap window detected.\n" +
+                "Adapter-bootstrap window detected.\n" +
                 "\n" +
                 "FIX:   npx hardhat --network hemi deploy   (no `--tags` filter)\n" +
                 "\n" +
@@ -140,13 +141,12 @@ const func: DeployFunction = async function (hre) {
                 "FILES: deploy/04_upgrade_vehemi_v2.ts  (V2 upgrade + seeding)\n" +
                 "       deploy/05_aragon_adapter.ts    (this script)\n" +
                 "       deploy/99_safe-txs.ts          (MultiSend proposer)\n" +
-                "       helpers/safe.ts                (batch accumulator)\n" +
-                "       VeHemi_FinalAudit_2026-05-04.pdf  (LOW-10 finding)\n"
+                "       helpers/safe.ts                (batch accumulator)\n"
             );
         }
-        console.log("LOW-10 bundling:         OK (VVD V1 + Safe batch populated → bundled with 04)");
+        console.log("Bundling check:          OK (VVD V1 + Safe batch populated → bundled with 04)");
     } else {
-        console.log("LOW-10 bundling:         OK (VVD already V2 — 05 can run standalone safely)");
+        console.log("Bundling check:          OK (VVD already V2 — 05 can run standalone safely)");
     }
 
     console.log("");

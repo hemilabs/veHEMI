@@ -150,8 +150,8 @@ contract VeHemiAragonAdapter {
     }
 
     /// @dev Internal helper for `delegates(account)`. Factored out so
-    ///      `notifyDelegateChanged` (MED-7 mitigation) can call it without
-    ///      paying the external-call overhead of `this.delegates(account)`.
+    ///      `notifyDelegateChanged` can call it without paying the
+    ///      external-call overhead of `this.delegates(account)`.
     function _delegatesOf(address account) internal view returns (address) {
         uint256 count = _veHemi.balanceOf(account);
         if (count == 0) return address(0);
@@ -175,13 +175,14 @@ contract VeHemiAragonAdapter {
     ///      per-token `notifyDelegateChanged` emissions during the batch
     ///      so the IVotes-shaped `DelegateChanged` event fires exactly once
     ///      at the end of the batch (account-wide truth) rather than N times
-    ///      (per-token intermediate states). Required for MED-7 + preserving
-    ///      `delegateAllFor`'s O(N) gas profile. Cancun-only (EIP-1153).
+    ///      (per-token intermediate states). Preserves `delegateAllFor`'s
+    ///      O(N) gas profile. Requires Cancun (EIP-1153 transient storage).
     bool transient private _batchActive;
 
-    /// @notice Delegates ALL of the caller's veHEMI positions to the specified delegatee.
-    ///         Requires this adapter to be set as trustedAdapter on VeHemiVoteDelegation.
-    /// @dev MED-7 (2026-05-04 audit): emits a single account-wide
+    /// @notice Delegates ALL of the caller's veHEMI positions to the
+    ///         specified delegatee. Requires this adapter to be set as
+    ///         `trustedAdapter` on `VeHemiVoteDelegation`.
+    /// @dev Emits a single account-wide
     ///      `DelegateChanged(msg.sender, prevAccountWide, postAccountWide)`
     ///      after the batch settles. The transient batch flag suppresses
     ///      the per-token relay so indexers see exactly one IVotes event.
@@ -194,23 +195,22 @@ contract VeHemiAragonAdapter {
     ///      entry, consistent with the IVotes account-wide semantic.
     ///
     ///      `postAccountWide` is RECOMPUTED via `_delegatesOf` after the
-    ///      batch — NOT trusted to equal `delegatee`. Reason:
-    ///      `VeHemiVoteDelegation.delegateAllFor` deliberately skips expired
-    ///      and near-expiry tokens (those whose `lock.end <= checkpointTs`),
-    ///      so stale `delegations[tokenId]` records can remain after the
-    ///      batch. If the caller holds any such stale-expired NFT whose
-    ///      cached delegatee differs from `delegatee`, the post-batch state
-    ///      is genuinely mixed and `adapter.delegates(msg.sender)` returns
-    ///      `address(0)`. Emitting `DelegateChanged(_, _, delegatee)` in
-    ///      that case would falsely claim an account-wide change and
-    ///      re-introduce the very divergence MED-7 was designed to close.
-    ///      Skip the emission in the mixed case so the IVotes-derived
-    ///      subgraph view stays in lock-step with `delegates(msg.sender)`.
+    ///      batch — NOT trusted to equal `delegatee`.
+    ///      `VeHemiVoteDelegation.delegateAllFor` deliberately skips
+    ///      expired and near-expiry tokens (those whose
+    ///      `lock.end <= checkpointTs`), so stale `delegations[tokenId]`
+    ///      records can remain after the batch. If the caller holds any
+    ///      such stale-expired NFT whose cached delegatee differs from
+    ///      `delegatee`, the post-batch state is genuinely mixed and
+    ///      `adapter.delegates(msg.sender)` returns `address(0)`. Emitting
+    ///      `DelegateChanged(_, _, delegatee)` in that case would falsely
+    ///      claim an account-wide change, so the emission is skipped and
+    ///      the IVotes-derived subgraph view stays in lock-step with
+    ///      `delegates(msg.sender)`.
     ///
-    ///      Operator note: a caller can clear stale-expired records by
+    ///      Operator note: callers can clear stale-expired records by
     ///      calling `VeHemi.withdraw(tokenId)` on each expired position
-    ///      (which routes through LOW-9's per-token cleanup) before retrying
-    ///      `adapter.delegate(addr)`.
+    ///      before retrying `adapter.delegate(addr)`.
     function delegate(address delegatee) external {
         address prevAccountWide = _delegatesOf(msg.sender);
         _batchActive = true;
@@ -227,7 +227,7 @@ contract VeHemiAragonAdapter {
         // re-affirmation). OZ Votes' canonical `_delegate(account, delegatee)`
         // emits `DelegateChanged` unconditionally on entry, so subgraphs
         // and indexers treat the `from == to` case as a valid re-affirm
-        // signal. The MED-7 invariant we care about — adapter event in
+        // signal. The invariant we care about — adapter event in
         // lock-step with `delegates(msg.sender)` — holds either way.
         emit DelegateChanged(msg.sender, prevAccountWide, postAccountWide);
     }
@@ -266,29 +266,28 @@ contract VeHemiAragonAdapter {
     }
 
     /// @notice Called by VeHemiVoteDelegation to relay DelegateChanged events
-    ///         with the standard IVotes signature (address delegator, not uint256 tokenId).
-    /// @dev MED-7 (2026-05-04 audit) mitigation: the canonical IVotes
-    ///      `DelegateChanged` semantic asserts an ACCOUNT-WIDE delegation
-    ///      change. veHEMI's native delegation is per-tokenId, so a direct
-    ///      `voteDelegation.delegate(tokenId, X)` call from a multi-token
-    ///      owner only moves ONE token's worth of voting power — emitting
-    ///      the address-scoped `DelegateChanged(owner, prev, X)` in that
-    ///      case would falsely advertise an account-wide change and would
-    ///      diverge from `delegates(owner)` (which returns address(0) for
-    ///      mixed states).
+    ///         with the standard IVotes signature (address delegator, not
+    ///         uint256 tokenId).
+    /// @dev veHEMI's native delegation is per-tokenId, but the canonical
+    ///      IVotes `DelegateChanged` semantic asserts an ACCOUNT-WIDE
+    ///      delegation change. A direct
+    ///      `voteDelegation.delegate(tokenId, X)` from a multi-token owner
+    ///      moves only ONE token's voting power — emitting the address-
+    ///      scoped `DelegateChanged(owner, prev, X)` in that case would
+    ///      falsely advertise an account-wide change and diverge from
+    ///      `delegates(owner)` (which returns address(0) for mixed states).
     ///
-    ///      Fix: after every per-token notify, walk `delegator`'s positions
-    ///      once and check whether ALL are delegated to the same address
-    ///      (the resolved account-wide delegatee — possibly `address(0)`).
-    ///      Only emit `DelegateChanged` when the post-change state is
-    ///      consistent. Mixed-state changes (most per-tokenId calls from
-    ///      multi-token owners) are silently skipped, keeping the Aragon
-    ///      subgraph in lock-step with `delegates(delegator)`.
+    ///      This relay walks `delegator`'s positions once and checks
+    ///      whether ALL are delegated to the same address (the resolved
+    ///      account-wide delegatee — possibly `address(0)`). It emits
+    ///      `DelegateChanged` only when the post-change state is
+    ///      consistent. Mixed-state changes are silently skipped, keeping
+    ///      the Aragon subgraph in lock-step with `delegates(delegator)`.
     ///
     ///      `adapter.delegate(addr)` short-circuits this per-token relay
     ///      via the `_batchActive` transient flag (EIP-1153): the batch
     ///      entry point suppresses per-iteration emissions and emits ONE
-    ///      consolidated event after `delegateAllFor` settles. This
+    ///      consolidated event after `delegateAllFor` settles. That
     ///      preserves the O(N) gas profile of `delegateAllFor` (no O(N²)
     ///      mid-loop account-wide scans) while still firing the correct
     ///      IVotes event at batch end.
@@ -298,8 +297,7 @@ contract VeHemiAragonAdapter {
     ///        - multi-token owner who already had all tokens at `A` and
     ///          re-delegates one to `A` (no-op re-affirmation) → consistent
     ///        - forfeit/withdraw cleanup that clears the last/only token's
-    ///          delegation to `0` → consistent at `0` (per LOW-1 / LOW-9
-    ///          lifecycle signal)
+    ///          delegation to `0` → consistent at `0`
     function notifyDelegateChanged(address delegator, address fromDelegate, address toDelegate) external {
         require(msg.sender == address(_delegation()), "unauthorized");
 
@@ -310,7 +308,7 @@ contract VeHemiAragonAdapter {
         // Walk delegator's positions once. Three possible post-states:
         //   (a) zero positions          → emit DelegateChanged(_, fromDelegate, 0)
         //   (b) all match `firstDelegatee` (could be 0!) → emit DelegateChanged
-        //   (c) any two differ          → skip (mixed state, per MED-7)
+        //   (c) any two differ          → skip (mixed state)
         uint256 count = _veHemi.balanceOf(delegator);
         if (count == 0) {
             // Owner has no positions — account-wide truth is unambiguously

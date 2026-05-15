@@ -109,7 +109,7 @@ interface IVeHemiVoteDelegation {
 
     function refreshVotingPowerBatch(address[] calldata delegatees_) external;
 
-    // ─── HIGH-2 mitigation: legacy state import ──────────────────────────
+    // ─── Legacy state import ─────────────────────────────────────────────
 
     /// @notice Emitted when a legacy per-tokenId delegation is imported from
     ///         an older VeHemiVoteDelegation contract into this one as part
