@@ -132,45 +132,46 @@ contract SeedingFlowTest is Test {
         veHemi.markSeedingStarted();
     }
 
-    /// @notice DRIFT-VECTOR REGRESSION: if `finalizeSeeding` runs at a later
-    ///         block timestamp than `seedBatch` (i.e., the operator splits the
-    ///         flow across multiple blocks), positions whose `subEnd` falls in
-    ///         the gap window would write a slope-change entry that the
-    ///         post-finalize catchup walk never visits — the walk starts at
-    ///         the LockedPoint timestamp and only advances FORWARD.
-    ///         The fix enforces atomicity: every step (markSeedingStarted,
-    ///         every seedBatch, finalizeSeeding) must run at the same
-    ///         block.timestamp. Cross-block execution reverts.
-    function test_seedingFlow_revertsIfFinalizeAcrossBlockBoundary() public {
+    /// @notice MULTI-BLOCK REGRESSION: the single-block atomicity guard that
+    ///         previously gated `seedBatch`/`finalizeSeeding` has been removed
+    ///         (Hemi mainnet has 30K+ non-transferable positions, far beyond a
+    ///         single-block budget). Cross-block execution must now SUCCEED
+    ///         and produce totals identical to a single-block scan, as long
+    ///         as the immutability guards on non-transferable positions hold
+    ///         throughout the window.
+    function test_seedingFlow_multiBlock_finalizeAcrossBlockBoundary_succeeds() public {
         // Mint a short-lived non-transferable so subEnd is close.
-        _mintLocked(alice, LOCK_AMOUNT, LOCK_SHORT);
+        (, uint256 lockEnd) = _mintLocked(alice, LOCK_AMOUNT, LOCK_SHORT);
 
         veHemi.markSeedingStarted();
         veHemi.seedBatch(type(uint256).max);
 
-        // Warp forward — even one second past the mark timestamp.
-        vm.warp(block.timestamp + 1);
-
-        vm.expectRevert(VeHemi.SeedingInProgress.selector);
+        // Warp forward — multi-block finalize must succeed.
+        uint256 finalizeTs = block.timestamp + 1 hours;
+        vm.warp(finalizeTs);
         veHemi.finalizeSeeding();
+
+        // Decayed bias from finalize time forward, evaluated at the
+        // finalize timestamp.
+        uint256 slope = LOCK_AMOUNT / MAX_TIME;
+        uint256 expected = slope * (lockEnd - finalizeTs);
+        assertEq(
+            veHemi.nonTransferableTotalVeHemiSupplyAt(finalizeTs),
+            expected,
+            "multi-block finalize totals must match single-block math"
+        );
     }
 
-    /// @notice DRIFT-VECTOR REGRESSION (companion to
-    ///         `test_seedingFlow_revertsIfFinalizeAcrossBlockBoundary`
-    ///         above): the atomicity guard MUST fire from `seedBatch` as
-    ///         well as from `finalizeSeeding`. If only one of the two
-    ///         entry points enforces same-block execution, an operator
-    ///         splitting the flow could still write slope-changes at past
-    ///         subEnds — exactly the dead-storage bug the guard was
-    ///         introduced to prevent. Pins both call sites.
-    function test_seedingFlow_revertsIfSeedBatchAcrossBlockBoundary() public {
+    function test_seedingFlow_multiBlock_seedBatchAcrossBlockBoundary_succeeds() public {
         _mintLocked(alice, LOCK_AMOUNT, LOCK_SHORT);
 
         veHemi.markSeedingStarted();
         vm.warp(block.timestamp + 1);
 
-        vm.expectRevert(VeHemi.SeedingInProgress.selector);
+        // Multi-block seedBatch must succeed — the operator can run a
+        // catchup loop across many blocks at mainnet scale.
         veHemi.seedBatch(type(uint256).max);
+        assertEq(_progressLastProcessedId(), 1, "cursor advanced across block boundary");
     }
 
     // ─────────────────────────────────────────────────────────────────────
@@ -191,23 +192,30 @@ contract SeedingFlowTest is Test {
         veHemi.seedBatch(10);
     }
 
-    function test_seedBatch_revertsForNonOwner() public {
+    /// @notice PERMISSIONLESS: `seedBatch` may be called by any account once
+    ///         seeding is started. The cursor only advances monotonically and
+    ///         the per-iteration math is a deterministic read of immutable
+    ///         non-transferable position state — so the gas cost falls on the
+    ///         caller and no attacker can corrupt the accumulator. Keepers /
+    ///         community callers may help advance seeding without owner
+    ///         intervention.
+    function test_seedBatch_permissionlessCaller_succeeds() public {
+        _mintLocked(alice, LOCK_AMOUNT, LOCK_2Y);
         veHemi.markSeedingStarted();
+
         vm.prank(attacker);
-        vm.expectRevert(abi.encodeWithSignature("OwnableUnauthorizedAccount(address)", attacker));
-        veHemi.seedBatch(10);
+        veHemi.seedBatch(type(uint256).max);
+        assertEq(_progressLastProcessedId(), 1, "attacker-driven cursor advance succeeded");
     }
 
-    /// @notice ORDERING REGRESSION: a non-owner call BEFORE `markSeedingStarted`
-    ///         must revert with the OZ owner error, NOT with `SeedingNotStarted`.
-    ///         Pins that the `onlyOwner` modifier check fires before
-    ///         `_requireSeedingActive` is reached. A regression that reordered
-    ///         the checks (e.g., placed `onlyOwner` after the body) would still
-    ///         revert with `SeedingNotStarted` and pass `test_seedBatch_revertsForNonOwner`
-    ///         silently — this test forecloses that drift.
-    function test_seedBatch_revertsForNonOwner_beforeStart() public {
+    /// @notice PERMISSIONLESS PRE-START: a non-owner call BEFORE
+    ///         `markSeedingStarted` must revert with `SeedingNotStarted`
+    ///         (start-latch precondition), not with an owner error. The
+    ///         `onlyOwner` modifier on `seedBatch` was removed; ordering of
+    ///         remaining checks is verified here.
+    function test_seedBatch_revertsForAnyCaller_beforeStart() public {
         vm.prank(attacker);
-        vm.expectRevert(abi.encodeWithSignature("OwnableUnauthorizedAccount(address)", attacker));
+        vm.expectRevert(VeHemi.SeedingNotStarted.selector);
         veHemi.seedBatch(10);
     }
 
@@ -653,26 +661,22 @@ contract SeedingFlowTest is Test {
         veHemi.finalizeSeeding();
     }
 
-    /// @notice PRECEDENCE REGRESSION: when MULTIPLE error conditions hold
-    ///         simultaneously, `_requireSeedingActive` checks
-    ///         `lockedSeedingFinalized` → `seedingStarted` → block.timestamp
-    ///         IN THAT ORDER, then `finalizeSeeding` checks the cursor.
-    ///         So if the seeding window is open AND the cursor is incomplete
-    ///         AND we're cross-block, `SeedingInProgress` (the atomicity
-    ///         guard) MUST fire before `SeedingIncomplete`. Pins this order
-    ///         so a refactor that reorders the checks (e.g., placing the
-    ///         cursor check before the timestamp check) is caught.
-    function test_finalizeSeeding_atomicityErrorWinsOverIncomplete() public {
+    /// @notice INCOMPLETE-CURSOR REGRESSION: with the multi-block refactor,
+    ///         cross-block `finalizeSeeding` is allowed when the cursor is
+    ///         complete. If the cursor is INCOMPLETE, `SeedingIncomplete`
+    ///         must fire — the "latch does not unlatch until max position"
+    ///         property. Pins this so a future refactor that omits the
+    ///         completeness check would be caught.
+    function test_finalizeSeeding_incompleteCursor_revertsAcrossBlocks() public {
         _mintLocked(alice, LOCK_AMOUNT, LOCK_2Y);
         _mintLocked(bob, LOCK_AMOUNT, LOCK_2Y); // 2 mints; target == 3
 
         veHemi.markSeedingStarted(); // Cursor stays at 0 — incomplete.
 
-        vm.warp(block.timestamp + 1); // Cross-block — atomicity fails.
+        vm.warp(block.timestamp + 1); // Cross-block now allowed.
 
-        // Atomicity error has priority — must fire even though cursor is
-        // also incomplete.
-        vm.expectRevert(VeHemi.SeedingInProgress.selector);
+        // Cursor at 0, expected end at 2 — incomplete must surface.
+        vm.expectRevert(abi.encodeWithSelector(VeHemi.SeedingIncomplete.selector, 0, 2));
         veHemi.finalizeSeeding();
     }
 
@@ -686,19 +690,33 @@ contract SeedingFlowTest is Test {
         veHemi.finalizeSeeding();
     }
 
-    function test_finalizeSeeding_revertsForNonOwner() public {
+    /// @notice PERMISSIONLESS: `finalizeSeeding` may be called by any account
+    ///         once the cursor reaches `seedingTargetId - 1`. The completeness
+    ///         check (`SeedingIncomplete` revert) gates the latch flip, so a
+    ///         non-owner caller cannot prematurely finalize an incomplete
+    ///         seed. The resulting LockedPoint values are deterministic
+    ///         functions of the accumulator and `block.timestamp` — identical
+    ///         regardless of caller.
+    function test_finalizeSeeding_permissionlessCaller_succeeds() public {
+        _mintLocked(alice, LOCK_AMOUNT, LOCK_2Y);
         veHemi.markSeedingStarted();
+        // Permissionless seedBatch advances the cursor to completion.
         vm.prank(attacker);
-        vm.expectRevert(abi.encodeWithSignature("OwnableUnauthorizedAccount(address)", attacker));
+        veHemi.seedBatch(type(uint256).max);
+
+        // Permissionless finalizeSeeding flips the latch.
+        vm.prank(attacker);
         veHemi.finalizeSeeding();
+
+        assertTrue(veHemi.lockedSeedingFinalized(), "permissionless caller finalized the latch");
     }
 
-    /// @notice ORDERING REGRESSION (companion to
-    ///         `test_seedBatch_revertsForNonOwner_beforeStart`): pin that
-    ///         `onlyOwner` precedes `_requireSeedingActive` in `finalizeSeeding`.
-    function test_finalizeSeeding_revertsForNonOwner_beforeStart() public {
+    /// @notice PERMISSIONLESS PRE-START: a call BEFORE `markSeedingStarted`
+    ///         must revert with `SeedingNotStarted`, not an owner error.
+    ///         Verifies the order of checks now that `onlyOwner` is gone.
+    function test_finalizeSeeding_revertsForAnyCaller_beforeStart() public {
         vm.prank(attacker);
-        vm.expectRevert(abi.encodeWithSignature("OwnableUnauthorizedAccount(address)", attacker));
+        vm.expectRevert(VeHemi.SeedingNotStarted.selector);
         veHemi.finalizeSeeding();
     }
 
@@ -975,6 +993,412 @@ contract SeedingFlowTest is Test {
             veHemi.forfeitableTotalVeHemiSupply(),
             singleBatchForfeitable,
             "chunked result must match single batch for forfeitable"
+        );
+    }
+
+    // ═════════════════════════════════════════════════════════════════════
+    // MULTI-BLOCK PERMISSIONLESS SEEDING — regression coverage
+    //
+    // The single-block atomicity guard (`block.timestamp == seedingStartedAt`
+    // in `_requireSeedingActive`) was removed because at Hemi mainnet scale
+    // (~30K non-transferable positions) the catchup cannot fit in one block.
+    // The seeded totals must remain identical to a single-block execution as
+    // long as the immutability guards on non-transferable positions hold for
+    // the whole window. These tests pin that property under realistic
+    // multi-block flows.
+    // ═════════════════════════════════════════════════════════════════════
+
+    /// @notice Drive `seedBatch` across many blocks in small chunks. Compare
+    ///         the seeded subcurve against an oracle single-block execution
+    ///         at the SAME query timestamp (the oracle's post-finalize
+    ///         supply walk decays bias to the query time; the chunked
+    ///         materialization writes bias directly at the chunked finalize
+    ///         time). Both must agree at the common query timestamp.
+    function test_multiBlock_chunkedSeedingMatchesSingleBlockOracle() public {
+        // 8 mixed positions: locked + forfeitable.
+        for (uint256 i; i < 5; ++i) {
+            _mintLocked(_user(i), LOCK_AMOUNT, LOCK_2Y);
+        }
+        for (uint256 i; i < 3; ++i) {
+            _mintForfeitable(_user(100 + i), LOCK_AMOUNT, LOCK_2Y);
+        }
+
+        uint256 snap = vm.snapshotState();
+
+        // Oracle: single-block, single-batch. Record the finalize timestamp
+        // so the chunked path can match it for the assertion comparison.
+        veHemi.markSeedingStarted();
+        veHemi.seedBatch(type(uint256).max);
+        veHemi.finalizeSeeding();
+        // Pick a deterministic query time strictly after both flows would
+        // have finished, well inside every seeded position's subEnd.
+        uint256 queryTime = block.timestamp + 1 hours;
+        uint256 oracleLocked = veHemi.nonTransferableTotalVeHemiSupplyAt(queryTime);
+        uint256 oracleForfeitable = veHemi.forfeitableTotalVeHemiSupplyAt(queryTime);
+
+        vm.revertToState(snap);
+
+        // Multi-block: 2-id chunks, advancing the clock between each batch.
+        veHemi.markSeedingStarted();
+        for (uint256 step; step < 4; ++step) {
+            vm.warp(block.timestamp + 12); // simulate Hemi block cadence
+            vm.roll(block.number + 1);
+            veHemi.seedBatch(2);
+        }
+        // Final block: complete and finalize across yet another block.
+        vm.warp(block.timestamp + 12);
+        vm.roll(block.number + 1);
+        veHemi.seedBatch(type(uint256).max);
+        vm.warp(block.timestamp + 12);
+        vm.roll(block.number + 1);
+        veHemi.finalizeSeeding();
+
+        // Compare at the same query timestamp. The chunked finalize landed
+        // at a later wall-clock than the oracle's finalize, but both
+        // produce the same curve when evaluated at `queryTime` because
+        // (slope, subEnd) are immutable for every scanned position.
+        assertEq(
+            veHemi.nonTransferableTotalVeHemiSupplyAt(queryTime),
+            oracleLocked,
+            "multi-block locked supply must match single-block oracle at common query time"
+        );
+        assertEq(
+            veHemi.forfeitableTotalVeHemiSupplyAt(queryTime),
+            oracleForfeitable,
+            "multi-block forfeitable supply must match single-block oracle at common query time"
+        );
+    }
+
+    /// @notice Permissionless: a rotating cast of non-owner callers drives
+    ///         every step except `markSeedingStarted`. Latch must still flip
+    ///         and the seeded totals must be correct.
+    function test_multiBlock_permissionlessKeepersDriveSeed() public {
+        _mintLocked(alice, LOCK_AMOUNT, LOCK_2Y);
+        _mintLocked(bob, LOCK_AMOUNT, LOCK_2Y);
+        _mintLocked(carol, LOCK_AMOUNT, LOCK_2Y);
+
+        veHemi.markSeedingStarted();
+
+        // Three different non-owner keepers drive seedBatch, each in its own
+        // block.
+        address k1 = makeAddr("keeper1");
+        address k2 = makeAddr("keeper2");
+        address k3 = makeAddr("keeper3");
+
+        vm.warp(block.timestamp + 12);
+        vm.roll(block.number + 1);
+        vm.prank(k1);
+        veHemi.seedBatch(1);
+
+        vm.warp(block.timestamp + 12);
+        vm.roll(block.number + 1);
+        vm.prank(k2);
+        veHemi.seedBatch(1);
+
+        vm.warp(block.timestamp + 12);
+        vm.roll(block.number + 1);
+        vm.prank(k3);
+        veHemi.seedBatch(type(uint256).max);
+
+        // A fourth non-owner finalizes.
+        address k4 = makeAddr("keeper4");
+        vm.warp(block.timestamp + 12);
+        vm.roll(block.number + 1);
+        vm.prank(k4);
+        veHemi.finalizeSeeding();
+
+        assertTrue(veHemi.lockedSeedingFinalized(), "permissionless flow finalized the latch");
+        uint256 slope = LOCK_AMOUNT / MAX_TIME;
+        uint256 sumOfBiases =
+            slope * (veHemi.getLockedBalance(1).end - block.timestamp)
+            + slope * (veHemi.getLockedBalance(2).end - block.timestamp)
+            + slope * (veHemi.getLockedBalance(3).end - block.timestamp);
+        assertEq(
+            veHemi.nonTransferableTotalVeHemiSupply(),
+            sumOfBiases,
+            "permissionless multi-block totals match per-position oracle"
+        );
+    }
+
+    /// @notice The completeness latch: even with permissionless callers and
+    ///         arbitrary cross-block timing, `finalizeSeeding` MUST revert
+    ///         until the cursor reaches `seedingTargetId - 1`. This is the
+    ///         "latch does not unlatch until max position is reached"
+    ///         property — pinned across the worst caller / timing case.
+    function test_multiBlock_latchHoldsUntilCursorReachesTarget() public {
+        _mintLocked(alice, LOCK_AMOUNT, LOCK_2Y);
+        _mintLocked(bob, LOCK_AMOUNT, LOCK_2Y);
+        _mintLocked(carol, LOCK_AMOUNT, LOCK_2Y); // target == 4
+
+        veHemi.markSeedingStarted();
+        vm.warp(block.timestamp + 12);
+        vm.roll(block.number + 1);
+        vm.prank(attacker);
+        veHemi.seedBatch(1); // cursor at 1; need 3.
+
+        vm.warp(block.timestamp + 12);
+        vm.roll(block.number + 1);
+        vm.prank(attacker);
+        vm.expectRevert(abi.encodeWithSelector(VeHemi.SeedingIncomplete.selector, 1, 3));
+        veHemi.finalizeSeeding();
+
+        // Advance one more, still incomplete.
+        vm.prank(attacker);
+        veHemi.seedBatch(1); // cursor at 2; need 3.
+        vm.expectRevert(abi.encodeWithSelector(VeHemi.SeedingIncomplete.selector, 2, 3));
+        vm.prank(attacker);
+        veHemi.finalizeSeeding();
+
+        // Complete the scan; now finalize succeeds.
+        vm.prank(attacker);
+        veHemi.seedBatch(1); // cursor at 3.
+        vm.prank(attacker);
+        veHemi.finalizeSeeding();
+        assertTrue(veHemi.lockedSeedingFinalized(), "latch flips only after cursor reaches target");
+    }
+
+    /// @notice Adversary cannot lengthen the seed range mid-flow. The
+    ///         single-block guard previously made this trivially true; with
+    ///         multi-block seeding, the property must hold across the
+    ///         extended window.
+    function test_multiBlock_adversarialMintDuringWindow_blockedAndTargetFrozen() public {
+        _mintLocked(alice, LOCK_AMOUNT, LOCK_2Y);
+        _mintLocked(bob, LOCK_AMOUNT, LOCK_2Y);
+
+        veHemi.markSeedingStarted();
+        uint256 frozenTarget = veHemi.seedingTargetId();
+
+        // Mid-window: advance the clock, attacker tries non-transferable mint.
+        vm.warp(block.timestamp + 12);
+        vm.roll(block.number + 1);
+        vm.prank(attacker);
+        vm.expectRevert(VeHemi.SeedingInProgress.selector);
+        veHemi.createLockFor(LOCK_AMOUNT, LOCK_2Y, attacker, false, false);
+
+        // Later in the window: attacker retries with the forfeitable flag.
+        vm.warp(block.timestamp + 1 hours);
+        vm.roll(block.number + 100);
+        vm.expectRevert(VeHemi.SeedingInProgress.selector);
+        veHemi.createLockFor(LOCK_AMOUNT, LOCK_2Y, attacker, false, true);
+
+        // Range remains frozen at markSeedingStarted's snapshot.
+        assertEq(veHemi.seedingTargetId(), frozenTarget, "target unchanged across multi-block window");
+    }
+
+    /// @notice Adversary cannot mutate a seeded position mid-flow (the
+    ///         seedBatch math assumes (slope, subEnd) is immutable).
+    function test_multiBlock_adversarialMutationDuringWindow_blocked() public {
+        (uint256 nfId,) = _mintLocked(alice, LOCK_AMOUNT, LOCK_2Y);
+        (uint256 forfId,) = _mintForfeitable(bob, LOCK_AMOUNT, LOCK_2Y);
+        veHemi.updateForfeitAdmin(owner);
+
+        veHemi.markSeedingStarted();
+        vm.warp(block.timestamp + 12);
+        vm.roll(block.number + 1);
+
+        vm.startPrank(alice);
+        hemi.approve(address(veHemi), TOPUP_AMOUNT);
+        vm.expectRevert(VeHemi.SeedingInProgress.selector);
+        veHemi.increaseAmount(nfId, TOPUP_AMOUNT);
+        vm.expectRevert(VeHemi.SeedingInProgress.selector);
+        veHemi.increaseUnlockTime(nfId, LOCK_3Y);
+        vm.stopPrank();
+
+        vm.warp(block.timestamp + 1 days);
+        vm.roll(block.number + 1000);
+        vm.expectRevert(VeHemi.SeedingInProgress.selector);
+        veHemi.forfeit(forfId);
+    }
+
+    /// @notice Production-realistic timing: in real Hemi mainnet seeding,
+    ///         the entire multi-block window (markSeedingStarted →
+    ///         finalizeSeeding) completes in minutes-to-hours, far shorter
+    ///         than MIN_LOCK_DURATION (~12 days). Therefore no seeded
+    ///         position's `subEnd` falls inside the window. This test
+    ///         simulates a realistic 2-hour seeding window across many
+    ///         blocks and asserts the seeded totals match a single-block
+    ///         oracle when evaluated at a common future query time.
+    function test_multiBlock_realisticSeedingWindow_totalsConsistent() public {
+        // 10 non-transferable positions, all 2-year locks (the realistic
+        // bottom of the lock-duration distribution for governance use).
+        for (uint256 i; i < 10; ++i) {
+            _mintLocked(_user(i), LOCK_AMOUNT, LOCK_2Y);
+        }
+
+        uint256 snap = vm.snapshotState();
+
+        // Oracle: single-block flow.
+        veHemi.markSeedingStarted();
+        veHemi.seedBatch(type(uint256).max);
+        veHemi.finalizeSeeding();
+        // Query time well inside every position's subEnd, beyond any
+        // realistic seeding window.
+        uint256 queryTime = block.timestamp + 30 days;
+        uint256 oracle = veHemi.nonTransferableTotalVeHemiSupplyAt(queryTime);
+
+        vm.revertToState(snap);
+
+        // Multi-block: 1-id chunks across 10 blocks (simulates worst-case
+        // many-small-batches operator behavior), warping a realistic
+        // amount of wall-clock between batches.
+        veHemi.markSeedingStarted();
+        for (uint256 step; step < 10; ++step) {
+            vm.warp(block.timestamp + 12 minutes);
+            vm.roll(block.number + 100);
+            veHemi.seedBatch(1);
+        }
+        vm.warp(block.timestamp + 12 minutes);
+        vm.roll(block.number + 100);
+        veHemi.finalizeSeeding();
+
+        // Total elapsed: ~2 hours, still many days inside any subEnd.
+        assertEq(
+            veHemi.nonTransferableTotalVeHemiSupplyAt(queryTime),
+            oracle,
+            "realistic 2hr multi-block window matches single-block oracle"
+        );
+    }
+
+    /// @notice MULTI-BLOCK: a non-transferable position whose `subEnd` falls
+    ///         INSIDE the seeding window — i.e., the position is non-expired
+    ///         at `markSeedingStarted` (so `seedBatch` records its
+    ///         (slope, subEnd) and writes the slope-change at `subEnd`) but
+    ///         expires before `finalizeSeeding`, and the owner withdraws
+    ///         (burning the NFT) mid-window — must not corrupt the totals
+    ///         materialized at finalize.
+    ///
+    ///         The withdraw guard is intentionally absent (per VeHemi.sol's
+    ///         comment: "by the time a non-transferable position becomes
+    ///         withdrawable, `block.timestamp >= lock.end`... totals are
+    ///         insensitive to mid-window withdraws"). In production this
+    ///         scenario CANNOT occur because `MIN_LOCK_DURATION == 2 * SIX_DAYS
+    ///         ≈ 12 days` while realistic seeding windows are minutes-to-hours.
+    ///         But the contract MUST remain self-consistent if it does occur
+    ///         in a stressed test environment: per the documented constraint
+    ///         (VeHemi.sol L1377-L1391), the seeded subcurve carries the
+    ///         position past its true subEnd because the slope-change at
+    ///         `subEnd` was already written by `seedBatch` and the
+    ///         post-finalize walk starts at `tsFinal > subEnd` (so the
+    ///         walk never revisits that bucket).
+    ///
+    ///         Concretely we pin: with one short position (subEnd just inside
+    ///         the window) and one long position, the finalized
+    ///         `nonTransferableTotalVeHemiSupply` matches the closed-form
+    ///         `slope_long * (subEnd_long - tsFinal) + slope_short *
+    ///         (subEnd_short - tsFinal)` (the latter term is NEGATIVE — the
+    ///         carried short position over-decays the curve relative to a
+    ///         hypothetical "true" subcurve where it had been excluded). The
+    ///         long position's bias dominates so total stays positive.
+    ///
+    ///         A regression that started writing per-position state to the
+    ///         accumulator on withdraw (and therefore desynced the accumulator
+    ///         from `lockedSlopeChanges`) would diverge from this closed form.
+    function test_multiBlock_withdrawOfExpiredPositionMidWindow_doesNotCorruptTotals() public {
+        // Long-lived position so totals stay positive after the short position's
+        // negative contribution is added in.
+        (, uint256 longEnd) = _mintLocked(alice, LOCK_AMOUNT, LOCK_2Y);
+        // Short-lived position: 2*SIX_DAYS is the minimum lock duration. Its
+        // SIX_DAYS-rounded `lock.end` is roughly 12 days out.
+        (uint256 shortId, uint256 shortEnd) = _mintLocked(bob, LOCK_AMOUNT, LOCK_SHORT);
+
+        // Warp so the short position is STILL non-expired at markSeedingStarted
+        // (subEnd > block.timestamp) but only by a small margin — well inside
+        // a realistic multi-block seeding window.
+        vm.warp(shortEnd - 5 minutes);
+        assertGt(shortEnd, block.timestamp, "short position must be non-expired at mark time");
+
+        veHemi.markSeedingStarted();
+        veHemi.seedBatch(type(uint256).max);
+        // The short position WAS recorded (lock.end > block.timestamp at scan
+        // time): accumulator count == 2.
+        assertEq(_progressCount(), 2, "both positions recorded by seedBatch");
+
+        // Warp PAST the short position's subEnd. Now the owner can withdraw,
+        // which burns the NFT. The seedBatch-written accumulator and slope
+        // change at `shortEnd` are intentionally untouched (no withdraw-side
+        // accumulator mutation exists during seeding).
+        vm.warp(shortEnd + 1 hours);
+        vm.prank(bob);
+        veHemi.withdraw(shortId);
+        assertEq(veHemi.balanceOf(bob), 0, "withdraw burned the short position");
+
+        // Finalize at tsFinal > shortEnd. The materialized bias is
+        // `totalBias - totalSlope * tsFinal`, which after the short position's
+        // contribution is added equals
+        // `slope_long*(longEnd - tsFinal) + slope_short*(shortEnd - tsFinal)`.
+        // The second term is negative because tsFinal > shortEnd; the long
+        // position's positive term dominates.
+        veHemi.finalizeSeeding();
+
+        uint256 slope = LOCK_AMOUNT / MAX_TIME;
+        uint256 tsFinal = block.timestamp;
+        // Closed-form: signed sum of (subEnd - tsFinal)*slope for both seeded
+        // positions. Use int256 to handle the negative short-position term.
+        int256 expectedSigned = int256(slope) * (int256(longEnd) - int256(tsFinal))
+            + int256(slope) * (int256(shortEnd) - int256(tsFinal));
+        assertGt(expectedSigned, 0, "long-position bias must dominate the carry");
+        uint256 expected = uint256(expectedSigned);
+        assertEq(
+            veHemi.nonTransferableTotalVeHemiSupply(),
+            expected,
+            "withdraw of expired position mid-window must not corrupt finalized totals"
+        );
+
+        // Post-finalize, the supply walk steps forward in SIX_DAYS buckets
+        // and applies `lockedSlopeChanges`. The walk starts at `tsFinal`, so
+        // the (already-past) `lockedSlopeChanges[shortEnd]` write is NEVER
+        // revisited — i.e., the short position's slope is "carried" past its
+        // true subEnd until the bias clamps to 0. Pin this carry by querying
+        // a future timestamp slightly before the long position's subEnd and
+        // verifying the supply equals the closed-form carry result, NOT the
+        // "true" subcurve (which would be `slope*(longEnd - queryTs)` only).
+        uint256 queryTs = block.timestamp + 30 days;
+        // Closed-form post-walk: the walk consumes the slope-change at
+        // `longEnd` only if longEnd <= queryTs (it isn't — longEnd is 2y out).
+        // Between tsFinal and queryTs the active slope is `2*slope` (long +
+        // carried short). So the supply at queryTs is
+        //   bias_at_tsFinal - 2*slope*(queryTs - tsFinal)
+        // which is the closed-form continuation of the linear curve.
+        int256 carriedAtQuery = expectedSigned
+            - 2 * int256(slope) * (int256(queryTs) - int256(tsFinal));
+        // The carry can be positive or clamped to 0 by the walk's final
+        // `if (bias < 0) bias = 0`. With short ~12 days and long ~2 years,
+        // the 30-day query is well after the carry has driven bias positive
+        // (long term dominates).
+        assertGt(carriedAtQuery, 0, "long bias must still dominate at 30d query");
+        assertEq(
+            veHemi.nonTransferableTotalVeHemiSupplyAt(queryTs),
+            uint256(carriedAtQuery),
+            "post-finalize walk applies documented carry (no slope-change revisit)"
+        );
+    }
+
+    /// @notice A transferable mint inside the multi-block window is allowed
+    ///         (subcurve membership is non-transferable-only) and does NOT
+    ///         shift `seedingTargetId` (frozen at markSeedingStarted).
+    function test_multiBlock_transferableMintDuringWindow_allowedAndIgnoredByScan() public {
+        _mintLocked(alice, LOCK_AMOUNT, LOCK_2Y);
+        veHemi.markSeedingStarted();
+        uint256 frozenTarget = veHemi.seedingTargetId();
+
+        // Mid-window transferable mint: allowed, and the position lands
+        // OUTSIDE the seed range (id >= frozenTarget).
+        vm.warp(block.timestamp + 1 hours);
+        vm.roll(block.number + 1);
+        (uint256 tid,) = _mintTransferable(carol, LOCK_AMOUNT, LOCK_2Y);
+        assertGe(tid, frozenTarget, "transferable mint lands outside the frozen seed range");
+
+        // Complete and finalize. The transferable position contributes
+        // nothing to the locked subcurve.
+        veHemi.seedBatch(type(uint256).max);
+        veHemi.finalizeSeeding();
+
+        uint256 slope = LOCK_AMOUNT / MAX_TIME;
+        uint256 expected = slope * (veHemi.getLockedBalance(1).end - block.timestamp);
+        assertEq(
+            veHemi.nonTransferableTotalVeHemiSupply(),
+            expected,
+            "transferable mid-window mint must not affect locked subcurve"
         );
     }
 

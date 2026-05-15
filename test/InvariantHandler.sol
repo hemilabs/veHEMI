@@ -237,21 +237,22 @@ contract InvariantHandler is Test {
         maxWarp = MAX_ACCUMULATED_WARP;
     }
 
-    /// @dev Adversarial seeding probe: split the 3-phase flow across two
-    ///      handler ticks so that `block.timestamp` advances between
-    ///      `markSeedingStarted` and the subsequent `seedBatch` /
-    ///      `finalizeSeeding`. The atomicity guard in `_requireSeedingActive`
-    ///      MUST revert both follow-up calls with `SeedingInProgress`. If a
-    ///      future refactor weakens the guard (e.g., relaxes the timestamp
-    ///      check to `<=` or drops the check entirely), this probe surfaces
-    ///      the regression under fuzz instead of leaving it as a unit-test-
-    ///      only invariant.
+    /// @dev Multi-block seeding probe: open the window, advance time, drive
+    ///      a permissionless `seedBatch` from a non-admin caller, and then a
+    ///      permissionless `finalizeSeeding` (also cross-block). The
+    ///      single-block atomicity guard was removed in the multi-block
+    ///      refactor — cross-block execution MUST now succeed and the
+    ///      seeded totals must match a single-block scan.
     ///
-    ///      Side-effect-free: every path either no-ops or runs an expected
-    ///      revert and returns, so the handler's seeded/maxWarp state is
-    ///      untouched. The companion `seed()` path remains the only way to
-    ///      complete the flow legitimately.
-    function probeSeedingAtomicityRevert(uint256 mode) public {
+    ///      This probe pins three properties under fuzz:
+    ///        1. `seedBatch` is callable by ANY address (not just owner).
+    ///        2. `finalizeSeeding` is callable by ANY address.
+    ///        3. Cross-block execution produces a correctly-finalized latch.
+    ///
+    ///      Side-effect-free: snapshots VM state, runs the probe, then
+    ///      reverts. The companion `seed()` path remains the only way to
+    ///      complete the flow on the live invariant timeline.
+    function probeSeedingPermissionlessMultiBlock(uint256 mode) public {
         if (seeded) return;
         if (_lockedTokenIds.length == 0) return;
 
@@ -267,30 +268,33 @@ contract InvariantHandler is Test {
         }
         if (!anyEligible) return;
 
-        // Snapshot the entire VM state before the probe. Both
-        // `markSeedingStarted` (writes `seedingStarted` + `seedingStartedAt`)
-        // and the subsequent `vm.warp` would otherwise leak side-effects into
-        // later handler ticks — `seed()` would then revert at the next call
-        // because `block.timestamp != seedingStartedAt`. Snapshotting +
+        // Snapshot the entire VM state before the probe. The probe opens
+        // the seeding window and advances time, which would otherwise leak
+        // side-effects into later handler ticks. Snapshotting +
         // reverting keeps the probe truly side-effect-free.
         uint256 snap = vm.snapshotState();
 
         vm.prank(admin);
         veHemi.markSeedingStarted();
 
-        // Advance time to T + 1 (any positive delta breaks atomicity).
+        // Advance time to T + 1 (any positive delta exercises multi-block
+        // execution).
         vm.warp(block.timestamp + 1);
 
-        // The cross-block guard MUST fire on whichever follow-up the fuzz
-        // mode selects. Both `seedBatch` and `finalizeSeeding` route through
-        // `_requireSeedingActive`, so both branches assert the same revert.
+        // Pick a non-admin caller to prove permissionless semantics.
+        address keeper = address(uint160(0xBADBAD));
+
         if (mode % 2 == 0) {
-            vm.prank(admin);
-            vm.expectRevert(VeHemi.SeedingInProgress.selector);
+            // Path A: keeper drives both seedBatch and finalizeSeeding.
+            vm.prank(keeper);
             veHemi.seedBatch(type(uint256).max);
+            vm.prank(keeper);
+            veHemi.finalizeSeeding();
         } else {
+            // Path B: admin drives seedBatch, keeper drives finalizeSeeding.
             vm.prank(admin);
-            vm.expectRevert(VeHemi.SeedingInProgress.selector);
+            veHemi.seedBatch(type(uint256).max);
+            vm.prank(keeper);
             veHemi.finalizeSeeding();
         }
 

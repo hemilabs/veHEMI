@@ -8,11 +8,7 @@ const VOTE_DELEGATION = "VeHemiVoteDelegation";
 
 // ── Deployment documentation ───────────────────────────────────────────────
 // This script upgrades the veHEMI system to V2 (subcurves + Aragon support).
-// It bundles a sequence of transactions for the Gnosis Safe, executed
-// atomically as a single MultiSend. Step 4 (seedBatch) expands to N calls
-// depending on `nextTokenId / SEED_BATCH_SIZE`, so the total transaction
-// count is `4 + N`. All steps share the same `block.timestamp`, which the
-// atomicity guard in `_requireSeedingActive` requires.
+// It queues THREE transactions into the Safe MultiSend:
 //
 //   1. upgrade(VeHemiVoteDelegation proxy, new delegation impl) - upgrades the
 //      delegation contract to add hourly checkpoints, autoDelegate /
@@ -23,35 +19,47 @@ const VOTE_DELEGATION = "VeHemiVoteDelegation";
 //   2. upgrade(VeHemi proxy, new VeHemi V2 impl) - upgrades VeHemi to the V2
 //      implementation. NO initializer call. The V2 locked-curve functionality
 //      is gated behind `lockedSeedingFinalized` (defaults to false), so the
-//      contract behaves identically to V1 until step 5 runs.
+//      contract behaves identically to V1 until the seeding flow finishes.
 //
 //   3. markSeedingStarted() - opens the seeding window: snapshots the
 //      current `nextTokenId` into `seedingTargetId` and sets `seedingStarted`.
 //      While the window is open, `_createLock` rejects new non-transferable
-//      mints so the seeded set cannot drift. Reverts if already started or
-//      finalized.
+//      mints and `forfeit` / `increaseAmount` / `increaseUnlockTime` reject
+//      mutations on non-transferable positions, so the seeded set cannot
+//      drift. Reverts if already started.
+//
+// The remaining seeding steps run OUTSIDE the Safe MultiSend, via the
+// permissionless `seedBatch` and `finalizeSeeding` entry points (see
+// `scripts/run-seeding-loop.ts`):
 //
 //   4. seedBatch(N) [× as many times as needed] - iterates token IDs in
 //      [lastProcessedId + 1, seedingTargetId), accumulating slope/bias deltas
 //      and writing slope-change entries on the locked + forfeitable
-//      subcurves. The scan is on-chain — no off-chain list is trusted.
-//      Burned, transferable, expired, and already-mature positions are
-//      silently skipped. Each call advances the cursor monotonically; the
-//      caller picks the chunk size that fits the block gas limit.
+//      subcurves. Permissionless: any caller may drive the cursor. The
+//      cursor advances monotonically and the per-iteration math is a
+//      deterministic read of immutable non-transferable position state, so
+//      no attacker can corrupt the accumulator. At Hemi mainnet scale
+//      (~30K non-transferable positions) this step spans many blocks; the
+//      single-block atomicity guard was removed because the catchup loop
+//      cannot fit in one block.
 //
-//   5. finalizeSeeding() - requires the cursor to have reached
-//      `seedingTargetId - 1`, then advances the global epoch, writes the
-//      aggregate `LockedPoint`s for both subcurves, flips
-//      `lockedSeedingFinalized`, and clears the accumulator. Reverts if the
-//      scan is incomplete or already finalized.
+//   5. finalizeSeeding() - permissionless. Requires the cursor to have
+//      reached `seedingTargetId - 1` (the "latch does not unlatch until max
+//      position is reached" property). Then advances the global epoch,
+//      writes the aggregate `LockedPoint`s for both subcurves, flips
+//      `lockedSeedingFinalized`, and clears the accumulator.
 //
-// All `4 + N` transactions are saved to the Safe batch file so they execute
-// in a single multisig proposal. The 3-phase seeding flow (steps 3-5)
-// replaces the prior single-shot function that trusted a caller-supplied
-// token-ID array: the on-chain scan removes both the operator-drift footgun
-// and the adversarial front-run vector where someone could mint a
-// non-transferable position into the gap between off-chain list derivation
-// and Safe execution.
+// OPERATOR MANDATE:
+//   * Steps 1-3 are queued by this script into the Safe MultiSend.
+//   * Steps 4-5 are NOT in the MultiSend. After the Safe quorum approves
+//     and executes the MultiSend, run `scripts/run-seeding-loop.ts` from a
+//     funded EOA (deployer or any keeper) to drive seedBatch + finalize.
+//   * Complete steps 4-5 within hours of the Safe execution. The seeded
+//     totals are time-independent (slope, subEnd), but the materialized
+//     LockedPoint at finalize uses `block.timestamp`. If finalize lags
+//     past any seeded position's `subEnd`, the subcurve carries that
+//     position past its true expiry. MIN_LOCK_DURATION (~12 days) gives
+//     the operator a comfortable margin; do not wait days to finalize.
 //
 // ── LOW-10 (2026-05-04 audit): bundle with script 05 ──────────────────────
 // This script MUST be invoked in the same `hardhat deploy` run as script 05
@@ -69,25 +77,10 @@ const VOTE_DELEGATION = "VeHemiVoteDelegation";
 // check: if VVD is still V1 on-chain AND the Safe batch file is empty
 // when 05 starts, deployment aborts.
 
-// Maximum token IDs scanned per `seedBatch` call. Sized against the Hemi
-// 30M block gas limit with margin for low-density (mostly-burned or
-// mostly-transferable) ranges:
-//   - skip path  ≈ 2.2k–8.6k gas/ID (ownerOf + optional transferableAfter/locked SLOADs)
-//   - process path ≈ 55–60k gas/ID for a qualifying forfeitable position
-//     (4 SLOADs + 1–2 cold SSTOREs to lockedSlopeChanges / forfeitableSlopeChanges)
-// Density caveat: at ≥10% qualifying density, 5000 × (0.9 × 4.4k + 0.1 × 60k)
-// ≈ 50M — exceeds 30M. The current Hemi VeHemi has ~126 non-transferable
-// positions in ~30k IDs (< 0.5% density), well within budget. If the live
-// distribution shifts (e.g., a future V3 seeded onto a heavier deployment),
-// REDUCE this constant accordingly.
-//
-// OPERATOR MANDATE: Before signing the Safe proposal on mainnet, run
-// `./scripts/test-next-deployment-on-fork.sh` (or an equivalent fork
-// simulation) and confirm each `seedBatch` sub-call's gas estimate stays
-// under ~25M. If any batch approaches the cap, lower SEED_BATCH_SIZE here
-// and re-run. The +1 slack batch (see below) means lower values just
-// produce a few more no-op calls — never an `SeedingIncomplete` revert.
-const SEED_BATCH_SIZE = 5_000;
+// SEED_BATCH_SIZE was retired alongside the Safe-bundled seedBatch loop.
+// The post-Safe `scripts/run-seeding-loop.ts` runner picks its own chunk
+// size and drives `seedBatch` permissionlessly across as many blocks as
+// needed.
 
 const func: DeployFunction = async function (hre) {
     const { deployments, getNamedAccounts, network } = hre;
@@ -263,47 +256,23 @@ const func: DeployFunction = async function (hre) {
         await saveForSafeBatchExecution(multiSigMarkTx);
     }
 
-    // ── Step 4: Batched on-chain seed scan ─────────────────────────────────
-    // Resolve `nextTokenId` to compute how many `seedBatch` calls cover the
-    // range. Each call iterates up to SEED_BATCH_SIZE token IDs and writes
-    // slope-change entries for the non-transferable positions it accepts.
-    // The cursor advances monotonically; calling more times than needed is
-    // a structural no-op.
+    // ── Steps 4 & 5: deferred to post-Safe permissionless flow ─────────────
+    // `seedBatch` and `finalizeSeeding` are now permissionless. They run
+    // OUTSIDE the Safe MultiSend, via `scripts/run-seeding-loop.ts`, after
+    // the Safe quorum approves the MultiSend produced by this script.
+    // This split is required because the catchup loop at Hemi mainnet
+    // scale (30K+ non-transferable positions) cannot fit in a single
+    // Safe MultiSend transaction.
     const nextId = (await read(VE_HEMI, "nextTokenId")) as bigint;
-    // +1 slack batch: this script reads `nextTokenId` off-chain but the actual
-    // `seedingTargetId` is whatever `nextTokenId` is at MultiSend execution
-    // time. If positions are minted between this read and Safe execution, the
-    // off-chain count would be too small and `finalizeSeeding` would revert
-    // with `SeedingIncomplete`. Extra calls past the cursor are structural
-    // no-ops (`if (startId >= seedingTargetId) return;`), so the buffer is
-    // free gas and absorbs up to `SEED_BATCH_SIZE` worth of late mints.
-    const batches = Math.max(1, Math.ceil(Number(nextId) / SEED_BATCH_SIZE)) + 1;
-    console.log(`Seeding range: [1, ${nextId.toString()}); will queue ${batches} seedBatch call(s) of ${SEED_BATCH_SIZE} IDs each (+1 slack)`);
-
-    for (let i = 0; i < batches; i++) {
-        const seedBatchFunction = () =>
-            execute(VE_HEMI, { from: deployer, log: true }, "seedBatch", SEED_BATCH_SIZE);
-
-        const multiSigBatchTx = await catchUnknownSigner(seedBatchFunction, { log: true });
-
-        if (multiSigBatchTx) {
-            await saveForSafeBatchExecution(multiSigBatchTx);
-        }
-    }
-
-    // ── Step 5: Finalize ───────────────────────────────────────────────────
-    // Materializes the accumulated totals into `lockedGlobalPointHistory` +
-    // `forfeitableGlobalPointHistory`, flips `lockedSeedingFinalized`, and
-    // clears the accumulator. Reverts if the cursor did not reach
-    // `seedingTargetId - 1`.
-    const finalizeFunction = () =>
-        execute(VE_HEMI, { from: deployer, log: true }, "finalizeSeeding");
-
-    const multiSigFinalizeTx = await catchUnknownSigner(finalizeFunction, { log: true });
-
-    if (multiSigFinalizeTx) {
-        await saveForSafeBatchExecution(multiSigFinalizeTx);
-    }
+    console.log(
+        "\n=== Post-Safe seeding instructions ===\n" +
+        `Estimated seeding range: [1, ${nextId.toString()}) at queue time.\n` +
+        "After the Safe MultiSend executes, run:\n" +
+        "    npx hardhat --network hemi run scripts/run-seeding-loop.ts\n" +
+        "from a funded EOA to drive seedBatch + finalizeSeeding.\n" +
+        "Complete within hours of Safe execution; MIN_LOCK_DURATION " +
+        "(~12 days) gives margin but do not wait days.\n"
+    );
 };
 
 func.tags = ["VeHemiV2Upgrade"];

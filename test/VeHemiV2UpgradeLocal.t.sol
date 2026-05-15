@@ -402,19 +402,25 @@ contract VeHemiV2UpgradeLocalTest is Test {
         veHemi.finalizeSeeding();
     }
 
-    function test_SeedAndFinalize_OnlyOwner() public {
+    function test_SeedAccessControl() public {
         address attacker = makeAddr("attacker");
 
+        // `markSeedingStarted` remains owner-only — it snapshots
+        // `nextTokenId` into `seedingTargetId`, an operator decision.
         vm.prank(attacker);
         vm.expectRevert(abi.encodeWithSignature("OwnableUnauthorizedAccount(address)", attacker));
         veHemi.markSeedingStarted();
 
+        // `seedBatch` is permissionless after `markSeedingStarted`. Before
+        // start, it reverts with `SeedingNotStarted` regardless of caller.
         vm.prank(attacker);
-        vm.expectRevert(abi.encodeWithSignature("OwnableUnauthorizedAccount(address)", attacker));
+        vm.expectRevert(abi.encodeWithSignature("SeedingNotStarted()"));
         veHemi.seedBatch(100);
 
+        // `finalizeSeeding` likewise — permissionless, gated by start latch
+        // and (after start) by cursor completeness.
         vm.prank(attacker);
-        vm.expectRevert(abi.encodeWithSignature("OwnableUnauthorizedAccount(address)", attacker));
+        vm.expectRevert(abi.encodeWithSignature("SeedingNotStarted()"));
         veHemi.finalizeSeeding();
     }
 

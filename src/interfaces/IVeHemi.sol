@@ -134,7 +134,12 @@ interface IVeHemi is IERC721Enumerable {
     function seedBatch(uint256 maxIterations) external;
     function finalizeSeeding() external;
     function seedingStarted() external view returns (bool);
+    function seedingStartedAt() external view returns (uint64);
     function seedingTargetId() external view returns (uint256);
+    /// @notice Last token ID processed by `seedBatch`. Off-chain seeding drivers
+    ///         poll this to detect cursor completion without depending on the
+    ///         private `_seedingProgress` storage slot index.
+    function seedingCursor() external view returns (uint256);
     function nonTransferableTotalVeHemiSupply() external view returns (uint256);
     function nonTransferableTotalVeHemiSupplyAt(uint256 timestamp) external view returns (uint256);
     function forfeitableTotalVeHemiSupply() external view returns (uint256);

@@ -4525,52 +4525,52 @@ contract ForkUpgradeLockedCurveTest is Test {
     }
 
     // ═════════════════════════════════════════════════════════════════════
-    //  66. ATOMICITY GUARD UNDER FORKED STATE (N3-A2 follow-up)
+    //  66. MULTI-BLOCK PERMISSIONLESS SEEDING UNDER FORKED STATE
     // ═════════════════════════════════════════════════════════════════════
 
-    /// @notice Verify the atomicity guard fires on real Hemi state: if the
-    ///         Safe operator splits `markSeedingStarted` from `seedBatch` /
-    ///         `finalizeSeeding` across blocks, the cross-block calls MUST
-    ///         revert with `SeedingInProgress`. The unit-test coverage
-    ///         (`test_seedingFlow_revertsIfSeedBatchAcrossBlockBoundary`)
-    ///         already pins this against synthetic state; this test re-pins
-    ///         it against live mainnet positions to guard against the case
-    ///         where some real-state pathology makes the guard misfire.
-    ///
-    ///         If the Gnosis Safe MultiSend protocol-kit ever ships a
-    ///         change that decomposes the bundle into separate L2 txs (it
-    ///         currently does not — verified via N3-A16), the production
-    ///         deploy script's reliance on same-block execution would break
-    ///         silently. This test would still pass (the guard is intact),
-    ///         but the contract-side guarantee remains the load-bearing one.
-    function testAtomicityGuardAcrossBlocks_OnFork() public onlyFork {
+    /// @notice Verify the multi-block permissionless seeding flow against
+    ///         real Hemi state: `markSeedingStarted` opens the window at
+    ///         block T, an arbitrary keeper drives `seedBatch` across many
+    ///         blocks (in small chunks), and an arbitrary caller finalizes
+    ///         once the cursor is complete. The single-block atomicity guard
+    ///         was removed — Hemi mainnet has thousands of non-transferable
+    ///         positions, far beyond a single-block budget. The seeded
+    ///         totals must match a single-block execution; the latch only
+    ///         flips when the cursor reaches `seedingTargetId - 1`.
+    function testMultiBlockPermissionlessSeeding_OnFork() public onlyFork {
         _upgradeProxy();
 
-        // Open the seeding window at block T.
+        // Open the seeding window (owner-only).
         vm.prank(GNOSIS_SAFE);
         veHemi.markSeedingStarted();
 
-        // Operator-error: advance to T+1 before continuing.
-        _warpAndRoll(1);
+        // Drive seedBatch from a non-owner keeper across many blocks. Use
+        // a small chunk size to force the multi-call path. Cap the loop
+        // iterations defensively.
+        address keeper = address(uint160(0xC0FFEE));
+        uint256 chunk = 500;
+        uint256 maxLoops = 200; // Hemi fork has under 100k positions; cap is generous.
+        for (uint256 i; i < maxLoops; ++i) {
+            _warpAndRoll(1);
+            vm.prank(keeper);
+            veHemi.seedBatch(chunk);
+            // Probe by attempting finalize from a different caller. If
+            // SeedingIncomplete fires, loop again; otherwise the cursor is
+            // complete and we exit the loop having NOT advanced past
+            // finalize (the probe call reverted).
+            address probe = address(uint160(0xBADBAD));
+            vm.prank(probe);
+            try veHemi.finalizeSeeding() {
+                assertTrue(
+                    veHemi.lockedSeedingFinalized(), "latch flipped via permissionless flow"
+                );
+                return;
+            } catch {
+                // SeedingIncomplete — keep batching.
+            }
+        }
 
-        // seedBatch MUST revert.
-        vm.prank(GNOSIS_SAFE);
-        vm.expectRevert(VeHemi.SeedingInProgress.selector);
-        veHemi.seedBatch(type(uint256).max);
-
-        // finalizeSeeding MUST revert (even though no batches succeeded —
-        // the guard fires before the cursor-completeness check).
-        vm.prank(GNOSIS_SAFE);
-        vm.expectRevert(VeHemi.SeedingInProgress.selector);
-        veHemi.finalizeSeeding();
-
-        // The seeding window remains open but stuck. The contract has no
-        // on-chain recovery: `markSeedingStarted` reverts (latch set),
-        // `seedBatch`/`finalizeSeeding` revert (cross-block). Only a fresh
-        // implementation upgrade could clear `seedingStarted`. This is the
-        // failure mode the Safe MultiSend prevents by construction.
-        assertTrue(veHemi.seedingStarted(), "latch set");
-        assertFalse(veHemi.lockedSeedingFinalized(), "not finalized");
+        revert("seeding did not finalize within loop cap");
     }
 
     // ═════════════════════════════════════════════════════════════════════

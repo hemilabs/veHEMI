@@ -43,13 +43,19 @@ import {VeHemiStorageV2} from "./storage/VeHemiStorageV2.sol";
  *        - `forfeit` is bounded by `transferableAfter` rather than `lock.end`:
  *          once a position becomes transferable, the forfeit window closes
  *          (reverts `ForfeitWindowExpired`). Narrows the admin's window vs. V1.
- *        - Between `markSeedingStarted()` and `finalizeSeeding()` (typically a
- *          single block via Gnosis Safe MultiSend), `_createLock` for
- *          non-transferable positions, `forfeit`, and `increaseAmount` /
- *          `increaseUnlockTime` on non-transferable positions all revert with
- *          `SeedingInProgress`. Transferable positions are unaffected.
- *          Practical exposure on mainnet: one block, gated by the atomicity
- *          guard. Pending mempool txs in that block will revert and need re-broadcast.
+ *        - Between `markSeedingStarted()` and `finalizeSeeding()` (a multi-
+ *          block window: owner opens with `markSeedingStarted`, anyone drives
+ *          `seedBatch` until the cursor reaches `seedingTargetId - 1`, anyone
+ *          calls `finalizeSeeding`), `_createLock` for non-transferable
+ *          positions, `forfeit`, and `increaseAmount` / `increaseUnlockTime`
+ *          on non-transferable positions all revert with `SeedingInProgress`.
+ *          Transferable positions are unaffected. Practical exposure on
+ *          mainnet: minutes-to-hours at 30K+ position scale (one block per
+ *          batch of ~1-5k IDs); operators MUST drive the flow to completion
+ *          within hours of opening the window to keep finalize ahead of any
+ *          seeded position's `subEnd` (worst-case floor ~6 days after
+ *          SIX_DAYS rounding, ~12 days typical; see `finalizeSeeding`
+ *          NatSpec for the precise constraint).
  *        - `transferFrom` adds a `nonReentrant` modifier. Composed contracts
  *          that re-enter VeHemi from `onERC721Received` will revert; pure ERC-721
  *          receivers and callbacks that only read VeHemi state are unaffected.
@@ -1070,10 +1076,34 @@ contract VeHemi is
     }
 
     /// @dev Shared precondition check for seedBatch + finalizeSeeding. Factored
-    ///      out so the three SLOADs and three reverts only contribute their
-    ///      bytecode once. The atomicity check (`block.timestamp ==
-    ///      seedingStartedAt`) is critical: cross-block execution would leave
-    ///      slope-change entries at past subEnds as dead storage.
+    ///      out so the two SLOADs and two reverts only contribute their
+    ///      bytecode once.
+    ///
+    ///      Multi-block seeding: the prior single-block atomicity guard
+    ///      (`block.timestamp == seedingStartedAt`) has been REMOVED. At
+    ///      Hemi-mainnet scale (30K+ non-transferable positions) the catchup
+    ///      loop cannot complete in one block. The window now spans
+    ///      arbitrarily many blocks, gated only by the start-latch and the
+    ///      not-yet-finalized invariant. Cross-block correctness rests on
+    ///      THREE pre-existing immutability guards holding for every seeded
+    ///      position throughout the window:
+    ///        * `_createLock` rejects new non-transferable mints
+    ///          (`_requireSeedingNotActiveForNonTransferable(!transferable_)`),
+    ///        * `forfeit` / `increaseAmount` / `increaseUnlockTime` reject
+    ///          mutations on non-transferable positions
+    ///          (same guard at each entry point),
+    ///        * `withdraw` is unaffected: by the time a non-transferable
+    ///          position becomes withdrawable, `block.timestamp >= lock.end
+    ///          >= subEnd`, so its seeded bias has already decayed to zero
+    ///          via the `lockedSlopeChanges[subEnd]` write — the seeded
+    ///          totals are insensitive to mid-window withdraws.
+    ///      `transferableAfter[id]` is set once at mint and never updated.
+    ///      Therefore `(slope, subEnd)` is immutable for every scanned id
+    ///      between its `seedBatch` and `finalizeSeeding`; the time-
+    ///      independent accumulators (slope·subEnd, slope) remain valid
+    ///      regardless of how many blocks the scan spans, and the curve
+    ///      materialized at finalize time is `Σ slope·(subEnd − tsFinalize)`
+    ///      — identical to a single-block execution at `tsFinalize`.
     ///
     ///      CHECK ORDER (UX-driven; do NOT reorder without considering the
     ///      operator's diagnostic experience):
@@ -1083,9 +1113,6 @@ contract VeHemi is
     ///           the most informative error in that case.
     ///        2. `!seedingStarted` second — applies when someone calls the
     ///           batched entrypoints before `markSeedingStarted`.
-    ///        3. Atomicity check last — the cross-block scenario implies the
-    ///           latch is set and not yet finalized, so it's reached only
-    ///           after the first two filters fall through.
     ///
     ///      The impossible state `(finalized=true, started=false)` cannot
     ///      arise from honest execution: `finalizeSeeding` calls this
@@ -1096,7 +1123,6 @@ contract VeHemi is
     function _requireSeedingActive() internal view {
         if (lockedSeedingFinalized) revert SeedingAlreadyFinalized();
         if (!seedingStarted) revert SeedingNotStarted();
-        if (block.timestamp != seedingStartedAt) revert SeedingInProgress();
     }
 
     /// @dev Returns the auto-delegate target for an account, or the account itself
@@ -1163,25 +1189,30 @@ contract VeHemi is
      *         dropped from the seeded set.
      *
      *         Idempotent against accidental re-call: reverts with
-     *         `SeedingAlreadyStarted` once invoked. Also reverts after
-     *         finalization with `SeedingAlreadyFinalized`.
+     *         `SeedingAlreadyStarted` once invoked. The `seedingStarted`
+     *         latch is monotonic and never cleared, so the same revert
+     *         fires after finalization too.
      *
-     * @dev    LOAD-BEARING OPERATIONAL CONTRACT: this function MUST be called
-     *         as part of a single transaction (a Gnosis Safe MultiSend) that
-     *         also calls every `seedBatch(...)` and `finalizeSeeding()`. The
-     *         atomicity guard in `_requireSeedingActive` (`block.timestamp ==
-     *         seedingStartedAt`) lets later calls execute only at the same
-     *         timestamp; the `seedingStarted` latch set here is monotonic
-     *         and has no on-chain reset path. If an operator splits the
-     *         flow across blocks (e.g., submits `markSeedingStarted` in one
-     *         tx and `seedBatch` in another), every subsequent
-     *         `seedBatch`/`finalizeSeeding` reverts forever and new
-     *         non-transferable mints (via `_createLock`) stay blocked until
-     *         a fresh implementation upgrade clears the latch via storage
-     *         migration. Existing positions and transferable mints remain
-     *         unaffected. The deploy script `deploy/04_upgrade_vehemi_v2.ts`
-     *         enforces the single-tx requirement by construction; DO NOT
-     *         submit the seeding calls outside that MultiSend bundle.
+     * @dev    Multi-block operational contract. This call opens the seeding
+     *         window and is owner-only because it snapshots `nextTokenId`
+     *         into `seedingTargetId` (the scan upper bound). Once open, the
+     *         window stays open across blocks until `finalizeSeeding`
+     *         completes the scan. Within that window:
+     *           - new non-transferable mints are blocked (`_createLock`),
+     *           - non-transferable mutations are blocked (`forfeit`,
+     *             `increaseAmount`, `increaseUnlockTime`),
+     *           - `seedBatch(...)` and `finalizeSeeding()` are permissionless
+     *             so any keeper / community caller can advance the cursor
+     *             and finalize once the cursor reaches the target.
+     *
+     *         The `seedingStarted` latch is monotonic with no on-chain reset.
+     *         The window is closed exclusively by `finalizeSeeding` flipping
+     *         `lockedSeedingFinalized`, which in turn requires the cursor to
+     *         have reached `seedingTargetId - 1`. If a deployment somehow
+     *         opens the window without seeding to completion, the latch will
+     *         not flip and non-transferable mints stay blocked until an
+     *         implementation upgrade clears the state. Transferable mints
+     *         and existing positions are unaffected.
      */
     function markSeedingStarted() external onlyOwner {
         // The `seedingStarted` latch is set here and never cleared, so this
@@ -1189,13 +1220,28 @@ contract VeHemi is
         // re-calls (after finalize, `seedingStarted` is still true).
         if (seedingStarted) revert SeedingAlreadyStarted();
         seedingStarted = true;
-        // Snapshot block.timestamp so seedBatch + finalizeSeeding can enforce
-        // single-block atomicity. Solidity's implicit narrowing of
-        // block.timestamp to uint64 is safe (block.timestamp fits uint64 for
-        // ~584 billion years past epoch).
+        // `seedingStartedAt` is informational only after the multi-block
+        // refactor (no longer used as an atomicity gate). Retained for
+        // storage-layout compatibility and so off-chain monitors can
+        // observe when the window opened. Solidity's implicit narrowing of
+        // block.timestamp to uint64 is safe (block.timestamp fits uint64
+        // for ~584 billion years past epoch).
         seedingStartedAt = uint64(block.timestamp);
         seedingTargetId = nextTokenId;
         emit SeedingStarted(nextTokenId);
+    }
+
+    /**
+     * @notice Last token ID processed by `seedBatch`. Exposes the otherwise
+     *         internal `_seedingProgress.lastProcessedId` so off-chain
+     *         drivers (e.g., `scripts/run-seeding-loop.ts`) can detect
+     *         cursor completion without depending on a private storage
+     *         slot index.
+     * @return The most recently processed token ID, or 0 if no batches
+     *         have run yet.
+     */
+    function seedingCursor() external view returns (uint256) {
+        return _seedingProgress.lastProcessedId;
     }
 
     /**
@@ -1203,7 +1249,20 @@ contract VeHemi is
      *         processed cursor, accumulating slope/bias deltas for non-
      *         transferable positions and writing the matching slope-change
      *         entries on each subcurve.
-     * @dev Multiple calls advance the cursor monotonically; the function
+     * @dev Permissionless: any caller may advance the cursor. The cursor
+     *      monotonically advances and the per-iteration math is a
+     *      deterministic read of `(locked[id], transferableAfter[id],
+     *      forfeitable[id])`. All three are immutable for non-transferable
+     *      positions while the seeding window is open (see
+     *      `_requireSeedingActive` NatSpec), so the totals accumulated
+     *      across many callers and many blocks are identical to those of
+     *      a hypothetical single-block scan. The caller pays the gas; the
+     *      owner retains exclusive control of `markSeedingStarted`
+     *      (cursor target) and the latch only flips once the cursor reaches
+     *      the target — so permissionless advancement cannot prematurely
+     *      finalize an incomplete seed.
+     *
+     *      Multiple calls advance the cursor monotonically; the function
      *      tolerates being called any number of times until the cursor
      *      reaches `seedingTargetId`. Burned, transferable, expired, or
      *      already-mature positions are skipped without affecting totals.
@@ -1225,7 +1284,7 @@ contract VeHemi is
      * @param maxIterations Maximum number of token IDs to scan in this call.
      *        The function returns early when `endId > seedingTargetId`.
      */
-    function seedBatch(uint256 maxIterations) external onlyOwner {
+    function seedBatch(uint256 maxIterations) external {
         _requireSeedingActive();
 
         SeedingProgress storage progress = _seedingProgress;
@@ -1298,17 +1357,54 @@ contract VeHemi is
      *         forfeitable `SupplyPoint`s and flip the seeding latch.
      *         Requires `seedBatch` to have advanced the cursor all the way
      *         to `seedingTargetId - 1`; an incomplete cursor reverts with
-     *         `SeedingIncomplete` so the operator notices and finishes the
-     *         scan before finalizing.
-     * @dev Mirrors phases 2-4 of the prior single-shot implementation:
+     *         `SeedingIncomplete` so the caller can finish the scan before
+     *         finalizing.
+     * @dev Permissionless: any caller may finalize once the cursor reaches
+     *      `seedingTargetId - 1`. This is the "latch only unlatches at max
+     *      position" property — `finalizeSeeding` reverts on an incomplete
+     *      cursor, so an attacker cannot prematurely flip
+     *      `lockedSeedingFinalized` regardless of caller identity. Once the
+     *      cursor is complete, the resulting `LockedPoint` values are a
+     *      deterministic function of the accumulator state and
+     *      `block.timestamp` — identical no matter who calls.
+     *
+     *      Mirrors phases 2-4 of the prior single-shot implementation:
      *      advances the global epoch with `_checkpoint(0, …)` (subcurve
      *      logic still skipped because `lockedSeedingFinalized` is false),
      *      writes both `LockedPoint`s at `block.timestamp`, flips the
      *      latch, and clears the accumulator. The aggregate math is
      *      identical regardless of how many `seedBatch` calls produced
-     *      the totals.
+     *      the totals or which blocks they spanned.
+     *
+     *      IMPLICIT OPERATIONAL CONSTRAINT — finalize promptly. The
+     *      materialized LockedPoint at finalize uses
+     *      `bias = totalBias - totalSlope * tsFinal`. If `tsFinal >= subEnd`
+     *      for any seeded position, that position contributes a negative
+     *      term to the bias AND its slope change at `subEnd` has already
+     *      been written by `seedBatch` — the post-finalize supply walk
+     *      will not revisit that bucket, so the position is carried in
+     *      the subcurve past its true subEnd. In production this is
+     *      trivially avoided. `_createLock` enforces
+     *      `lockDuration_ >= 2 * SIX_DAYS`, and the
+     *      `unlockTime = ((block.timestamp + lockDuration_) / SIX_DAYS) *
+     *      SIX_DAYS` truncation drops at most one SIX_DAYS bucket — so
+     *      the WORST-CASE floor at mint time is `subEnd >= mintTime +
+     *      SIX_DAYS ≈ 6 days` (one bucket); the typical case is closer to
+     *      two buckets (~12 days). For previously-minted positions, this
+     *      floor has eroded by however long they have aged, so the
+     *      load-bearing margin at `markSeedingStarted` time is `min(subEnd)
+     *      - now` across all live non-transferable positions — bounded
+     *      below by ~6 days for the newest positions and arbitrarily
+     *      smaller for the oldest. Realistic seeding windows at Hemi
+     *      mainnet scale (~30K total IDs, ~126 non-transferable in
+     *      practice, ~3 Hemi blocks ≈ 36s end-to-end) are orders of
+     *      magnitude shorter than any plausible margin. Operators MUST
+     *      drive the multi-block flow to completion within hours of
+     *      opening the window — not days — and SHOULD verify off-chain
+     *      that no live non-transferable position has `subEnd` within
+     *      the planned seeding window before calling `markSeedingStarted`.
      */
-    function finalizeSeeding() external onlyOwner {
+    function finalizeSeeding() external {
         _requireSeedingActive();
 
         SeedingProgress storage progress = _seedingProgress;
