@@ -98,6 +98,17 @@ contract ForkE2EDeploymentTest is Test {
     }
 
     function setUp() public {
+        // Optional block pin: if HEMI_FORK_BLOCK is set in env, fork `hemi`
+        // at that block (see foundry.toml [rpc_endpoints]). This gives
+        // reproducible results AND lets Foundry's RPC cache absorb repeated
+        // runs — crucial because this E2E test makes thousands of storage
+        // reads (position iteration + seedBatch's full mainnet scan) and
+        // can trip public RPC rate limits without a pin.
+        uint256 pinnedBlock = vm.envOr("HEMI_FORK_BLOCK", uint256(0));
+        if (pinnedBlock != 0) {
+            vm.createSelectFork("hemi", pinnedBlock);
+        }
+
         if (block.chainid != 43111) {
             vm.skip(true);
             return;
