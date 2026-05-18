@@ -1251,7 +1251,9 @@ contract VeHemi is
         _requireSeedingActive();
 
         SeedingProgress storage progress = _seedingProgress;
-        uint256 startId = progress.lastProcessedId == 0 ? 1 : progress.lastProcessedId + 1;
+        // `lastProcessedId` is 0 when no batch has run yet, so 0+1 = 1 is
+        // the first scannable id either way.
+        uint256 startId = progress.lastProcessedId + 1;
         // Cursor at the end — no-op convergence. Callers can monitor
         // progress via the `seedingCursor()` view; `finalizeSeeding`
         // reverts `SeedingIncomplete(lastProcessedId, expectedEnd)` on an
