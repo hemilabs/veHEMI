@@ -1684,4 +1684,95 @@ contract VeHemiTest is Test {
         // Sanity: the supply curve decays monotonically; later query <= earlier query.
         assertGe(supplyExact, supplyBetween, "supply should decay monotonically");
     }
+
+    /// @notice A pure-transferable mint must shift only the global
+    ///         slope-change bucket — both subcurve maps stay untouched.
+    ///         Catches a future regression where the inner gates inside
+    ///         `_adjustSlopeChange` (or the call-site arg wiring in
+    ///         `_scheduleSlopeChanges`) get inverted, silently writing to
+    ///         the locked/forfeitable subcurve for transferable-only
+    ///         positions and corrupting `nonTransferableTotalVeHemiSupply`
+    ///         / `forfeitableTotalVeHemiSupply` reads.
+    function test_PureTransferableMint_DoesNotWriteSubcurveSlopeChanges() public {
+        // Finalize seeding so the subcurve logic in `_checkpoint` and
+        // `_scheduleSlopeChanges` is live; pre-seeding the maps are
+        // trivially untouched and the assertion is meaningless.
+        veHemi.markSeedingStarted();
+        veHemi.seedBatch(type(uint256).max);
+        veHemi.finalizeSeeding();
+
+        uint256 amount = 100 ether;
+        uint256 duration = 365 days;
+        uint256 expectedEnd = ((block.timestamp + duration) / SIX_DAYS) * SIX_DAYS;
+
+        // Snapshot the three slope-change buckets at the target end-time
+        // before the mint. Subcurve maps must stay byte-identical; global
+        // map must shift (sanity-check that the path actually runs).
+        int128 lockedSlopeBefore = veHemi.lockedSlopeChanges(expectedEnd);
+        int128 forfeitableSlopeBefore = veHemi.forfeitableSlopeChanges(expectedEnd);
+        int128 globalSlopeBefore = veHemi.slopeChanges(expectedEnd);
+
+        // Default `createLock(amount, duration)` mints a transferable,
+        // non-forfeitable position (transferableAfter == 0, forfeitable ==
+        // false) — both old and new curve flags resolve to 0.
+        createLock(user, amount, duration);
+
+        assertEq(
+            veHemi.lockedSlopeChanges(expectedEnd),
+            lockedSlopeBefore,
+            "pure-transferable mint must not write lockedSlopeChanges"
+        );
+        assertEq(
+            veHemi.forfeitableSlopeChanges(expectedEnd),
+            forfeitableSlopeBefore,
+            "pure-transferable mint must not write forfeitableSlopeChanges"
+        );
+        assertLt(
+            veHemi.slopeChanges(expectedEnd),
+            globalSlopeBefore,
+            "global slope-change MUST shift negative for any live position"
+        );
+    }
+
+    /// @notice A non-transferable but NON-forfeitable mint must write
+    ///         `lockedSlopeChanges` but leave `forfeitableSlopeChanges`
+    ///         untouched. Catches a future regression where the
+    ///         `_adjustSlopeChange(forfeitableSlopeChanges, …)` and
+    ///         `_adjustSlopeChange(lockedSlopeChanges, …)` calls get
+    ///         swapped or where the `_oldFlags == 2` / `_newFlags == 2`
+    ///         gate is widened to `>= 1` (which would lift non-forfeitable
+    ///         positions into the forfeitable subcurve).
+    function test_NonTransferableNonForfeitableMint_WritesLockedOnly() public {
+        // Finalize seeding so the locked subcurve is live.
+        veHemi.markSeedingStarted();
+        veHemi.seedBatch(type(uint256).max);
+        veHemi.finalizeSeeding();
+
+        uint256 amount = 100 ether;
+        uint256 duration = 365 days;
+        uint256 expectedEnd = ((block.timestamp + duration) / SIX_DAYS) * SIX_DAYS;
+
+        int128 lockedSlopeBefore = veHemi.lockedSlopeChanges(expectedEnd);
+        int128 forfeitableSlopeBefore = veHemi.forfeitableSlopeChanges(expectedEnd);
+
+        // Mint a non-transferable, non-forfeitable position via the
+        // owner-only `createLockFor` path with transferable=false,
+        // forfeitable=false. Curve flags resolve to (oldFlags=0, newFlags=1).
+        hemi.mint(address(this), amount);
+        hemi.approve(address(veHemi), type(uint256).max);
+        veHemi.createLockFor(amount, duration, user, false, false);
+
+        // Locked subcurve MUST shift negative (flag>=1 fires).
+        assertLt(
+            veHemi.lockedSlopeChanges(expectedEnd),
+            lockedSlopeBefore,
+            "non-transferable mint MUST write lockedSlopeChanges"
+        );
+        // Forfeitable subcurve MUST stay untouched (flag==2 does not fire).
+        assertEq(
+            veHemi.forfeitableSlopeChanges(expectedEnd),
+            forfeitableSlopeBefore,
+            "non-forfeitable mint must not write forfeitableSlopeChanges"
+        );
+    }
 }

@@ -827,7 +827,10 @@ contract VeHemi is
 
     /**
      * @dev Schedules slope changes for global, locked, and forfeitable curves.
-     *      Extracted from _checkpoint to manage stack depth (Phase D).
+     *      Extracted from _checkpoint to manage stack depth (Phase D). Each
+     *      curve's cancel/schedule pair is delegated to `_adjustSlopeChange`
+     *      via a `mapping storage` parameter so the global, locked, and
+     *      forfeitable retire-then-schedule logic shares one bytecode body.
      *
      *      V2: For subcurves, the effective endpoint is min(lock.end, transferableAfter).
      *      This handles the case where a user extends their lock past the transferability
@@ -858,86 +861,87 @@ contract VeHemi is
         uint8 _oldFlags = curveFlags_ & 0x0F;
         uint8 _newFlags = (curveFlags_ >> 4) & 0x0F;
 
-        // --- Global slope changes (use lock.end directly) ---
-        int128 _oldDslope = slopeChanges[oldLocked_.end];
-        int128 _newDslope;
-        if (newLocked_.end != 0) {
-            if (newLocked_.end == oldLocked_.end) {
-                _newDslope = _oldDslope;
-            } else {
-                _newDslope = slopeChanges[newLocked_.end];
-            }
-        }
+        // Global slope-changes — every live position participates, so both
+        // `inCurve` flags are unconditionally true. Out-of-range ends
+        // (`end <= block.timestamp`) are skipped by the helper's internal
+        // gates, matching the prior behavior.
+        _adjustSlopeChange(
+            slopeChanges,
+            oldLocked_.end, newLocked_.end,
+            _oldUserPoint.slope, _newUserPoint.slope,
+            true, true
+        );
 
-        if (oldLocked_.end > block.timestamp) {
-            _oldDslope += _oldUserPoint.slope;
-            if (newLocked_.end == oldLocked_.end) {
-                _oldDslope -= _newUserPoint.slope;
-            }
-            slopeChanges[oldLocked_.end] = _oldDslope;
-        }
-
-        if (newLocked_.end > block.timestamp && newLocked_.end > oldLocked_.end) {
-            _newDslope -= _newUserPoint.slope;
-            slopeChanges[newLocked_.end] = _newDslope;
-        }
-
-        // --- Subcurve slope changes (use min(lock.end, transferableAfter) as effective end) ---
+        // Subcurves are bounded by transferableAfter. Compute effective
+        // ends only when at least one side of the transition participates
+        // in any subcurve — the SLOAD of `transferableAfter[tokenId_]` is
+        // wasted work if both flags are 0 (pure transferable lock).
         if (_oldFlags >= 1 || _newFlags >= 1) {
             uint256 _ta = transferableAfter[tokenId_];
-            // Effective ends for subcurves: bounded by transferableAfter
             uint256 _oldSubEnd = (oldLocked_.end != 0 && _ta < oldLocked_.end) ? _ta : oldLocked_.end;
             uint256 _newSubEnd = (newLocked_.end != 0 && _ta < newLocked_.end) ? _ta : newLocked_.end;
 
-            _scheduleSubcurveSlopeChanges(
-                _oldFlags, _newFlags, _oldSubEnd, _newSubEnd,
-                _oldUserPoint.slope, _newUserPoint.slope
+            // Locked subcurve: gated by flag >= 1.
+            _adjustSlopeChange(
+                lockedSlopeChanges,
+                _oldSubEnd, _newSubEnd,
+                _oldUserPoint.slope, _newUserPoint.slope,
+                _oldFlags >= 1, _newFlags >= 1
+            );
+            // Forfeitable subcurve: gated by flag == 2.
+            _adjustSlopeChange(
+                forfeitableSlopeChanges,
+                _oldSubEnd, _newSubEnd,
+                _oldUserPoint.slope, _newUserPoint.slope,
+                _oldFlags == 2, _newFlags == 2
             );
         }
     }
 
-    /**
-     * @dev Schedules locked + forfeitable slope changes at subcurve-specific endpoints.
-     *      Separated to manage stack depth.
-     */
-    function _scheduleSubcurveSlopeChanges(
-        uint8 oldFlags_,
-        uint8 newFlags_,
-        uint256 oldSubEnd_,
-        uint256 newSubEnd_,
+    /// @dev Adjusts slope-change entries for ONE curve at one or two
+    ///      endpoints. Cancels the old retirement at `oldEnd_` (if
+    ///      `oldInCurve_` and the bucket hasn't passed) and schedules the
+    ///      new retirement at `newEnd_` (if `newInCurve_` and the bucket
+    ///      is still in the future). When the old and new endpoints
+    ///      collide, the cancel and schedule fold into a single SSTORE.
+    ///
+    ///      `mapping storage` parameter compiles to slot-offset access (no
+    ///      extra SLOAD vs inline) and lets the global + locked +
+    ///      forfeitable curves share one bytecode body.
+    /// @param slopeChanges_ Slope-change mapping for the curve.
+    /// @param oldEnd_ Old retirement timestamp (0 if the position had no
+    ///        prior contribution to this curve).
+    /// @param newEnd_ New retirement timestamp (0 if the position is
+    ///        leaving this curve).
+    /// @param oldSlope_ Slope being retired at `oldEnd_`.
+    /// @param newSlope_ Slope being scheduled at `newEnd_`.
+    /// @param oldInCurve_ Whether the position previously participated in
+    ///        this curve.
+    /// @param newInCurve_ Whether the position now participates in this
+    ///        curve.
+    function _adjustSlopeChange(
+        mapping(uint256 => int128) storage slopeChanges_,
+        uint256 oldEnd_,
+        uint256 newEnd_,
         int128 oldSlope_,
-        int128 newSlope_
+        int128 newSlope_,
+        bool oldInCurve_,
+        bool newInCurve_
     ) internal {
-        // --- Locked curve slope changes ---
-        if (oldFlags_ >= 1 && oldSubEnd_ > block.timestamp) {
-            int128 _oldLockedDslope = lockedSlopeChanges[oldSubEnd_];
-            _oldLockedDslope += oldSlope_;
-            if (newFlags_ >= 1 && newSubEnd_ == oldSubEnd_) {
-                _oldLockedDslope -= newSlope_;
+        // Cancel old retirement (and fold a same-end schedule into the
+        // same SSTORE when endpoints collide).
+        if (oldInCurve_ && oldEnd_ > block.timestamp) {
+            int128 _delta = oldSlope_;
+            if (newInCurve_ && newEnd_ == oldEnd_) {
+                _delta -= newSlope_;
             }
-            lockedSlopeChanges[oldSubEnd_] = _oldLockedDslope;
+            slopeChanges_[oldEnd_] += _delta;
         }
 
-        if (newFlags_ >= 1 && newSubEnd_ > block.timestamp && newSubEnd_ > oldSubEnd_) {
-            int128 _newLockedDslope = lockedSlopeChanges[newSubEnd_];
-            _newLockedDslope -= newSlope_;
-            lockedSlopeChanges[newSubEnd_] = _newLockedDslope;
-        }
-
-        // --- Forfeitable curve slope changes (same logic, only for flags == 2) ---
-        if (oldFlags_ == 2 && oldSubEnd_ > block.timestamp) {
-            int128 _oldForfDslope = forfeitableSlopeChanges[oldSubEnd_];
-            _oldForfDslope += oldSlope_;
-            if (newFlags_ == 2 && newSubEnd_ == oldSubEnd_) {
-                _oldForfDslope -= newSlope_;
-            }
-            forfeitableSlopeChanges[oldSubEnd_] = _oldForfDslope;
-        }
-
-        if (newFlags_ == 2 && newSubEnd_ > block.timestamp && newSubEnd_ > oldSubEnd_) {
-            int128 _newForfDslope = forfeitableSlopeChanges[newSubEnd_];
-            _newForfDslope -= newSlope_;
-            forfeitableSlopeChanges[newSubEnd_] = _newForfDslope;
+        // Schedule new retirement at a strictly later (and still future)
+        // endpoint. Same-endpoint case is handled above.
+        if (newInCurve_ && newEnd_ > block.timestamp && newEnd_ > oldEnd_) {
+            slopeChanges_[newEnd_] -= newSlope_;
         }
     }
 
@@ -1514,37 +1518,63 @@ contract VeHemi is
         return _subcurveSupplyAtFromPoint(_point, timestamp_, isForfeitable_);
     }
 
-    /**
-     * @dev Walk forward from a LockedPoint applying slope changes to compute supply at timestamp_.
-     *      Shared between locked and forfeitable curves — differs only in which slope change mapping is read.
-     */
-    function _subcurveSupplyAtFromPoint(LockedPoint memory point_, uint256 timestamp_, bool isForfeitable_) internal view returns (uint256) {
-        int128 bias = point_.bias;
-        int128 slope = point_.slope;
-        uint256 ts = point_.timestamp;
-
-        uint256 t_i = (ts / SIX_DAYS) * SIX_DAYS;
+    /// @dev Forward SIX_DAYS-bucket walk of a curve from `(bias_, slope_, ts_)`
+    ///      to `timestamp_`, applying slope-change drops at each bucket.
+    ///      Shared body for the global supply walk (`_supplyAt`) and the
+    ///      locked/forfeitable subcurve walks (`_subcurveSupplyAtFromPoint`).
+    ///      The `mapping storage` parameter compiles to slot-offset access
+    ///      (no extra SLOAD vs inline) and lets all call sites share one
+    ///      bytecode body instead of duplicating the 255-iter loop.
+    ///
+    ///      Early-return shape: when `t_i >= timestamp_` the final partial
+    ///      bucket is decayed in-place and the function returns without
+    ///      reading `slopeChanges_[t_i]`. The pre-refactor body fell into
+    ///      the else-branch and SLOADed the boundary slope-change before
+    ///      breaking; the read was always discarded. Output is bit-identical.
+    /// @param bias_ Initial bias at `ts_`.
+    /// @param slope_ Initial slope at `ts_`.
+    /// @param ts_ Point timestamp (start of the walk).
+    /// @param timestamp_ Target timestamp (end of the walk).
+    /// @param slopeChanges_ Storage pointer to the slope-change mapping
+    ///        for the curve being walked.
+    /// @return Bias at `timestamp_`, clamped at zero and cast to uint256.
+    function _walkCurve(
+        int128 bias_,
+        int128 slope_,
+        uint256 ts_,
+        uint256 timestamp_,
+        mapping(uint256 => int128) storage slopeChanges_
+    ) internal view returns (uint256) {
+        uint256 t_i = (ts_ / SIX_DAYS) * SIX_DAYS;
         for (uint256 i; i < 255; ++i) {
             t_i += SIX_DAYS;
             int128 dSlope = 0;
-            if (t_i > timestamp_) {
+            if (t_i >= timestamp_) {
                 t_i = timestamp_;
             } else {
-                dSlope = isForfeitable_ ? forfeitableSlopeChanges[t_i] : lockedSlopeChanges[t_i];
+                dSlope = slopeChanges_[t_i];
             }
-            bias -= slope * (t_i - ts).toInt256().toInt128();
+            bias_ -= slope_ * (t_i - ts_).toInt256().toInt128();
             if (t_i == timestamp_) {
                 break;
             }
-            slope += dSlope;
-            if (slope < 0) slope = 0;
-            ts = t_i;
+            slope_ += dSlope;
+            if (slope_ < 0) slope_ = 0;
+            ts_ = t_i;
         }
 
-        if (bias < 0) {
-            bias = 0;
-        }
-        return bias.toUint256();
+        if (bias_ < 0) bias_ = 0;
+        return bias_.toUint256();
+    }
+
+    function _subcurveSupplyAtFromPoint(LockedPoint memory point_, uint256 timestamp_, bool isForfeitable_) internal view returns (uint256) {
+        return _walkCurve(
+            point_.bias,
+            point_.slope,
+            point_.timestamp,
+            timestamp_,
+            isForfeitable_ ? forfeitableSlopeChanges : lockedSlopeChanges
+        );
     }
 
     function _supplyAt(uint256 timestamp_) internal view returns (uint256) {
@@ -1556,32 +1586,7 @@ contract VeHemi is
     }
 
     function _supplyAt(Point memory point_, uint256 timestamp_) internal view returns (uint256) {
-        int128 bias = point_.bias;
-        int128 slope = point_.slope;
-        uint256 ts = point_.timestamp;
-
-        uint256 t_i = (ts / SIX_DAYS) * SIX_DAYS;
-        for (uint256 i; i < 255; ++i) {
-            t_i += SIX_DAYS;
-            int128 dSlope = 0;
-            if (t_i > timestamp_) {
-                t_i = timestamp_;
-            } else {
-                dSlope = slopeChanges[t_i];
-            }
-            bias -= slope * (t_i - ts).toInt256().toInt128();
-            if (t_i == timestamp_) {
-                break;
-            }
-            slope += dSlope;
-            if (slope < 0) slope = 0;
-            ts = t_i;
-        }
-
-        if (bias < 0) {
-            bias = 0;
-        }
-        return bias.toUint256();
+        return _walkCurve(point_.bias, point_.slope, point_.timestamp, timestamp_, slopeChanges);
     }
 
     /// @dev Notifies the reward distributor of a position change. Fails silently (try/catch)
