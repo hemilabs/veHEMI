@@ -1,5 +1,7 @@
 import { DeployFunction } from "hardhat-deploy/types";
 import { execSync } from "child_process";
+import { Contract, Interface } from "ethers";
+import { HardhatRuntimeEnvironment } from "hardhat/types";
 import { Addresses } from "../helpers/addresses";
 import { saveForSafeBatchExecution } from "../helpers/safe";
 
@@ -198,6 +200,33 @@ const func: DeployFunction = async function (hre) {
         );
     }
 
+    // 6. Seeding safety margin: scan every live non-transferable position and
+    //    refuse to queue the MultiSend if any position's `subEnd =
+    //    min(lock.end, transferableAfter)` is closer than the safety margin.
+    //
+    //    Why this matters: `finalizeSeeding` materializes the locked
+    //    LockedPoint as `bias = totalBias - totalSlope * tsFinal`. If
+    //    `tsFinal >= subEnd` for any seeded position, the slope-change
+    //    `seedBatch` wrote at that bucket lands in the past (never revisited
+    //    by the post-finalize forward walk), and the position's slope is
+    //    carried on the subcurve past its true expiry. The corruption is
+    //    permanent — recovery requires a contract upgrade.
+    //
+    //    The window between `markSeedingStarted` (queued by this script) and
+    //    `finalizeSeeding` (driven by `scripts/run-seeding-loop.ts` after the
+    //    Safe quorum executes) is the trigger surface. The default 24-hour
+    //    margin gives the operator several Safe-quorum cycles plus the
+    //    keeper-loop runtime even on a degraded network. Override via env
+    //    var `HEMI_SUBEND_SAFETY_HOURS` only if you have ground truth that
+    //    a faster finalize is guaranteed.
+    //
+    //    Skipped on localhost (31337) where positions are synthetic.
+    if (network.config.chainId === 43111) {
+        await seedingMarginPreFlight(hre, veHemiAddress);
+    } else {
+        console.log("Seeding margin check:    SKIPPED (non-mainnet chain)");
+    }
+
     console.log("");
 
     // ── Step 1: Upgrade VeHemiVoteDelegation ───────────────────────────────
@@ -278,3 +307,149 @@ const func: DeployFunction = async function (hre) {
 func.tags = ["VeHemiV2Upgrade"];
 func.dependencies = [VE_HEMI, VOTE_DELEGATION];
 export default func;
+
+// ── Helper: seeding safety-margin pre-flight ───────────────────────────────
+// Multicall3-batched scan of every token id in [1, nextTokenId). Refuses to
+// queue the MultiSend if any live non-transferable position has
+// `subEnd = min(lock.end, transferableAfter) <= now + safetyHours`.
+//
+// Two passes:
+//   1. `transferableAfter` — cheap predicate. Filters out transferable
+//      positions (TA == 0) and already-open positions (TA <= now).
+//   2. For TA candidates: `ownerOf`, `getLockedBalance`. Filters burned
+//      tokens, expired locks, zero-balance locks. The survivors are the
+//      live non-transferable positions that `seedBatch` will include.
+const MULTICALL3 = "0xcA11bde05977b3631167028862bE2a173976CA11";
+const MULTICALL3_ABI = [
+    "function aggregate3(tuple(address target, bool allowFailure, bytes callData)[] calls) payable returns (tuple(bool success, bytes returnData)[])",
+];
+const SAFETY_PRE_FLIGHT_ABI = [
+    "function nextTokenId() view returns (uint256)",
+    "function ownerOf(uint256) view returns (address)",
+    "function transferableAfter(uint256) view returns (uint256)",
+    "function getLockedBalance(uint256) view returns (tuple(int128 amount, uint64 end))",
+];
+
+async function seedingMarginPreFlight(hre: HardhatRuntimeEnvironment, veHemiAddress: string) {
+    const provider = (hre as any).ethers.provider;
+    const veHemiIface = new Interface(SAFETY_PRE_FLIGHT_ABI);
+    const veHemi = new Contract(veHemiAddress, SAFETY_PRE_FLIGHT_ABI, provider);
+    const multicall = new Contract(MULTICALL3, MULTICALL3_ABI, provider);
+
+    const safetyHours = Number(process.env.HEMI_SUBEND_SAFETY_HOURS ?? 24);
+    if (!Number.isFinite(safetyHours) || safetyHours <= 0) {
+        throw new Error(`Invalid HEMI_SUBEND_SAFETY_HOURS: ${process.env.HEMI_SUBEND_SAFETY_HOURS}`);
+    }
+
+    const block = await provider.getBlock("latest");
+    const now: number = Number(block.timestamp);
+    const threshold: number = now + Math.floor(safetyHours * 3600);
+    const nextTokenId = Number(await veHemi.nextTokenId());
+
+    console.log(`Seeding margin check:    scanning [1, ${nextTokenId}) — safety margin = ${safetyHours}h`);
+
+    // Pass 1: batch `transferableAfter`. Skip transferable (== 0) and
+    // already-open (<= now); both are guaranteed to be excluded by
+    // `seedBatch`'s skip predicates and can't trigger the phantom carry.
+    const tasOf: Map<number, number> = new Map();
+    const TA_BATCH = 800;
+    for (let i = 1; i < nextTokenId; i += TA_BATCH) {
+        const end = Math.min(i + TA_BATCH, nextTokenId);
+        const calls = [];
+        for (let id = i; id < end; id++) {
+            calls.push({
+                target: veHemiAddress,
+                allowFailure: true,
+                callData: veHemiIface.encodeFunctionData("transferableAfter", [id]),
+            });
+        }
+        const results: any[] = await multicall.aggregate3.staticCall(calls);
+        for (let j = 0; j < results.length; j++) {
+            const r = results[j];
+            if (!r.success) continue;
+            const ta = Number(BigInt(r.returnData));
+            if (ta !== 0 && ta > now) {
+                tasOf.set(i + j, ta);
+            }
+        }
+    }
+
+    // Pass 2: ownerOf + getLockedBalance for candidates. Skip burned/empty/expired
+    // — `seedBatch` does the same. Whatever survives is what gets seeded.
+    let minSubEnd: number = Number.MAX_SAFE_INTEGER;
+    let minSubEndTokenId: number = 0;
+    let liveCount = 0;
+    const candidates = Array.from(tasOf.keys()).sort((a, b) => a - b);
+    const C_BATCH = 200;
+    for (let i = 0; i < candidates.length; i += C_BATCH) {
+        const slice = candidates.slice(i, i + C_BATCH);
+        const calls = [];
+        for (const id of slice) {
+            calls.push({
+                target: veHemiAddress,
+                allowFailure: true,
+                callData: veHemiIface.encodeFunctionData("ownerOf", [id]),
+            });
+            calls.push({
+                target: veHemiAddress,
+                allowFailure: true,
+                callData: veHemiIface.encodeFunctionData("getLockedBalance", [id]),
+            });
+        }
+        const results: any[] = await multicall.aggregate3.staticCall(calls);
+        for (let k = 0; k < slice.length; k++) {
+            const tokenId = slice[k];
+            const ownerRes = results[k * 2 + 0];
+            const lockRes = results[k * 2 + 1];
+            if (!ownerRes.success || !lockRes.success) continue; // burned / non-existent
+            const owner = veHemiIface.decodeFunctionResult("ownerOf", ownerRes.returnData)[0];
+            if (owner === "0x0000000000000000000000000000000000000000") continue;
+            const lock = veHemiIface.decodeFunctionResult("getLockedBalance", lockRes.returnData)[0];
+            const amountWei: bigint = BigInt(lock.amount);
+            const lockEnd: number = Number(lock.end);
+            if (amountWei <= 0n) continue;
+            if (lockEnd <= now) continue;
+            liveCount++;
+            const ta = tasOf.get(tokenId)!;
+            const subEnd = Math.min(lockEnd, ta);
+            if (subEnd < minSubEnd) {
+                minSubEnd = subEnd;
+                minSubEndTokenId = tokenId;
+            }
+        }
+    }
+
+    if (liveCount === 0) {
+        console.log("Seeding margin check:    OK (no live non-transferable positions to seed)");
+        return;
+    }
+
+    const marginSecs = minSubEnd - now;
+    const marginHours = marginSecs / 3600;
+    const minSubEndIso = new Date(minSubEnd * 1000).toISOString();
+    console.log(
+        `Seeding margin check:    ${liveCount} live non-transferable position(s); ` +
+            `earliest subEnd = ${minSubEndIso} (token ${minSubEndTokenId}, ` +
+            `${marginHours.toFixed(2)}h from now)`
+    );
+
+    if (minSubEnd <= threshold) {
+        throw new Error(
+            `\nSeeding margin violation. Aborting upgrade.\n\n` +
+            `  Earliest subEnd:   ${minSubEndIso} (token ${minSubEndTokenId})\n` +
+            `  Margin to subEnd:  ${marginHours.toFixed(2)} hours\n` +
+            `  Required margin:   ${safetyHours} hours\n\n` +
+            `  Phantom-carry risk: if finalizeSeeding lands after this subEnd, the\n` +
+            `  position's slope-change is stranded in a past bucket and the\n` +
+            `  subcurve carries it past true expiry. Corruption is permanent.\n\n` +
+            `  Resolution paths:\n` +
+            `    * Wait for the at-risk position to expire / be withdrawn, then\n` +
+            `      re-run this script.\n` +
+            `    * If the Safe MultiSend + keeper loop are guaranteed to complete\n` +
+            `      before this subEnd (with comfortable headroom), override via\n` +
+            `      HEMI_SUBEND_SAFETY_HOURS=<smaller value>. Use with caution.\n`
+        );
+    }
+
+    console.log(`Seeding margin check:    OK (${marginHours.toFixed(2)}h >= ${safetyHours}h required)`);
+}
