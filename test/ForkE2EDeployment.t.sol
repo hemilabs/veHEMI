@@ -107,6 +107,12 @@ contract ForkE2EDeploymentTest is Test {
         uint256 pinnedBlock = vm.envOr("HEMI_FORK_BLOCK", uint256(0));
         if (pinnedBlock != 0) {
             vm.createSelectFork("hemi", pinnedBlock);
+        } else {
+            // Unpinned: fork at the current tip. Previously the
+            // un-`else`'d shape silently skipped the fork when
+            // HEMI_FORK_BLOCK was unset, making the test no-op against
+            // the default 31337 chainid.
+            vm.createSelectFork("hemi");
         }
 
         if (block.chainid != 43111) {
