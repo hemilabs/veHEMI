@@ -25,7 +25,7 @@ contract FuzzTest is Test {
     uint256 private constant MONTH = YEAR / 12;
     uint256 private constant SIX_DAYS = MONTH / 5;
 
-    uint256 private constant MIN_AMOUNT = 0.000001e18;
+    uint256 private constant MIN_AMOUNT = 11e18; // must be >= VeHemi.MIN_LOCK_AMOUNT (10e18)
     uint256 private constant MAX_AMOUNT = 1_000e18;
 
     function setUp() public {
@@ -62,7 +62,7 @@ contract FuzzTest is Test {
     }
 
     function _getNextCheckpoint() private view returns (uint256) {
-        return ((block.timestamp / 1 days) * 1 days) + 1 days;
+        return ((block.timestamp / 1 hours) * 1 hours) + 1 hours;
     }
 
     function testFuzz_createLock(uint amount, uint duration, uint t_1, uint t_2) public {

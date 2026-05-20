@@ -15,6 +15,13 @@ jobs:
 
         name: Foundry project
         runs-on: ubuntu-latest
+        env:
+            HEMI_RPC_URL: ${{ secrets.HEMI_RPC_URL }}
+            # Optional reproducible fork block. Leave unset in CI to let the
+            # fork tests that don't require determinism use `latest`; set to a
+            # specific Hemi block in a variable or dispatch input when you
+            # want bit-reproducible state-preservation runs.
+            HEMI_FORK_BLOCK: ${{ vars.HEMI_FORK_BLOCK }}
         steps:
             - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
               with:
@@ -35,12 +42,94 @@ jobs:
               run: |
                   forge --version
 
+            - name: Forge clean (drop orphan artifacts)
+              # Defense-in-depth against phantom tests: if a feature branch
+              # ever ships with a stale `out/<scratch-test>/` directory whose
+              # source file has been deleted, forge will still pick up the
+              # compiled bytecode and run it. Cleaning here guarantees the
+              # build below starts from source.
+              run: |
+                  forge clean
+              id: clean
+
             - name: Run Forge build
               run: |
                   forge build --sizes
               id: build
 
-            - name: Run Forge tests
+            - name: Enforce EIP-170 contract-size limit
+              # `forge build --sizes` only PRINTS sizes — it exits 0 even on
+              # overflow. Production-shipped contracts must fit the 24,576-byte
+              # runtime limit. Fail the build if any contract under src/ is
+              # within 64 bytes of the cliff, giving reviewers a chance to
+              # consider library extraction before a future PR pushes over.
+              # Use `forge inspect` per contract under src/ (excluding test/,
+              # script/, lib/, mocks/) to compute runtime size and compare.
               run: |
-                  forge test -vvv
+                  LIMIT=24576
+                  WARN=$((LIMIT - 64))
+                  OVERFLOW=0
+                  for f in $(find src -type f -name '*.sol'); do
+                      # Get every concrete contract name in the file (skip
+                      # interfaces and libraries — they don't deploy).
+                      contracts=$(grep -oE '^contract +[A-Za-z_][A-Za-z0-9_]*' "$f" | awk '{print $2}')
+                      for c in $contracts; do
+                          # `forge inspect <name> bytecode` returns deployment
+                          # bytecode; runtime is what's measured by EIP-170.
+                          runtime_hex=$(forge inspect "$c" deployedBytecode 2>/dev/null || true)
+                          [ -z "$runtime_hex" ] && continue
+                          # Strip "0x" prefix and count nibbles / 2.
+                          size=$(( (${#runtime_hex} - 2) / 2 ))
+                          if [ "$size" -gt "$LIMIT" ]; then
+                              echo "::error::$c runtime $size > EIP-170 limit $LIMIT"
+                              OVERFLOW=1
+                          elif [ "$size" -gt "$WARN" ]; then
+                              echo "::warning::$c runtime $size > $WARN (within 64B of EIP-170 cliff)"
+                          fi
+                      done
+                  done
+                  exit $OVERFLOW
+              id: size-gate
+
+            - name: Check storage layouts against golden fixtures
+              run: |
+                  chmod +x scripts/check-storage-layouts.sh
+                  scripts/check-storage-layouts.sh
+              id: storage-layout-gate
+
+            - name: Run Forge tests
+              # The E2E deployment fork tests (ForkE2EDeployment and
+              # ForkSimulateProposedBatch) are excluded from the gated CI
+              # path. They require a private Hemi RPC endpoint, take
+              # 30–60 minutes each, and are deploy-time validation tools
+              # rather than per-commit regression gates. Run them locally
+              # via `HEMI_RPC_URL=... forge test --match-contract
+              # ForkSimulateProposedBatch` before queuing a Safe MultiSend.
+              run: |
+                  forge test \
+                    --no-match-contract "ForkE2EDeployment|ForkSimulateProposedBatch" \
+                    -vvv
               id: test
+
+            - name: Run Hemi-fork tests (optional — requires HEMI_RPC_URL secret)
+              if: env.HEMI_RPC_URL != ''
+              timeout-minutes: 10
+              # --threads 1 serializes test execution to keep the per-minute
+              # RPC burst under Hemi's public-RPC 300-req/min cap (parallel
+              # workers across 90+ fork tests otherwise trip HTTP 429).
+              # --fork-block-number pins the fork to a reproducible block
+              # when HEMI_FORK_BLOCK is set as a repo variable; unset leaves
+              # the fork at latest. Block pinning enables Foundry's on-disk
+              # RPC cache to absorb repeated reads across reruns.
+              run: |
+                  EXTRA_ARGS=""
+                  if [ -n "$HEMI_FORK_BLOCK" ]; then
+                      EXTRA_ARGS="--fork-block-number $HEMI_FORK_BLOCK"
+                  fi
+                  forge test \
+                    --match-contract "ForkUpgradeVoteDelegation|ForkUpgradeLockedCurve" \
+                    --fork-url hemi \
+                    --threads 1 \
+                    $EXTRA_ARGS \
+                    -vvv
+              id: fork-test

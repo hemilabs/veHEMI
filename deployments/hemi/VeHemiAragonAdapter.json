@@ -1,0 +1,522 @@
+{
+  "address": "0x3f41c138082b29fb1a6c91066e73480163f984e4",
+  "abi": [
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "veHemi_",
+          "type": "address"
+        }
+      ],
+      "stateMutability": "nonpayable",
+      "type": "constructor"
+    },
+    {
+      "anonymous": false,
+      "inputs": [
+        {
+          "indexed": true,
+          "internalType": "address",
+          "name": "delegator",
+          "type": "address"
+        },
+        {
+          "indexed": true,
+          "internalType": "address",
+          "name": "fromDelegate",
+          "type": "address"
+        },
+        {
+          "indexed": true,
+          "internalType": "address",
+          "name": "toDelegate",
+          "type": "address"
+        }
+      ],
+      "name": "DelegateChanged",
+      "type": "event"
+    },
+    {
+      "anonymous": false,
+      "inputs": [
+        {
+          "indexed": true,
+          "internalType": "address",
+          "name": "delegate",
+          "type": "address"
+        },
+        {
+          "indexed": false,
+          "internalType": "uint256",
+          "name": "previousVotes",
+          "type": "uint256"
+        },
+        {
+          "indexed": false,
+          "internalType": "uint256",
+          "name": "newVotes",
+          "type": "uint256"
+        }
+      ],
+      "name": "DelegateVotesChanged",
+      "type": "event"
+    },
+    {
+      "inputs": [],
+      "name": "CLOCK_MODE",
+      "outputs": [
+        {
+          "internalType": "string",
+          "name": "",
+          "type": "string"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "account",
+          "type": "address"
+        }
+      ],
+      "name": "balanceOf",
+      "outputs": [
+        {
+          "internalType": "uint256",
+          "name": "total",
+          "type": "uint256"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [],
+      "name": "clock",
+      "outputs": [
+        {
+          "internalType": "uint48",
+          "name": "",
+          "type": "uint48"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [],
+      "name": "decimals",
+      "outputs": [
+        {
+          "internalType": "uint8",
+          "name": "",
+          "type": "uint8"
+        }
+      ],
+      "stateMutability": "pure",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "delegatee",
+          "type": "address"
+        }
+      ],
+      "name": "delegate",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "",
+          "type": "address"
+        },
+        {
+          "internalType": "uint256",
+          "name": "",
+          "type": "uint256"
+        },
+        {
+          "internalType": "uint256",
+          "name": "",
+          "type": "uint256"
+        },
+        {
+          "internalType": "uint8",
+          "name": "",
+          "type": "uint8"
+        },
+        {
+          "internalType": "bytes32",
+          "name": "",
+          "type": "bytes32"
+        },
+        {
+          "internalType": "bytes32",
+          "name": "",
+          "type": "bytes32"
+        }
+      ],
+      "name": "delegateBySig",
+      "outputs": [],
+      "stateMutability": "pure",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "account",
+          "type": "address"
+        }
+      ],
+      "name": "delegates",
+      "outputs": [
+        {
+          "internalType": "address",
+          "name": "",
+          "type": "address"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "uint256",
+          "name": "timepoint",
+          "type": "uint256"
+        }
+      ],
+      "name": "getPastTotalSupply",
+      "outputs": [
+        {
+          "internalType": "uint256",
+          "name": "",
+          "type": "uint256"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "account",
+          "type": "address"
+        },
+        {
+          "internalType": "uint256",
+          "name": "timepoint",
+          "type": "uint256"
+        }
+      ],
+      "name": "getPastVotes",
+      "outputs": [
+        {
+          "internalType": "uint256",
+          "name": "",
+          "type": "uint256"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "account",
+          "type": "address"
+        }
+      ],
+      "name": "getVotes",
+      "outputs": [
+        {
+          "internalType": "uint256",
+          "name": "",
+          "type": "uint256"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [],
+      "name": "name",
+      "outputs": [
+        {
+          "internalType": "string",
+          "name": "",
+          "type": "string"
+        }
+      ],
+      "stateMutability": "pure",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "delegator",
+          "type": "address"
+        },
+        {
+          "internalType": "address",
+          "name": "fromDelegate",
+          "type": "address"
+        },
+        {
+          "internalType": "address",
+          "name": "toDelegate",
+          "type": "address"
+        }
+      ],
+      "name": "notifyDelegateChanged",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "delegatee",
+          "type": "address"
+        },
+        {
+          "internalType": "uint256",
+          "name": "previousVotes",
+          "type": "uint256"
+        },
+        {
+          "internalType": "uint256",
+          "name": "newVotes",
+          "type": "uint256"
+        }
+      ],
+      "name": "notifyVotesChanged",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "delegatee",
+          "type": "address"
+        }
+      ],
+      "name": "refreshVotingPower",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address[]",
+          "name": "delegatees",
+          "type": "address[]"
+        }
+      ],
+      "name": "refreshVotingPowerBatch",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "bytes4",
+          "name": "interfaceId",
+          "type": "bytes4"
+        }
+      ],
+      "name": "supportsInterface",
+      "outputs": [
+        {
+          "internalType": "bool",
+          "name": "",
+          "type": "bool"
+        }
+      ],
+      "stateMutability": "pure",
+      "type": "function"
+    },
+    {
+      "inputs": [],
+      "name": "symbol",
+      "outputs": [
+        {
+          "internalType": "string",
+          "name": "",
+          "type": "string"
+        }
+      ],
+      "stateMutability": "pure",
+      "type": "function"
+    },
+    {
+      "inputs": [],
+      "name": "totalSupply",
+      "outputs": [
+        {
+          "internalType": "uint256",
+          "name": "",
+          "type": "uint256"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [],
+      "name": "veHemi",
+      "outputs": [
+        {
+          "internalType": "address",
+          "name": "",
+          "type": "address"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [],
+      "name": "voteDelegation",
+      "outputs": [
+        {
+          "internalType": "address",
+          "name": "",
+          "type": "address"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    }
+  ],
+  "transactionHash": "0x1ff66138ad6478338a9f44ec2668a82c1cd7007dbaf39ecea2ceea49f69c4e37",
+  "receipt": {
+    "to": null,
+    "from": "0x1f2c0882aCe8877353BcE08457bf83349D487DAd",
+    "contractAddress": "0x3f41c138082b29fb1a6c91066e73480163f984e4",
+    "transactionIndex": 4,
+    "gasUsed": "1300746",
+    "logsBloom": "0x00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+    "blockHash": "0xa26de15343628cfa565447ace5808175f32a2d03b39bb4ca2a32a5fbda50a9d2",
+    "transactionHash": "0x1ff66138ad6478338a9f44ec2668a82c1cd7007dbaf39ecea2ceea49f69c4e37",
+    "logs": [],
+    "blockNumber": 4445807,
+    "cumulativeGasUsed": "1474372",
+    "status": 1,
+    "byzantium": true
+  },
+  "args": [
+    "0x371d3718D5b7F75EAb050FAe6Da7DF3092031c89"
+  ],
+  "numDeployments": 1,
+  "solcInputHash": "afd7da5c711c32eae6afad6edadb7dba",
+  "metadata": "{\"compiler\":{\"version\":\"0.8.29+commit.ab55807c\"},\"language\":\"Solidity\",\"output\":{\"abi\":[{\"inputs\":[{\"internalType\":\"address\",\"name\":\"veHemi_\",\"type\":\"address\"}],\"stateMutability\":\"nonpayable\",\"type\":\"constructor\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":true,\"internalType\":\"address\",\"name\":\"delegator\",\"type\":\"address\"},{\"indexed\":true,\"internalType\":\"address\",\"name\":\"fromDelegate\",\"type\":\"address\"},{\"indexed\":true,\"internalType\":\"address\",\"name\":\"toDelegate\",\"type\":\"address\"}],\"name\":\"DelegateChanged\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":true,\"internalType\":\"address\",\"name\":\"delegate\",\"type\":\"address\"},{\"indexed\":false,\"internalType\":\"uint256\",\"name\":\"previousVotes\",\"type\":\"uint256\"},{\"indexed\":false,\"internalType\":\"uint256\",\"name\":\"newVotes\",\"type\":\"uint256\"}],\"name\":\"DelegateVotesChanged\",\"type\":\"event\"},{\"inputs\":[],\"name\":\"CLOCK_MODE\",\"outputs\":[{\"internalType\":\"string\",\"name\":\"\",\"type\":\"string\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"address\",\"name\":\"account\",\"type\":\"address\"}],\"name\":\"balanceOf\",\"outputs\":[{\"internalType\":\"uint256\",\"name\":\"total\",\"type\":\"uint256\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[],\"name\":\"clock\",\"outputs\":[{\"internalType\":\"uint48\",\"name\":\"\",\"type\":\"uint48\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[],\"name\":\"decimals\",\"outputs\":[{\"internalType\":\"uint8\",\"name\":\"\",\"type\":\"uint8\"}],\"stateMutability\":\"pure\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"address\",\"name\":\"delegatee\",\"type\":\"address\"}],\"name\":\"delegate\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"address\",\"name\":\"\",\"type\":\"address\"},{\"internalType\":\"uint256\",\"name\":\"\",\"type\":\"uint256\"},{\"internalType\":\"uint256\",\"name\":\"\",\"type\":\"uint256\"},{\"internalType\":\"uint8\",\"name\":\"\",\"type\":\"uint8\"},{\"internalType\":\"bytes32\",\"name\":\"\",\"type\":\"bytes32\"},{\"internalType\":\"bytes32\",\"name\":\"\",\"type\":\"bytes32\"}],\"name\":\"delegateBySig\",\"outputs\":[],\"stateMutability\":\"pure\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"address\",\"name\":\"account\",\"type\":\"address\"}],\"name\":\"delegates\",\"outputs\":[{\"internalType\":\"address\",\"name\":\"\",\"type\":\"address\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"uint256\",\"name\":\"timepoint\",\"type\":\"uint256\"}],\"name\":\"getPastTotalSupply\",\"outputs\":[{\"internalType\":\"uint256\",\"name\":\"\",\"type\":\"uint256\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"address\",\"name\":\"account\",\"type\":\"address\"},{\"internalType\":\"uint256\",\"name\":\"timepoint\",\"type\":\"uint256\"}],\"name\":\"getPastVotes\",\"outputs\":[{\"internalType\":\"uint256\",\"name\":\"\",\"type\":\"uint256\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"address\",\"name\":\"account\",\"type\":\"address\"}],\"name\":\"getVotes\",\"outputs\":[{\"internalType\":\"uint256\",\"name\":\"\",\"type\":\"uint256\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[],\"name\":\"name\",\"outputs\":[{\"internalType\":\"string\",\"name\":\"\",\"type\":\"string\"}],\"stateMutability\":\"pure\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"address\",\"name\":\"delegator\",\"type\":\"address\"},{\"internalType\":\"address\",\"name\":\"fromDelegate\",\"type\":\"address\"},{\"internalType\":\"address\",\"name\":\"toDelegate\",\"type\":\"address\"}],\"name\":\"notifyDelegateChanged\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"address\",\"name\":\"delegatee\",\"type\":\"address\"},{\"internalType\":\"uint256\",\"name\":\"previousVotes\",\"type\":\"uint256\"},{\"internalType\":\"uint256\",\"name\":\"newVotes\",\"type\":\"uint256\"}],\"name\":\"notifyVotesChanged\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"address\",\"name\":\"delegatee\",\"type\":\"address\"}],\"name\":\"refreshVotingPower\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"address[]\",\"name\":\"delegatees\",\"type\":\"address[]\"}],\"name\":\"refreshVotingPowerBatch\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"bytes4\",\"name\":\"interfaceId\",\"type\":\"bytes4\"}],\"name\":\"supportsInterface\",\"outputs\":[{\"internalType\":\"bool\",\"name\":\"\",\"type\":\"bool\"}],\"stateMutability\":\"pure\",\"type\":\"function\"},{\"inputs\":[],\"name\":\"symbol\",\"outputs\":[{\"internalType\":\"string\",\"name\":\"\",\"type\":\"string\"}],\"stateMutability\":\"pure\",\"type\":\"function\"},{\"inputs\":[],\"name\":\"totalSupply\",\"outputs\":[{\"internalType\":\"uint256\",\"name\":\"\",\"type\":\"uint256\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[],\"name\":\"veHemi\",\"outputs\":[{\"internalType\":\"address\",\"name\":\"\",\"type\":\"address\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[],\"name\":\"voteDelegation\",\"outputs\":[{\"internalType\":\"address\",\"name\":\"\",\"type\":\"address\"}],\"stateMutability\":\"view\",\"type\":\"function\"}],\"devdoc\":{\"details\":\"All calls are forwarded to the underlying VeHemi and its VeHemiVoteDelegation      contracts. The voteDelegation address is read dynamically from VeHemi storage,      so governance automatically follows any future VeHemi.updateVoteDelegation() calls.      delegate(address) calls delegateAllFor on the delegation contract, which      delegates ALL of the caller's veHEMI positions to the specified delegatee.      This requires the adapter to be set as trustedAdapter on VeHemiVoteDelegation.      delegates(address) returns the delegatee address ONLY if all of the account's      veHEMI positions are delegated to the same address. Returns address(0) if the      account has no positions or if positions are split across different delegatees.\",\"events\":{\"DelegateChanged(address,address,address)\":{\"details\":\"Standard IVotes DelegateChanged (address-based, not tokenId-based).\"},\"DelegateVotesChanged(address,uint256,uint256)\":{\"details\":\"Relayed from VeHemiVoteDelegation so events are emitted from      the adapter address, which is what Aragon's subgraph indexes.\"}},\"kind\":\"dev\",\"methods\":{\"balanceOf(address)\":{\"details\":\"Iterates the account's NFTs and sums locked amounts. This provides a      meaningful \\\"token balance\\\" for the Aragon member detail page rather than      the raw NFT position count.      ASYMMETRY WITH `totalSupply()`: `balanceOf(account)` returns the raw locked      HEMI amount, while `totalSupply()` returns aggregate decayed stake weight.      The two are deliberately different quantities \\u2014 `balanceOf` is a stable,      user-recognizable \\\"how much HEMI did I lock\\\" number (matches the member      detail page's expectation), while `totalSupply` matches the value space of      `getVotes` / `getPastVotes` so Aragon's voting-threshold arithmetic is      consistent with delegated voting power. They will NOT sum to a single      meaningful total; do not compare them directly.\"},\"decimals()\":{\"details\":\"Aragon's TokenVoting UI reads `decimals()` to render voting-power values.      HEMI is an 18-decimal ERC20; the `balanceOf` sum above and `totalVeHemiSupply`      are both denominated in 18-decimal wei. Hardcoded rather than proxied through      VeHemi so this view is pure and cannot revert.\"},\"delegate(address)\":{\"details\":\"Emits a single account-wide      `DelegateChanged(msg.sender, prevAccountWide, postAccountWide)`      after the batch settles. The transient batch flag suppresses      the per-token relay so indexers see exactly one IVotes event.      `prevAccountWide` is the pre-batch resolution of `_delegatesOf`      and MAY be `address(0)` \\u2014 either because the caller had no      positions, or because their pre-batch state was already mixed      across multiple delegatees. The `from` arg of `DelegateChanged`      therefore reflects the true `delegates(msg.sender)` view at      entry, consistent with the IVotes account-wide semantic.      `postAccountWide` is RECOMPUTED via `_delegatesOf` after the      batch \\u2014 NOT trusted to equal `delegatee`.      `VeHemiVoteDelegation.delegateAllFor` deliberately skips      expired and near-expiry tokens (those whose      `lock.end <= checkpointTs`), so stale `delegations[tokenId]`      records can remain after the batch. If the caller holds any      such stale-expired NFT whose cached delegatee differs from      `delegatee`, the post-batch state is genuinely mixed and      `adapter.delegates(msg.sender)` returns `address(0)`. Emitting      `DelegateChanged(_, _, delegatee)` in that case would falsely      claim an account-wide change, so the emission is skipped and      the IVotes-derived subgraph view stays in lock-step with      `delegates(msg.sender)`.      Operator note: callers can clear stale-expired records by      calling `VeHemi.withdraw(tokenId)` on each expired position      before retrying `adapter.delegate(addr)`.\"},\"delegateBySig(address,uint256,uint256,uint8,bytes32,bytes32)\":{\"details\":\"The standard IVotes `delegateBySig(address delegatee, uint256 nonce, ...)`      signs over an account-wide delegatee. veHEMI's native delegation is per-tokenId,      so there is no transparent way to forward this signature \\u2014 a naive \\\"delegate      all my positions\\\" translation would produce a different digest than the one      the user signed, which is unsafe. Signers must instead use      `VeHemiVoteDelegation.delegateBySig(tokenId, delegatee, ...)` whose EIP-712      typehash explicitly includes the tokenId.      The function is still declared (reverting) so `supportsInterface(IVotes)` is      truthful at the ABI level \\u2014 Aragon's ERC-165 probe sees the full IVotes      surface \\u2014 while at runtime the unsupported signature path produces an      unambiguous revert string rather than silent misbehavior.\"},\"notifyDelegateChanged(address,address,address)\":{\"details\":\"veHEMI's native delegation is per-tokenId, but the canonical      IVotes `DelegateChanged` semantic asserts an ACCOUNT-WIDE      delegation change. A direct      `voteDelegation.delegate(tokenId, X)` from a multi-token owner      moves only ONE token's voting power \\u2014 emitting the address-      scoped `DelegateChanged(owner, prev, X)` in that case would      falsely advertise an account-wide change and diverge from      `delegates(owner)` (which returns address(0) for mixed states).      This relay walks `delegator`'s positions once and checks      whether ALL are delegated to the same address (the resolved      account-wide delegatee \\u2014 possibly `address(0)`). It emits      `DelegateChanged` only when the post-change state is      consistent. Mixed-state changes are silently skipped, keeping      the Aragon subgraph in lock-step with `delegates(delegator)`.      `adapter.delegate(addr)` short-circuits this per-token relay      via the `_batchActive` transient flag (EIP-1153): the batch      entry point suppresses per-iteration emissions and emits ONE      consolidated event after `delegateAllFor` settles. That      preserves the O(N) gas profile of `delegateAllFor` (no O(N\\u00b2)      mid-loop account-wide scans) while still firing the correct      IVotes event at batch end.      Three terminal cases that DO emit:        - single-token owner re-delegates that token \\u2192 consistent        - multi-token owner who already had all tokens at `A` and          re-delegates one to `A` (no-op re-affirmation) \\u2192 consistent        - forfeit/withdraw cleanup that clears the last/only token's          delegation to `0` \\u2192 consistent at `0`\"},\"refreshVotingPower(address)\":{\"details\":\"Delegates to VeHemiVoteDelegation.refreshVotingPower which uses the         next-epoch-boundary checkpoint timestamp (consistent with delegation         events) and relays the event back to this adapter via notifyVotesChanged.         This avoids the timestamp mismatch that occurs when using getVotes()         (which uses block.timestamp) directly.         Permissionless by design: any address can call this to nudge the subgraph.         The function does not mutate delegation state \\u2014 it only re-emits an event         with values that are already readable on-chain. A griefer who spammed         `refreshVotingPower` for random addresses would pay gas to emit redundant         events that the subgraph would fold into identical already-stored values;         no griefing surface on the core contract (beyond ordinary event spam,         which the subgraph is built to absorb). The intended caller is an off-chain         keeper that periodically walks the active delegate set to keep voting         power displays in sync with linear decay.\"},\"refreshVotingPowerBatch(address[])\":{\"details\":\"Delegates to VeHemiVoteDelegation.refreshVotingPowerBatch for         timestamp-consistent event emission. Same permissionless-by-design         rationale as `refreshVotingPower`; caller pays gas linear in array length.\"},\"totalSupply()\":{\"details\":\"See the `balanceOf` NatSpec for the rationale behind the intentional      asymmetry between `balanceOf` (locked HEMI) and `totalSupply` (stake weight).\"}},\"stateVariables\":{\"_batchActive\":{\"details\":\"Transient flag (EIP-1153) used by `delegate(addr)` to suppress      per-token `notifyDelegateChanged` emissions during the batch      so the IVotes-shaped `DelegateChanged` event fires exactly once      at the end of the batch (account-wide truth) rather than N times      (per-token intermediate states). Preserves `delegateAllFor`'s      O(N) gas profile. Requires Cancun (EIP-1153 transient storage).\"}},\"title\":\"VeHemiAragonAdapter\",\"version\":1},\"userdoc\":{\"kind\":\"user\",\"methods\":{\"balanceOf(address)\":{\"notice\":\"Returns the total locked HEMI across all of an account's veHEMI positions.\"},\"decimals()\":{\"notice\":\"Fixed at 18 to match HEMI's ERC20 decimals.\"},\"delegate(address)\":{\"notice\":\"Delegates ALL of the caller's veHEMI positions to the         specified delegatee. Requires this adapter to be set as         `trustedAdapter` on `VeHemiVoteDelegation`.\"},\"delegateBySig(address,uint256,uint256,uint8,bytes32,bytes32)\":{\"notice\":\"Always reverts. Use `VeHemiVoteDelegation.delegateBySig` directly.\"},\"delegates(address)\":{\"notice\":\"Returns the delegatee if ALL of the account's veHEMI positions are         delegated to the same address. Returns address(0) if positions are         split across different delegatees or the account has no positions.\"},\"notifyDelegateChanged(address,address,address)\":{\"notice\":\"Called by VeHemiVoteDelegation to relay DelegateChanged events         with the standard IVotes signature (address delegator, not         uint256 tokenId).\"},\"notifyVotesChanged(address,uint256,uint256)\":{\"notice\":\"Called by VeHemiVoteDelegation to relay DelegateVotesChanged events         from the adapter address for Aragon subgraph compatibility.\"},\"refreshVotingPower(address)\":{\"notice\":\"Re-emits a DelegateVotesChanged event with the current on-chain voting         power for `delegatee`. This forces the Aragon subgraph to re-sync its         cached votingPower value without any actual delegation change.\"},\"refreshVotingPowerBatch(address[])\":{\"notice\":\"Batch version of refreshVotingPower for multiple delegatees in a         single transaction.\"},\"totalSupply()\":{\"notice\":\"Returns the global aggregate stake weight (decayed voting power) across         all veHEMI positions. This matches the value space of `getVotes` /         `getPastVotes`, so Aragon's quorum/support threshold arithmetic stays         consistent with the sum of all delegate voting powers.\"}},\"notice\":\"Stateless, immutable adapter that presents veHEMI voting power through         the IVotes + ERC20 interface expected by Aragon's TokenVoting plugin.\",\"version\":1}},\"settings\":{\"compilationTarget\":{\"src/adapter/VeHemiAragonAdapter.sol\":\"VeHemiAragonAdapter\"},\"evmVersion\":\"cancun\",\"libraries\":{},\"metadata\":{\"bytecodeHash\":\"ipfs\",\"useLiteralContent\":true},\"optimizer\":{\"enabled\":true,\"runs\":1},\"remappings\":[]},\"sources\":{\"src/adapter/VeHemiAragonAdapter.sol\":{\"content\":\"// SPDX-License-Identifier: MIT\\npragma solidity 0.8.29;\\n\\n/// @dev Minimal interface for VeHemi queries used by the adapter.\\ninterface IVeHemiAdapter {\\n    struct LockedBalance {\\n        int128 amount;\\n        uint64 end;\\n    }\\n\\n    function balanceOf(address account) external view returns (uint256);\\n    function totalVeHemiSupply() external view returns (uint256);\\n    function voteDelegation() external view returns (address);\\n    function tokenOfOwnerByIndex(address owner, uint256 index) external view returns (uint256);\\n    function getLockedBalance(uint256 tokenId) external view returns (LockedBalance memory);\\n}\\n\\n/// @dev Minimal interface for VeHemiVoteDelegation functions used by the adapter.\\ninterface IVoteDelegation {\\n    struct Delegation {\\n        address delegatee;\\n        uint48 end;\\n        uint96 bias;\\n        uint96 amount;\\n        uint64 slope;\\n    }\\n\\n    function getVotes(address account) external view returns (uint256);\\n    function getPastVotes(address account, uint256 timestamp) external view returns (uint256);\\n    function getPastTotalSupply(uint256 timestamp) external view returns (uint256);\\n    function clock() external view returns (uint48);\\n    function CLOCK_MODE() external view returns (string memory);\\n    function delegation(uint256 tokenId) external view returns (Delegation memory);\\n    function delegateAllFor(address owner, address delegatee) external;\\n    function refreshVotingPower(address delegatee) external;\\n    function refreshVotingPowerBatch(address[] calldata delegatees) external;\\n}\\n\\n/// @dev IVotes interface for ERC-165 interfaceId computation.\\n///      Matches Aragon's IVotesUpgradeable at the ABI level.\\ninterface IVotes {\\n    function getVotes(address account) external view returns (uint256);\\n    function getPastVotes(address account, uint256 timepoint) external view returns (uint256);\\n    function getPastTotalSupply(uint256 timepoint) external view returns (uint256);\\n    function delegates(address account) external view returns (address);\\n    function delegate(address delegatee) external;\\n    function delegateBySig(address delegatee, uint256 nonce, uint256 expiry, uint8 v, bytes32 r, bytes32 s) external;\\n}\\n\\n/// @title VeHemiAragonAdapter\\n/// @notice Stateless, immutable adapter that presents veHEMI voting power through\\n///         the IVotes + ERC20 interface expected by Aragon's TokenVoting plugin.\\n/// @dev All calls are forwarded to the underlying VeHemi and its VeHemiVoteDelegation\\n///      contracts. The voteDelegation address is read dynamically from VeHemi storage,\\n///      so governance automatically follows any future VeHemi.updateVoteDelegation() calls.\\n///\\n///      delegate(address) calls delegateAllFor on the delegation contract, which\\n///      delegates ALL of the caller's veHEMI positions to the specified delegatee.\\n///      This requires the adapter to be set as trustedAdapter on VeHemiVoteDelegation.\\n///\\n///      delegates(address) returns the delegatee address ONLY if all of the account's\\n///      veHEMI positions are delegated to the same address. Returns address(0) if the\\n///      account has no positions or if positions are split across different delegatees.\\ncontract VeHemiAragonAdapter {\\n    IVeHemiAdapter private immutable _veHemi;\\n\\n    constructor(address veHemi_) {\\n        require(veHemi_ != address(0), \\\"zero veHemi\\\");\\n        _veHemi = IVeHemiAdapter(veHemi_);\\n    }\\n\\n    /// @dev Reads the current voteDelegation contract from VeHemi storage.\\n    function _delegation() private view returns (IVoteDelegation) {\\n        return IVoteDelegation(_veHemi.voteDelegation());\\n    }\\n\\n    // --- Immutable references ---\\n\\n    function veHemi() external view returns (address) {\\n        return address(_veHemi);\\n    }\\n\\n    function voteDelegation() external view returns (address) {\\n        return address(_delegation());\\n    }\\n\\n    // --- ERC20-like (for Aragon frontend & isMember) ---\\n\\n    /// @notice Returns the total locked HEMI across all of an account's veHEMI positions.\\n    /// @dev Iterates the account's NFTs and sums locked amounts. This provides a\\n    ///      meaningful \\\"token balance\\\" for the Aragon member detail page rather than\\n    ///      the raw NFT position count.\\n    ///\\n    ///      ASYMMETRY WITH `totalSupply()`: `balanceOf(account)` returns the raw locked\\n    ///      HEMI amount, while `totalSupply()` returns aggregate decayed stake weight.\\n    ///      The two are deliberately different quantities \\u2014 `balanceOf` is a stable,\\n    ///      user-recognizable \\\"how much HEMI did I lock\\\" number (matches the member\\n    ///      detail page's expectation), while `totalSupply` matches the value space of\\n    ///      `getVotes` / `getPastVotes` so Aragon's voting-threshold arithmetic is\\n    ///      consistent with delegated voting power. They will NOT sum to a single\\n    ///      meaningful total; do not compare them directly.\\n    function balanceOf(address account) external view returns (uint256 total) {\\n        uint256 count = _veHemi.balanceOf(account);\\n        for (uint256 i; i < count;) {\\n            uint256 tokenId = _veHemi.tokenOfOwnerByIndex(account, i);\\n            int128 amount = _veHemi.getLockedBalance(tokenId).amount;\\n            if (amount > 0) total += uint128(amount);\\n            unchecked { ++i; }\\n        }\\n    }\\n\\n    /// @notice Fixed at 18 to match HEMI's ERC20 decimals.\\n    /// @dev Aragon's TokenVoting UI reads `decimals()` to render voting-power values.\\n    ///      HEMI is an 18-decimal ERC20; the `balanceOf` sum above and `totalVeHemiSupply`\\n    ///      are both denominated in 18-decimal wei. Hardcoded rather than proxied through\\n    ///      VeHemi so this view is pure and cannot revert.\\n    function decimals() external pure returns (uint8) {\\n        return 18;\\n    }\\n\\n    /// @notice Returns the global aggregate stake weight (decayed voting power) across\\n    ///         all veHEMI positions. This matches the value space of `getVotes` /\\n    ///         `getPastVotes`, so Aragon's quorum/support threshold arithmetic stays\\n    ///         consistent with the sum of all delegate voting powers.\\n    /// @dev See the `balanceOf` NatSpec for the rationale behind the intentional\\n    ///      asymmetry between `balanceOf` (locked HEMI) and `totalSupply` (stake weight).\\n    function totalSupply() external view returns (uint256) {\\n        return _veHemi.totalVeHemiSupply();\\n    }\\n\\n    // --- IVotes ---\\n\\n    function getVotes(address account) external view returns (uint256) {\\n        return _delegation().getVotes(account);\\n    }\\n\\n    function getPastVotes(address account, uint256 timepoint) external view returns (uint256) {\\n        return _delegation().getPastVotes(account, timepoint);\\n    }\\n\\n    function getPastTotalSupply(uint256 timepoint) external view returns (uint256) {\\n        return _delegation().getPastTotalSupply(timepoint);\\n    }\\n\\n    /// @notice Returns the delegatee if ALL of the account's veHEMI positions are\\n    ///         delegated to the same address. Returns address(0) if positions are\\n    ///         split across different delegatees or the account has no positions.\\n    function delegates(address account) external view returns (address) {\\n        return _delegatesOf(account);\\n    }\\n\\n    /// @dev Internal helper for `delegates(account)`. Factored out so\\n    ///      `notifyDelegateChanged` can call it without paying the\\n    ///      external-call overhead of `this.delegates(account)`.\\n    function _delegatesOf(address account) internal view returns (address) {\\n        uint256 count = _veHemi.balanceOf(account);\\n        if (count == 0) return address(0);\\n\\n        IVoteDelegation d = _delegation();\\n        uint256 firstTokenId = _veHemi.tokenOfOwnerByIndex(account, 0);\\n        address firstDelegatee = d.delegation(firstTokenId).delegatee;\\n\\n        for (uint256 i = 1; i < count;) {\\n            uint256 tokenId = _veHemi.tokenOfOwnerByIndex(account, i);\\n            if (d.delegation(tokenId).delegatee != firstDelegatee) {\\n                return address(0);\\n            }\\n            unchecked { ++i; }\\n        }\\n\\n        return firstDelegatee;\\n    }\\n\\n    /// @dev Transient flag (EIP-1153) used by `delegate(addr)` to suppress\\n    ///      per-token `notifyDelegateChanged` emissions during the batch\\n    ///      so the IVotes-shaped `DelegateChanged` event fires exactly once\\n    ///      at the end of the batch (account-wide truth) rather than N times\\n    ///      (per-token intermediate states). Preserves `delegateAllFor`'s\\n    ///      O(N) gas profile. Requires Cancun (EIP-1153 transient storage).\\n    bool transient private _batchActive;\\n\\n    /// @notice Delegates ALL of the caller's veHEMI positions to the\\n    ///         specified delegatee. Requires this adapter to be set as\\n    ///         `trustedAdapter` on `VeHemiVoteDelegation`.\\n    /// @dev Emits a single account-wide\\n    ///      `DelegateChanged(msg.sender, prevAccountWide, postAccountWide)`\\n    ///      after the batch settles. The transient batch flag suppresses\\n    ///      the per-token relay so indexers see exactly one IVotes event.\\n    ///\\n    ///      `prevAccountWide` is the pre-batch resolution of `_delegatesOf`\\n    ///      and MAY be `address(0)` \\u2014 either because the caller had no\\n    ///      positions, or because their pre-batch state was already mixed\\n    ///      across multiple delegatees. The `from` arg of `DelegateChanged`\\n    ///      therefore reflects the true `delegates(msg.sender)` view at\\n    ///      entry, consistent with the IVotes account-wide semantic.\\n    ///\\n    ///      `postAccountWide` is RECOMPUTED via `_delegatesOf` after the\\n    ///      batch \\u2014 NOT trusted to equal `delegatee`.\\n    ///      `VeHemiVoteDelegation.delegateAllFor` deliberately skips\\n    ///      expired and near-expiry tokens (those whose\\n    ///      `lock.end <= checkpointTs`), so stale `delegations[tokenId]`\\n    ///      records can remain after the batch. If the caller holds any\\n    ///      such stale-expired NFT whose cached delegatee differs from\\n    ///      `delegatee`, the post-batch state is genuinely mixed and\\n    ///      `adapter.delegates(msg.sender)` returns `address(0)`. Emitting\\n    ///      `DelegateChanged(_, _, delegatee)` in that case would falsely\\n    ///      claim an account-wide change, so the emission is skipped and\\n    ///      the IVotes-derived subgraph view stays in lock-step with\\n    ///      `delegates(msg.sender)`.\\n    ///\\n    ///      Operator note: callers can clear stale-expired records by\\n    ///      calling `VeHemi.withdraw(tokenId)` on each expired position\\n    ///      before retrying `adapter.delegate(addr)`.\\n    function delegate(address delegatee) external {\\n        address prevAccountWide = _delegatesOf(msg.sender);\\n        _batchActive = true;\\n        _delegation().delegateAllFor(msg.sender, delegatee);\\n        _batchActive = false;\\n        address postAccountWide = _delegatesOf(msg.sender);\\n        if (postAccountWide == address(0)) {\\n            // Mixed post-state (stale-expired NFT with divergent delegatee\\n            // remains). Skip emit; subgraph stays consistent with\\n            // delegates(msg.sender) == address(0).\\n            return;\\n        }\\n        // Emit even when `postAccountWide == prevAccountWide` (idempotent\\n        // re-affirmation). OZ Votes' canonical `_delegate(account, delegatee)`\\n        // emits `DelegateChanged` unconditionally on entry, so subgraphs\\n        // and indexers treat the `from == to` case as a valid re-affirm\\n        // signal. The invariant we care about \\u2014 adapter event in\\n        // lock-step with `delegates(msg.sender)` \\u2014 holds either way.\\n        emit DelegateChanged(msg.sender, prevAccountWide, postAccountWide);\\n    }\\n\\n    /// @notice Always reverts. Use `VeHemiVoteDelegation.delegateBySig` directly.\\n    /// @dev The standard IVotes `delegateBySig(address delegatee, uint256 nonce, ...)`\\n    ///      signs over an account-wide delegatee. veHEMI's native delegation is per-tokenId,\\n    ///      so there is no transparent way to forward this signature \\u2014 a naive \\\"delegate\\n    ///      all my positions\\\" translation would produce a different digest than the one\\n    ///      the user signed, which is unsafe. Signers must instead use\\n    ///      `VeHemiVoteDelegation.delegateBySig(tokenId, delegatee, ...)` whose EIP-712\\n    ///      typehash explicitly includes the tokenId.\\n    ///\\n    ///      The function is still declared (reverting) so `supportsInterface(IVotes)` is\\n    ///      truthful at the ABI level \\u2014 Aragon's ERC-165 probe sees the full IVotes\\n    ///      surface \\u2014 while at runtime the unsupported signature path produces an\\n    ///      unambiguous revert string rather than silent misbehavior.\\n    function delegateBySig(address, uint256, uint256, uint8, bytes32, bytes32) external pure {\\n        revert(\\\"Use VeHemiVoteDelegation.delegateBySig\\\");\\n    }\\n\\n    // --- Event relay (for Aragon subgraph indexing) ---\\n\\n    /// @dev Relayed from VeHemiVoteDelegation so events are emitted from\\n    ///      the adapter address, which is what Aragon's subgraph indexes.\\n    event DelegateVotesChanged(address indexed delegate, uint256 previousVotes, uint256 newVotes);\\n\\n    /// @dev Standard IVotes DelegateChanged (address-based, not tokenId-based).\\n    event DelegateChanged(address indexed delegator, address indexed fromDelegate, address indexed toDelegate);\\n\\n    /// @notice Called by VeHemiVoteDelegation to relay DelegateVotesChanged events\\n    ///         from the adapter address for Aragon subgraph compatibility.\\n    function notifyVotesChanged(address delegatee, uint256 previousVotes, uint256 newVotes) external {\\n        require(msg.sender == address(_delegation()), \\\"unauthorized\\\");\\n        emit DelegateVotesChanged(delegatee, previousVotes, newVotes);\\n    }\\n\\n    /// @notice Called by VeHemiVoteDelegation to relay DelegateChanged events\\n    ///         with the standard IVotes signature (address delegator, not\\n    ///         uint256 tokenId).\\n    /// @dev veHEMI's native delegation is per-tokenId, but the canonical\\n    ///      IVotes `DelegateChanged` semantic asserts an ACCOUNT-WIDE\\n    ///      delegation change. A direct\\n    ///      `voteDelegation.delegate(tokenId, X)` from a multi-token owner\\n    ///      moves only ONE token's voting power \\u2014 emitting the address-\\n    ///      scoped `DelegateChanged(owner, prev, X)` in that case would\\n    ///      falsely advertise an account-wide change and diverge from\\n    ///      `delegates(owner)` (which returns address(0) for mixed states).\\n    ///\\n    ///      This relay walks `delegator`'s positions once and checks\\n    ///      whether ALL are delegated to the same address (the resolved\\n    ///      account-wide delegatee \\u2014 possibly `address(0)`). It emits\\n    ///      `DelegateChanged` only when the post-change state is\\n    ///      consistent. Mixed-state changes are silently skipped, keeping\\n    ///      the Aragon subgraph in lock-step with `delegates(delegator)`.\\n    ///\\n    ///      `adapter.delegate(addr)` short-circuits this per-token relay\\n    ///      via the `_batchActive` transient flag (EIP-1153): the batch\\n    ///      entry point suppresses per-iteration emissions and emits ONE\\n    ///      consolidated event after `delegateAllFor` settles. That\\n    ///      preserves the O(N) gas profile of `delegateAllFor` (no O(N\\u00b2)\\n    ///      mid-loop account-wide scans) while still firing the correct\\n    ///      IVotes event at batch end.\\n    ///\\n    ///      Three terminal cases that DO emit:\\n    ///        - single-token owner re-delegates that token \\u2192 consistent\\n    ///        - multi-token owner who already had all tokens at `A` and\\n    ///          re-delegates one to `A` (no-op re-affirmation) \\u2192 consistent\\n    ///        - forfeit/withdraw cleanup that clears the last/only token's\\n    ///          delegation to `0` \\u2192 consistent at `0`\\n    function notifyDelegateChanged(address delegator, address fromDelegate, address toDelegate) external {\\n        require(msg.sender == address(_delegation()), \\\"unauthorized\\\");\\n\\n        // Suppress per-token relay while inside `adapter.delegate(addr)`.\\n        // The batch entry point emits one consolidated event at the end.\\n        if (_batchActive) return;\\n\\n        // Walk delegator's positions once. Three possible post-states:\\n        //   (a) zero positions          \\u2192 emit DelegateChanged(_, fromDelegate, 0)\\n        //   (b) all match `firstDelegatee` (could be 0!) \\u2192 emit DelegateChanged\\n        //   (c) any two differ          \\u2192 skip (mixed state)\\n        uint256 count = _veHemi.balanceOf(delegator);\\n        if (count == 0) {\\n            // Owner has no positions \\u2014 account-wide truth is unambiguously\\n            // `address(0)`. Forward the IVotes signal so indexers can mark\\n            // the delegation closed.\\n            emit DelegateChanged(delegator, fromDelegate, address(0));\\n            return;\\n        }\\n        IVoteDelegation d = _delegation();\\n        uint256 firstTokenId = _veHemi.tokenOfOwnerByIndex(delegator, 0);\\n        address firstDelegatee = d.delegation(firstTokenId).delegatee;\\n        for (uint256 i = 1; i < count;) {\\n            uint256 tokenId = _veHemi.tokenOfOwnerByIndex(delegator, i);\\n            if (d.delegation(tokenId).delegatee != firstDelegatee) {\\n                // Mixed state \\u2014 skip emission. Subgraph stays consistent\\n                // with `adapter.delegates(delegator) == address(0)`.\\n                return;\\n            }\\n            unchecked { ++i; }\\n        }\\n        // All tokens consistently delegated to `firstDelegatee` (possibly 0).\\n        emit DelegateChanged(delegator, fromDelegate, firstDelegatee);\\n    }\\n\\n    // --- Voting power refresh (permissionless) ---\\n\\n    /// @notice Re-emits a DelegateVotesChanged event with the current on-chain voting\\n    ///         power for `delegatee`. This forces the Aragon subgraph to re-sync its\\n    ///         cached votingPower value without any actual delegation change.\\n    /// @dev    Delegates to VeHemiVoteDelegation.refreshVotingPower which uses the\\n    ///         next-epoch-boundary checkpoint timestamp (consistent with delegation\\n    ///         events) and relays the event back to this adapter via notifyVotesChanged.\\n    ///         This avoids the timestamp mismatch that occurs when using getVotes()\\n    ///         (which uses block.timestamp) directly.\\n    ///\\n    ///         Permissionless by design: any address can call this to nudge the subgraph.\\n    ///         The function does not mutate delegation state \\u2014 it only re-emits an event\\n    ///         with values that are already readable on-chain. A griefer who spammed\\n    ///         `refreshVotingPower` for random addresses would pay gas to emit redundant\\n    ///         events that the subgraph would fold into identical already-stored values;\\n    ///         no griefing surface on the core contract (beyond ordinary event spam,\\n    ///         which the subgraph is built to absorb). The intended caller is an off-chain\\n    ///         keeper that periodically walks the active delegate set to keep voting\\n    ///         power displays in sync with linear decay.\\n    function refreshVotingPower(address delegatee) external {\\n        _delegation().refreshVotingPower(delegatee);\\n    }\\n\\n    /// @notice Batch version of refreshVotingPower for multiple delegatees in a\\n    ///         single transaction.\\n    /// @dev    Delegates to VeHemiVoteDelegation.refreshVotingPowerBatch for\\n    ///         timestamp-consistent event emission. Same permissionless-by-design\\n    ///         rationale as `refreshVotingPower`; caller pays gas linear in array length.\\n    function refreshVotingPowerBatch(address[] calldata delegatees) external {\\n        _delegation().refreshVotingPowerBatch(delegatees);\\n    }\\n\\n    // --- ERC-6372 ---\\n\\n    function clock() external view returns (uint48) {\\n        return _delegation().clock();\\n    }\\n\\n    function CLOCK_MODE() external view returns (string memory) {\\n        return _delegation().CLOCK_MODE();\\n    }\\n\\n    // --- ERC-165 ---\\n\\n    function supportsInterface(bytes4 interfaceId) external pure returns (bool) {\\n        return interfaceId == type(IVotes).interfaceId\\n            || interfaceId == 0x01ffc9a7  // ERC-165\\n            || interfaceId == 0xda287a1d; // IERC6372 (clock() ^ CLOCK_MODE())\\n    }\\n\\n    // --- Metadata ---\\n\\n    function name() external pure returns (string memory) {\\n        return \\\"veHEMI Votes\\\";\\n    }\\n\\n    function symbol() external pure returns (string memory) {\\n        return \\\"veHEMI\\\";\\n    }\\n}\\n\",\"keccak256\":\"0x43916ad4047a7ae92278c8c6bb61702d52445f03874c2e2473b4da1676c46db3\",\"license\":\"MIT\"}},\"version\":1}",
+  "bytecode": "0x60a060405234801561000f575f5ffd5b506040516117a03803806117a083398101604081905261002e91610087565b6001600160a01b0381166100765760405162461bcd60e51b815260206004820152600b60248201526a7a65726f20766548656d6960a81b604482015260640160405180910390fd5b6001600160a01b03166080526100b4565b5f60208284031215610097575f5ffd5b81516001600160a01b03811681146100ad575f5ffd5b9392505050565b6080516116876101195f395f81816101fc0152818161032701528181610413015281816104cb015281816105e90152818161099101528181610a3f01528181610ad801528181610daa01528181610e2c01528181610ed40152610ff201526116875ff3fe608060405234801561000f575f5ffd5b50600436106100fa575f3560e01c806301ffc9a7146100fe57806306fdde031461012657806318160ddd14610157578063193e610c1461016d5780632577a57214610182578063313ce5671461019557806334d912bf146101a45780633a46b1a8146101b95780634bf5d7e9146101cc578063587cde1e146101d45780635c19a95c146101e75780635d23c212146101fa57806370a08231146102205780638e539e8c1461023357806391ddadf41461024657806395d89b41146102655780639ab24eb014610287578063a1987d691461029a578063c3cda520146102ad578063ff7e14c2146102c0575b5f5ffd5b61011161010c366004611110565b6102d3565b60405190151581526020015b60405180910390f35b60408051808201909152600c81526b766548454d4920566f74657360a01b60208201525b60405161011d9190611137565b61015f610324565b60405190815260200161011d565b61018061017b366004611183565b6103aa565b005b6101806101903660046111cb565b61073c565b6040516012815260200161011d565b6101ac6107bd565b60405161011d91906111fd565b61015f6101c7366004611211565b6107c6565b61014a610842565b6101ac6101e236600461123b565b6108ad565b6101806101f536600461123b565b6108b7565b7f00000000000000000000000000000000000000000000000000000000000000006101ac565b61015f61022e36600461123b565b61098d565b61015f610241366004611256565b610b76565b61024e610beb565b60405165ffffffffffff909116815260200161011d565b604080518082019091526006815265766548454d4960d01b602082015261014a565b61015f61029536600461123b565b610c53565b6101806102a836600461123b565b610c87565b6101806102bb36600461126d565b610cea565b6101806102ce3660046112ca565b610d41565b5f6001600160e01b03198216637487d9fb60e11b148061030357506301ffc9a760e01b6001600160e01b03198316145b8061031e575063da287a1d60e01b6001600160e01b03198316145b92915050565b5f7f00000000000000000000000000000000000000000000000000000000000000006001600160a01b031663fe1734a96040518163ffffffff1660e01b8152600401602060405180830381865afa158015610381573d5f5f3e3d5ffd5b505050506040513d601f19601f820116820180604052508101906103a59190611339565b905090565b6103b2610da7565b6001600160a01b0316336001600160a01b0316146103eb5760405162461bcd60e51b81526004016103e290611350565b60405180910390fd5b60ff5f5c16156103fa57505050565b6040516370a0823160e01b81525f906001600160a01b037f000000000000000000000000000000000000000000000000000000000000000016906370a08231906104489087906004016111fd565b602060405180830381865afa158015610463573d5f5f3e3d5ffd5b505050506040513d601f19601f820116820180604052508101906104879190611339565b9050805f036104bd576040515f906001600160a01b0385811691908716905f5160206116325f395f51905f52908490a450505050565b5f6104c6610da7565b90505f7f00000000000000000000000000000000000000000000000000000000000000006001600160a01b0316632f745c59875f6040518363ffffffff1660e01b8152600401610517929190611376565b602060405180830381865afa158015610532573d5f5f3e3d5ffd5b505050506040513d601f19601f820116820180604052508101906105569190611339565b6040516358d30eed60e11b8152600481018290529091505f906001600160a01b0384169063b1a61dda9060240160a060405180830381865afa15801561059e573d5f5f3e3d5ffd5b505050506040513d601f19601f820116820180604052508101906105c29190611419565b51905060015b848110156106fb57604051632f745c5960e01b81525f906001600160a01b037f00000000000000000000000000000000000000000000000000000000000000001690632f745c5990610620908c908690600401611376565b602060405180830381865afa15801561063b573d5f5f3e3d5ffd5b505050506040513d601f19601f8201168201806040525081019061065f9190611339565b9050826001600160a01b0316856001600160a01b031663b1a61dda836040518263ffffffff1660e01b815260040161069991815260200190565b60a060405180830381865afa1580156106b4573d5f5f3e3d5ffd5b505050506040513d601f19601f820116820180604052508101906106d89190611419565b516001600160a01b0316146106f257505050505050505050565b506001016105c8565b50806001600160a01b0316866001600160a01b0316886001600160a01b03165f5160206116325f395f51905f5260405160405180910390a450505050505050565b610744610da7565b6001600160a01b0316336001600160a01b0316146107745760405162461bcd60e51b81526004016103e290611350565b60408051838152602081018390526001600160a01b038516917fdec2bacdd2f05b59de34da9b523dff8be42e5e38e818c82fdb0bae774387a724910160405180910390a2505050565b5f6103a5610da7565b5f6107cf610da7565b6001600160a01b0316633a46b1a884846040518363ffffffff1660e01b81526004016107fc929190611376565b602060405180830381865afa158015610817573d5f5f3e3d5ffd5b505050506040513d601f19601f8201168201806040525081019061083b9190611339565b9392505050565b606061084c610da7565b6001600160a01b0316634bf5d7e96040518163ffffffff1660e01b81526004015f60405180830381865afa158015610886573d5f5f3e3d5ffd5b505050506040513d5f823e601f3d908101601f191682016040526103a591908101906114a8565b5f61031e82610e28565b5f6108c133610e28565b905060015f805c60ff19168217905d506108d9610da7565b604051633d499f9760e21b81523360048201526001600160a01b038481166024830152919091169063f5267e5c906044015f604051808303815f87803b158015610921575f5ffd5b505af1158015610933573d5f5f3e3d5ffd5b505f92505050805c60ff1916815d505f61094c33610e28565b90506001600160a01b03811661096157505050565b6040516001600160a01b03808316919084169033905f5160206116325f395f51905f52905f90a4505050565b5f5f7f00000000000000000000000000000000000000000000000000000000000000006001600160a01b03166370a08231846040518263ffffffff1660e01b81526004016109db91906111fd565b602060405180830381865afa1580156109f6573d5f5f3e3d5ffd5b505050506040513d601f19601f82011682018060405250810190610a1a9190611339565b90505f5b81811015610b6f57604051632f745c5960e01b81525f906001600160a01b037f00000000000000000000000000000000000000000000000000000000000000001690632f745c5990610a769088908690600401611376565b602060405180830381865afa158015610a91573d5f5f3e3d5ffd5b505050506040513d601f19601f82011682018060405250810190610ab59190611339565b604051632c4e9ebd60e01b8152600481018290529091505f906001600160a01b037f00000000000000000000000000000000000000000000000000000000000000001690632c4e9ebd906024016040805180830381865afa158015610b1c573d5f5f3e3d5ffd5b505050506040513d601f19601f82011682018060405250810190610b40919061153a565b5190505f600f82900b1315610b6557610b626001600160801b0382168661159c565b94505b5050600101610a1e565b5050919050565b5f610b7f610da7565b6001600160a01b0316638e539e8c836040518263ffffffff1660e01b8152600401610bac91815260200190565b602060405180830381865afa158015610bc7573d5f5f3e3d5ffd5b505050506040513d601f19601f8201168201806040525081019061031e9190611339565b5f610bf4610da7565b6001600160a01b03166391ddadf46040518163ffffffff1660e01b8152600401602060405180830381865afa158015610c2f573d5f5f3e3d5ffd5b505050506040513d601f19601f820116820180604052508101906103a591906115bb565b5f610c5c610da7565b6001600160a01b0316639ab24eb0836040518263ffffffff1660e01b8152600401610bac91906111fd565b610c8f610da7565b6001600160a01b031663a1987d69826040518263ffffffff1660e01b8152600401610cba91906111fd565b5f604051808303815f87803b158015610cd1575f5ffd5b505af1158015610ce3573d5f5f3e3d5ffd5b5050505050565b60405162461bcd60e51b815260206004820152602660248201527f55736520566548656d69566f746544656c65676174696f6e2e64656c6567617460448201526565427953696760d01b60648201526084016103e2565b610d49610da7565b6001600160a01b031663ff7e14c283836040518363ffffffff1660e01b8152600401610d769291906115d4565b5f604051808303815f87803b158015610d8d575f5ffd5b505af1158015610d9f573d5f5f3e3d5ffd5b505050505050565b5f7f00000000000000000000000000000000000000000000000000000000000000006001600160a01b03166334d912bf6040518163ffffffff1660e01b8152600401602060405180830381865afa158015610e04573d5f5f3e3d5ffd5b505050506040513d601f19601f820116820180604052508101906103a59190611616565b5f5f7f00000000000000000000000000000000000000000000000000000000000000006001600160a01b03166370a08231846040518263ffffffff1660e01b8152600401610e7691906111fd565b602060405180830381865afa158015610e91573d5f5f3e3d5ffd5b505050506040513d601f19601f82011682018060405250810190610eb59190611339565b9050805f03610ec657505f92915050565b5f610ecf610da7565b90505f7f00000000000000000000000000000000000000000000000000000000000000006001600160a01b0316632f745c59865f6040518363ffffffff1660e01b8152600401610f20929190611376565b602060405180830381865afa158015610f3b573d5f5f3e3d5ffd5b505050506040513d601f19601f82011682018060405250810190610f5f9190611339565b6040516358d30eed60e11b8152600481018290529091505f906001600160a01b0384169063b1a61dda9060240160a060405180830381865afa158015610fa7573d5f5f3e3d5ffd5b505050506040513d601f19601f82011682018060405250810190610fcb9190611419565b51905060015b8481101561110657604051632f745c5960e01b81525f906001600160a01b037f00000000000000000000000000000000000000000000000000000000000000001690632f745c5990611029908b908690600401611376565b602060405180830381865afa158015611044573d5f5f3e3d5ffd5b505050506040513d601f19601f820116820180604052508101906110689190611339565b9050826001600160a01b0316856001600160a01b031663b1a61dda836040518263ffffffff1660e01b81526004016110a291815260200190565b60a060405180830381865afa1580156110bd573d5f5f3e3d5ffd5b505050506040513d601f19601f820116820180604052508101906110e19190611419565b516001600160a01b0316146110fd57505f979650505050505050565b50600101610fd1565b5095945050505050565b5f60208284031215611120575f5ffd5b81356001600160e01b03198116811461083b575f5ffd5b602081525f82518060208401528060208501604085015e5f604082850101526040601f19601f83011684010191505092915050565b6001600160a01b0381168114611180575f5ffd5b50565b5f5f5f60608486031215611195575f5ffd5b83356111a08161116c565b925060208401356111b08161116c565b915060408401356111c08161116c565b809150509250925092565b5f5f5f606084860312156111dd575f5ffd5b83356111e88161116c565b95602085013595506040909401359392505050565b6001600160a01b0391909116815260200190565b5f5f60408385031215611222575f5ffd5b823561122d8161116c565b946020939093013593505050565b5f6020828403121561124b575f5ffd5b813561083b8161116c565b5f60208284031215611266575f5ffd5b5035919050565b5f5f5f5f5f5f60c08789031215611282575f5ffd5b863561128d8161116c565b95506020870135945060408701359350606087013560ff811681146112b0575f5ffd5b9598949750929560808101359460a0909101359350915050565b5f5f602083850312156112db575f5ffd5b82356001600160401b038111156112f0575f5ffd5b8301601f81018513611300575f5ffd5b80356001600160401b03811115611315575f5ffd5b8560208260051b8401011115611329575f5ffd5b6020919091019590945092505050565b5f60208284031215611349575f5ffd5b5051919050565b6020808252600c908201526b1d5b985d5d1a1bdc9a5e995960a21b604082015260600190565b6001600160a01b03929092168252602082015260400190565b634e487b7160e01b5f52604160045260245ffd5b604051601f8201601f191681016001600160401b03811182821017156113cb576113cb61138f565b604052919050565b805165ffffffffffff811681146113e8575f5ffd5b919050565b80516001600160601b03811681146113e8575f5ffd5b80516001600160401b03811681146113e8575f5ffd5b5f60a082840312801561142a575f5ffd5b5060405160a081016001600160401b038111828210171561144d5761144d61138f565b604052825161145b8161116c565b8152611469602084016113d3565b602082015261147a604084016113ed565b604082015261148b606084016113ed565b606082015261149c60808401611403565b60808201529392505050565b5f602082840312156114b8575f5ffd5b81516001600160401b038111156114cd575f5ffd5b8201601f810184136114dd575f5ffd5b80516001600160401b038111156114f6576114f661138f565b611509601f8201601f19166020016113a3565b81815285602083850101111561151d575f5ffd5b8160208401602083015e5f91810160200191909152949350505050565b5f604082840312801561154b575f5ffd5b50604080519081016001600160401b038111828210171561156e5761156e61138f565b6040528251600f81900b8114611582575f5ffd5b815261159060208401611403565b60208201529392505050565b8082018082111561031e57634e487b7160e01b5f52601160045260245ffd5b5f602082840312156115cb575f5ffd5b61083b826113d3565b602080825281018290525f8360408301825b858110156111065782356115f98161116c565b6001600160a01b03168252602092830192909101906001016115e6565b5f60208284031215611626575f5ffd5b815161083b8161116c56fe3134e8a2e6d97e929a7e54011ea5485d7d196dd5f0ba4d4ef95803e8e3fc257fa264697066735822122093005e858d59022193835c8730c93b4ae547652cdf4a225baf3f9d32edc7639464736f6c634300081d0033",
+  "deployedBytecode": "0x608060405234801561000f575f5ffd5b50600436106100fa575f3560e01c806301ffc9a7146100fe57806306fdde031461012657806318160ddd14610157578063193e610c1461016d5780632577a57214610182578063313ce5671461019557806334d912bf146101a45780633a46b1a8146101b95780634bf5d7e9146101cc578063587cde1e146101d45780635c19a95c146101e75780635d23c212146101fa57806370a08231146102205780638e539e8c1461023357806391ddadf41461024657806395d89b41146102655780639ab24eb014610287578063a1987d691461029a578063c3cda520146102ad578063ff7e14c2146102c0575b5f5ffd5b61011161010c366004611110565b6102d3565b60405190151581526020015b60405180910390f35b60408051808201909152600c81526b766548454d4920566f74657360a01b60208201525b60405161011d9190611137565b61015f610324565b60405190815260200161011d565b61018061017b366004611183565b6103aa565b005b6101806101903660046111cb565b61073c565b6040516012815260200161011d565b6101ac6107bd565b60405161011d91906111fd565b61015f6101c7366004611211565b6107c6565b61014a610842565b6101ac6101e236600461123b565b6108ad565b6101806101f536600461123b565b6108b7565b7f00000000000000000000000000000000000000000000000000000000000000006101ac565b61015f61022e36600461123b565b61098d565b61015f610241366004611256565b610b76565b61024e610beb565b60405165ffffffffffff909116815260200161011d565b604080518082019091526006815265766548454d4960d01b602082015261014a565b61015f61029536600461123b565b610c53565b6101806102a836600461123b565b610c87565b6101806102bb36600461126d565b610cea565b6101806102ce3660046112ca565b610d41565b5f6001600160e01b03198216637487d9fb60e11b148061030357506301ffc9a760e01b6001600160e01b03198316145b8061031e575063da287a1d60e01b6001600160e01b03198316145b92915050565b5f7f00000000000000000000000000000000000000000000000000000000000000006001600160a01b031663fe1734a96040518163ffffffff1660e01b8152600401602060405180830381865afa158015610381573d5f5f3e3d5ffd5b505050506040513d601f19601f820116820180604052508101906103a59190611339565b905090565b6103b2610da7565b6001600160a01b0316336001600160a01b0316146103eb5760405162461bcd60e51b81526004016103e290611350565b60405180910390fd5b60ff5f5c16156103fa57505050565b6040516370a0823160e01b81525f906001600160a01b037f000000000000000000000000000000000000000000000000000000000000000016906370a08231906104489087906004016111fd565b602060405180830381865afa158015610463573d5f5f3e3d5ffd5b505050506040513d601f19601f820116820180604052508101906104879190611339565b9050805f036104bd576040515f906001600160a01b0385811691908716905f5160206116325f395f51905f52908490a450505050565b5f6104c6610da7565b90505f7f00000000000000000000000000000000000000000000000000000000000000006001600160a01b0316632f745c59875f6040518363ffffffff1660e01b8152600401610517929190611376565b602060405180830381865afa158015610532573d5f5f3e3d5ffd5b505050506040513d601f19601f820116820180604052508101906105569190611339565b6040516358d30eed60e11b8152600481018290529091505f906001600160a01b0384169063b1a61dda9060240160a060405180830381865afa15801561059e573d5f5f3e3d5ffd5b505050506040513d601f19601f820116820180604052508101906105c29190611419565b51905060015b848110156106fb57604051632f745c5960e01b81525f906001600160a01b037f00000000000000000000000000000000000000000000000000000000000000001690632f745c5990610620908c908690600401611376565b602060405180830381865afa15801561063b573d5f5f3e3d5ffd5b505050506040513d601f19601f8201168201806040525081019061065f9190611339565b9050826001600160a01b0316856001600160a01b031663b1a61dda836040518263ffffffff1660e01b815260040161069991815260200190565b60a060405180830381865afa1580156106b4573d5f5f3e3d5ffd5b505050506040513d601f19601f820116820180604052508101906106d89190611419565b516001600160a01b0316146106f257505050505050505050565b506001016105c8565b50806001600160a01b0316866001600160a01b0316886001600160a01b03165f5160206116325f395f51905f5260405160405180910390a450505050505050565b610744610da7565b6001600160a01b0316336001600160a01b0316146107745760405162461bcd60e51b81526004016103e290611350565b60408051838152602081018390526001600160a01b038516917fdec2bacdd2f05b59de34da9b523dff8be42e5e38e818c82fdb0bae774387a724910160405180910390a2505050565b5f6103a5610da7565b5f6107cf610da7565b6001600160a01b0316633a46b1a884846040518363ffffffff1660e01b81526004016107fc929190611376565b602060405180830381865afa158015610817573d5f5f3e3d5ffd5b505050506040513d601f19601f8201168201806040525081019061083b9190611339565b9392505050565b606061084c610da7565b6001600160a01b0316634bf5d7e96040518163ffffffff1660e01b81526004015f60405180830381865afa158015610886573d5f5f3e3d5ffd5b505050506040513d5f823e601f3d908101601f191682016040526103a591908101906114a8565b5f61031e82610e28565b5f6108c133610e28565b905060015f805c60ff19168217905d506108d9610da7565b604051633d499f9760e21b81523360048201526001600160a01b038481166024830152919091169063f5267e5c906044015f604051808303815f87803b158015610921575f5ffd5b505af1158015610933573d5f5f3e3d5ffd5b505f92505050805c60ff1916815d505f61094c33610e28565b90506001600160a01b03811661096157505050565b6040516001600160a01b03808316919084169033905f5160206116325f395f51905f52905f90a4505050565b5f5f7f00000000000000000000000000000000000000000000000000000000000000006001600160a01b03166370a08231846040518263ffffffff1660e01b81526004016109db91906111fd565b602060405180830381865afa1580156109f6573d5f5f3e3d5ffd5b505050506040513d601f19601f82011682018060405250810190610a1a9190611339565b90505f5b81811015610b6f57604051632f745c5960e01b81525f906001600160a01b037f00000000000000000000000000000000000000000000000000000000000000001690632f745c5990610a769088908690600401611376565b602060405180830381865afa158015610a91573d5f5f3e3d5ffd5b505050506040513d601f19601f82011682018060405250810190610ab59190611339565b604051632c4e9ebd60e01b8152600481018290529091505f906001600160a01b037f00000000000000000000000000000000000000000000000000000000000000001690632c4e9ebd906024016040805180830381865afa158015610b1c573d5f5f3e3d5ffd5b505050506040513d601f19601f82011682018060405250810190610b40919061153a565b5190505f600f82900b1315610b6557610b626001600160801b0382168661159c565b94505b5050600101610a1e565b5050919050565b5f610b7f610da7565b6001600160a01b0316638e539e8c836040518263ffffffff1660e01b8152600401610bac91815260200190565b602060405180830381865afa158015610bc7573d5f5f3e3d5ffd5b505050506040513d601f19601f8201168201806040525081019061031e9190611339565b5f610bf4610da7565b6001600160a01b03166391ddadf46040518163ffffffff1660e01b8152600401602060405180830381865afa158015610c2f573d5f5f3e3d5ffd5b505050506040513d601f19601f820116820180604052508101906103a591906115bb565b5f610c5c610da7565b6001600160a01b0316639ab24eb0836040518263ffffffff1660e01b8152600401610bac91906111fd565b610c8f610da7565b6001600160a01b031663a1987d69826040518263ffffffff1660e01b8152600401610cba91906111fd565b5f604051808303815f87803b158015610cd1575f5ffd5b505af1158015610ce3573d5f5f3e3d5ffd5b5050505050565b60405162461bcd60e51b815260206004820152602660248201527f55736520566548656d69566f746544656c65676174696f6e2e64656c6567617460448201526565427953696760d01b60648201526084016103e2565b610d49610da7565b6001600160a01b031663ff7e14c283836040518363ffffffff1660e01b8152600401610d769291906115d4565b5f604051808303815f87803b158015610d8d575f5ffd5b505af1158015610d9f573d5f5f3e3d5ffd5b505050505050565b5f7f00000000000000000000000000000000000000000000000000000000000000006001600160a01b03166334d912bf6040518163ffffffff1660e01b8152600401602060405180830381865afa158015610e04573d5f5f3e3d5ffd5b505050506040513d601f19601f820116820180604052508101906103a59190611616565b5f5f7f00000000000000000000000000000000000000000000000000000000000000006001600160a01b03166370a08231846040518263ffffffff1660e01b8152600401610e7691906111fd565b602060405180830381865afa158015610e91573d5f5f3e3d5ffd5b505050506040513d601f19601f82011682018060405250810190610eb59190611339565b9050805f03610ec657505f92915050565b5f610ecf610da7565b90505f7f00000000000000000000000000000000000000000000000000000000000000006001600160a01b0316632f745c59865f6040518363ffffffff1660e01b8152600401610f20929190611376565b602060405180830381865afa158015610f3b573d5f5f3e3d5ffd5b505050506040513d601f19601f82011682018060405250810190610f5f9190611339565b6040516358d30eed60e11b8152600481018290529091505f906001600160a01b0384169063b1a61dda9060240160a060405180830381865afa158015610fa7573d5f5f3e3d5ffd5b505050506040513d601f19601f82011682018060405250810190610fcb9190611419565b51905060015b8481101561110657604051632f745c5960e01b81525f906001600160a01b037f00000000000000000000000000000000000000000000000000000000000000001690632f745c5990611029908b908690600401611376565b602060405180830381865afa158015611044573d5f5f3e3d5ffd5b505050506040513d601f19601f820116820180604052508101906110689190611339565b9050826001600160a01b0316856001600160a01b031663b1a61dda836040518263ffffffff1660e01b81526004016110a291815260200190565b60a060405180830381865afa1580156110bd573d5f5f3e3d5ffd5b505050506040513d601f19601f820116820180604052508101906110e19190611419565b516001600160a01b0316146110fd57505f979650505050505050565b50600101610fd1565b5095945050505050565b5f60208284031215611120575f5ffd5b81356001600160e01b03198116811461083b575f5ffd5b602081525f82518060208401528060208501604085015e5f604082850101526040601f19601f83011684010191505092915050565b6001600160a01b0381168114611180575f5ffd5b50565b5f5f5f60608486031215611195575f5ffd5b83356111a08161116c565b925060208401356111b08161116c565b915060408401356111c08161116c565b809150509250925092565b5f5f5f606084860312156111dd575f5ffd5b83356111e88161116c565b95602085013595506040909401359392505050565b6001600160a01b0391909116815260200190565b5f5f60408385031215611222575f5ffd5b823561122d8161116c565b946020939093013593505050565b5f6020828403121561124b575f5ffd5b813561083b8161116c565b5f60208284031215611266575f5ffd5b5035919050565b5f5f5f5f5f5f60c08789031215611282575f5ffd5b863561128d8161116c565b95506020870135945060408701359350606087013560ff811681146112b0575f5ffd5b9598949750929560808101359460a0909101359350915050565b5f5f602083850312156112db575f5ffd5b82356001600160401b038111156112f0575f5ffd5b8301601f81018513611300575f5ffd5b80356001600160401b03811115611315575f5ffd5b8560208260051b8401011115611329575f5ffd5b6020919091019590945092505050565b5f60208284031215611349575f5ffd5b5051919050565b6020808252600c908201526b1d5b985d5d1a1bdc9a5e995960a21b604082015260600190565b6001600160a01b03929092168252602082015260400190565b634e487b7160e01b5f52604160045260245ffd5b604051601f8201601f191681016001600160401b03811182821017156113cb576113cb61138f565b604052919050565b805165ffffffffffff811681146113e8575f5ffd5b919050565b80516001600160601b03811681146113e8575f5ffd5b80516001600160401b03811681146113e8575f5ffd5b5f60a082840312801561142a575f5ffd5b5060405160a081016001600160401b038111828210171561144d5761144d61138f565b604052825161145b8161116c565b8152611469602084016113d3565b602082015261147a604084016113ed565b604082015261148b606084016113ed565b606082015261149c60808401611403565b60808201529392505050565b5f602082840312156114b8575f5ffd5b81516001600160401b038111156114cd575f5ffd5b8201601f810184136114dd575f5ffd5b80516001600160401b038111156114f6576114f661138f565b611509601f8201601f19166020016113a3565b81815285602083850101111561151d575f5ffd5b8160208401602083015e5f91810160200191909152949350505050565b5f604082840312801561154b575f5ffd5b50604080519081016001600160401b038111828210171561156e5761156e61138f565b6040528251600f81900b8114611582575f5ffd5b815261159060208401611403565b60208201529392505050565b8082018082111561031e57634e487b7160e01b5f52601160045260245ffd5b5f602082840312156115cb575f5ffd5b61083b826113d3565b602080825281018290525f8360408301825b858110156111065782356115f98161116c565b6001600160a01b03168252602092830192909101906001016115e6565b5f60208284031215611626575f5ffd5b815161083b8161116c56fe3134e8a2e6d97e929a7e54011ea5485d7d196dd5f0ba4d4ef95803e8e3fc257fa264697066735822122093005e858d59022193835c8730c93b4ae547652cdf4a225baf3f9d32edc7639464736f6c634300081d0033",
+  "devdoc": {
+    "details": "All calls are forwarded to the underlying VeHemi and its VeHemiVoteDelegation      contracts. The voteDelegation address is read dynamically from VeHemi storage,      so governance automatically follows any future VeHemi.updateVoteDelegation() calls.      delegate(address) calls delegateAllFor on the delegation contract, which      delegates ALL of the caller's veHEMI positions to the specified delegatee.      This requires the adapter to be set as trustedAdapter on VeHemiVoteDelegation.      delegates(address) returns the delegatee address ONLY if all of the account's      veHEMI positions are delegated to the same address. Returns address(0) if the      account has no positions or if positions are split across different delegatees.",
+    "events": {
+      "DelegateChanged(address,address,address)": {
+        "details": "Standard IVotes DelegateChanged (address-based, not tokenId-based)."
+      },
+      "DelegateVotesChanged(address,uint256,uint256)": {
+        "details": "Relayed from VeHemiVoteDelegation so events are emitted from      the adapter address, which is what Aragon's subgraph indexes."
+      }
+    },
+    "kind": "dev",
+    "methods": {
+      "balanceOf(address)": {
+        "details": "Iterates the account's NFTs and sums locked amounts. This provides a      meaningful \"token balance\" for the Aragon member detail page rather than      the raw NFT position count.      ASYMMETRY WITH `totalSupply()`: `balanceOf(account)` returns the raw locked      HEMI amount, while `totalSupply()` returns aggregate decayed stake weight.      The two are deliberately different quantities — `balanceOf` is a stable,      user-recognizable \"how much HEMI did I lock\" number (matches the member      detail page's expectation), while `totalSupply` matches the value space of      `getVotes` / `getPastVotes` so Aragon's voting-threshold arithmetic is      consistent with delegated voting power. They will NOT sum to a single      meaningful total; do not compare them directly."
+      },
+      "decimals()": {
+        "details": "Aragon's TokenVoting UI reads `decimals()` to render voting-power values.      HEMI is an 18-decimal ERC20; the `balanceOf` sum above and `totalVeHemiSupply`      are both denominated in 18-decimal wei. Hardcoded rather than proxied through      VeHemi so this view is pure and cannot revert."
+      },
+      "delegate(address)": {
+        "details": "Emits a single account-wide      `DelegateChanged(msg.sender, prevAccountWide, postAccountWide)`      after the batch settles. The transient batch flag suppresses      the per-token relay so indexers see exactly one IVotes event.      `prevAccountWide` is the pre-batch resolution of `_delegatesOf`      and MAY be `address(0)` — either because the caller had no      positions, or because their pre-batch state was already mixed      across multiple delegatees. The `from` arg of `DelegateChanged`      therefore reflects the true `delegates(msg.sender)` view at      entry, consistent with the IVotes account-wide semantic.      `postAccountWide` is RECOMPUTED via `_delegatesOf` after the      batch — NOT trusted to equal `delegatee`.      `VeHemiVoteDelegation.delegateAllFor` deliberately skips      expired and near-expiry tokens (those whose      `lock.end <= checkpointTs`), so stale `delegations[tokenId]`      records can remain after the batch. If the caller holds any      such stale-expired NFT whose cached delegatee differs from      `delegatee`, the post-batch state is genuinely mixed and      `adapter.delegates(msg.sender)` returns `address(0)`. Emitting      `DelegateChanged(_, _, delegatee)` in that case would falsely      claim an account-wide change, so the emission is skipped and      the IVotes-derived subgraph view stays in lock-step with      `delegates(msg.sender)`.      Operator note: callers can clear stale-expired records by      calling `VeHemi.withdraw(tokenId)` on each expired position      before retrying `adapter.delegate(addr)`."
+      },
+      "delegateBySig(address,uint256,uint256,uint8,bytes32,bytes32)": {
+        "details": "The standard IVotes `delegateBySig(address delegatee, uint256 nonce, ...)`      signs over an account-wide delegatee. veHEMI's native delegation is per-tokenId,      so there is no transparent way to forward this signature — a naive \"delegate      all my positions\" translation would produce a different digest than the one      the user signed, which is unsafe. Signers must instead use      `VeHemiVoteDelegation.delegateBySig(tokenId, delegatee, ...)` whose EIP-712      typehash explicitly includes the tokenId.      The function is still declared (reverting) so `supportsInterface(IVotes)` is      truthful at the ABI level — Aragon's ERC-165 probe sees the full IVotes      surface — while at runtime the unsupported signature path produces an      unambiguous revert string rather than silent misbehavior."
+      },
+      "notifyDelegateChanged(address,address,address)": {
+        "details": "veHEMI's native delegation is per-tokenId, but the canonical      IVotes `DelegateChanged` semantic asserts an ACCOUNT-WIDE      delegation change. A direct      `voteDelegation.delegate(tokenId, X)` from a multi-token owner      moves only ONE token's voting power — emitting the address-      scoped `DelegateChanged(owner, prev, X)` in that case would      falsely advertise an account-wide change and diverge from      `delegates(owner)` (which returns address(0) for mixed states).      This relay walks `delegator`'s positions once and checks      whether ALL are delegated to the same address (the resolved      account-wide delegatee — possibly `address(0)`). It emits      `DelegateChanged` only when the post-change state is      consistent. Mixed-state changes are silently skipped, keeping      the Aragon subgraph in lock-step with `delegates(delegator)`.      `adapter.delegate(addr)` short-circuits this per-token relay      via the `_batchActive` transient flag (EIP-1153): the batch      entry point suppresses per-iteration emissions and emits ONE      consolidated event after `delegateAllFor` settles. That      preserves the O(N) gas profile of `delegateAllFor` (no O(N²)      mid-loop account-wide scans) while still firing the correct      IVotes event at batch end.      Three terminal cases that DO emit:        - single-token owner re-delegates that token → consistent        - multi-token owner who already had all tokens at `A` and          re-delegates one to `A` (no-op re-affirmation) → consistent        - forfeit/withdraw cleanup that clears the last/only token's          delegation to `0` → consistent at `0`"
+      },
+      "refreshVotingPower(address)": {
+        "details": "Delegates to VeHemiVoteDelegation.refreshVotingPower which uses the         next-epoch-boundary checkpoint timestamp (consistent with delegation         events) and relays the event back to this adapter via notifyVotesChanged.         This avoids the timestamp mismatch that occurs when using getVotes()         (which uses block.timestamp) directly.         Permissionless by design: any address can call this to nudge the subgraph.         The function does not mutate delegation state — it only re-emits an event         with values that are already readable on-chain. A griefer who spammed         `refreshVotingPower` for random addresses would pay gas to emit redundant         events that the subgraph would fold into identical already-stored values;         no griefing surface on the core contract (beyond ordinary event spam,         which the subgraph is built to absorb). The intended caller is an off-chain         keeper that periodically walks the active delegate set to keep voting         power displays in sync with linear decay."
+      },
+      "refreshVotingPowerBatch(address[])": {
+        "details": "Delegates to VeHemiVoteDelegation.refreshVotingPowerBatch for         timestamp-consistent event emission. Same permissionless-by-design         rationale as `refreshVotingPower`; caller pays gas linear in array length."
+      },
+      "totalSupply()": {
+        "details": "See the `balanceOf` NatSpec for the rationale behind the intentional      asymmetry between `balanceOf` (locked HEMI) and `totalSupply` (stake weight)."
+      }
+    },
+    "stateVariables": {
+      "_batchActive": {
+        "details": "Transient flag (EIP-1153) used by `delegate(addr)` to suppress      per-token `notifyDelegateChanged` emissions during the batch      so the IVotes-shaped `DelegateChanged` event fires exactly once      at the end of the batch (account-wide truth) rather than N times      (per-token intermediate states). Preserves `delegateAllFor`'s      O(N) gas profile. Requires Cancun (EIP-1153 transient storage)."
+      }
+    },
+    "title": "VeHemiAragonAdapter",
+    "version": 1
+  },
+  "userdoc": {
+    "kind": "user",
+    "methods": {
+      "balanceOf(address)": {
+        "notice": "Returns the total locked HEMI across all of an account's veHEMI positions."
+      },
+      "decimals()": {
+        "notice": "Fixed at 18 to match HEMI's ERC20 decimals."
+      },
+      "delegate(address)": {
+        "notice": "Delegates ALL of the caller's veHEMI positions to the         specified delegatee. Requires this adapter to be set as         `trustedAdapter` on `VeHemiVoteDelegation`."
+      },
+      "delegateBySig(address,uint256,uint256,uint8,bytes32,bytes32)": {
+        "notice": "Always reverts. Use `VeHemiVoteDelegation.delegateBySig` directly."
+      },
+      "delegates(address)": {
+        "notice": "Returns the delegatee if ALL of the account's veHEMI positions are         delegated to the same address. Returns address(0) if positions are         split across different delegatees or the account has no positions."
+      },
+      "notifyDelegateChanged(address,address,address)": {
+        "notice": "Called by VeHemiVoteDelegation to relay DelegateChanged events         with the standard IVotes signature (address delegator, not         uint256 tokenId)."
+      },
+      "notifyVotesChanged(address,uint256,uint256)": {
+        "notice": "Called by VeHemiVoteDelegation to relay DelegateVotesChanged events         from the adapter address for Aragon subgraph compatibility."
+      },
+      "refreshVotingPower(address)": {
+        "notice": "Re-emits a DelegateVotesChanged event with the current on-chain voting         power for `delegatee`. This forces the Aragon subgraph to re-sync its         cached votingPower value without any actual delegation change."
+      },
+      "refreshVotingPowerBatch(address[])": {
+        "notice": "Batch version of refreshVotingPower for multiple delegatees in a         single transaction."
+      },
+      "totalSupply()": {
+        "notice": "Returns the global aggregate stake weight (decayed voting power) across         all veHEMI positions. This matches the value space of `getVotes` /         `getPastVotes`, so Aragon's quorum/support threshold arithmetic stays         consistent with the sum of all delegate voting powers."
+      }
+    },
+    "notice": "Stateless, immutable adapter that presents veHEMI voting power through         the IVotes + ERC20 interface expected by Aragon's TokenVoting plugin.",
+    "version": 1
+  },
+  "storageLayout": {
+    "storage": [],
+    "types": null
+  }
+}

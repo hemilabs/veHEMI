@@ -68,7 +68,7 @@ wallet,amount,duration,transferable,forfeitable
 1. **Amounts in Wei**: The script expects amounts in wei, not HEMI tokens
 2. **Duration in Seconds**: Use seconds, not days or years
 3. **Boolean as Strings**: Use `"true"`/`"false"` strings, not boolean values
-4. **No Header Row**: The script expects data rows, not headers
+4. **Header Row Required**: The first row MUST be the column header `wallet,amount,duration,transferable,forfeitable` (the script uses `csv-parse` with `columns: true` and treats the first row as headers, not data)
 5. **Valid Addresses**: All wallet addresses must be valid Ethereum addresses
 
 ## 🧪 **Local Testing**

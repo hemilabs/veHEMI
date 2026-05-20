@@ -1,0 +1,540 @@
+{
+  "storage": [
+    {
+      "contract": "src/VeHemi.sol:VeHemi",
+      "label": "totalLocked",
+      "offset": 0,
+      "slot": "0",
+      "type": "t_uint256"
+    },
+    {
+      "contract": "src/VeHemi.sol:VeHemi",
+      "label": "epoch",
+      "offset": 0,
+      "slot": "1",
+      "type": "t_uint256"
+    },
+    {
+      "contract": "src/VeHemi.sol:VeHemi",
+      "label": "nextTokenId",
+      "offset": 0,
+      "slot": "2",
+      "type": "t_uint256"
+    },
+    {
+      "contract": "src/VeHemi.sol:VeHemi",
+      "label": "voteDelegation",
+      "offset": 0,
+      "slot": "3",
+      "type": "t_contract(IVeHemiVoteDelegation)"
+    },
+    {
+      "contract": "src/VeHemi.sol:VeHemi",
+      "label": "rewardDistributor",
+      "offset": 0,
+      "slot": "4",
+      "type": "t_contract(IRewardDistributor)"
+    },
+    {
+      "contract": "src/VeHemi.sol:VeHemi",
+      "label": "forfeitAdmin",
+      "offset": 0,
+      "slot": "5",
+      "type": "t_address"
+    },
+    {
+      "contract": "src/VeHemi.sol:VeHemi",
+      "label": "globalPointHistory",
+      "offset": 0,
+      "slot": "6",
+      "type": "t_mapping(t_uint256,t_struct(Point)_storage)"
+    },
+    {
+      "contract": "src/VeHemi.sol:VeHemi",
+      "label": "userPointHistory",
+      "offset": 0,
+      "slot": "7",
+      "type": "t_mapping(t_uint256,t_array(t_struct(UserPoint)_storage)1000000000_storage)"
+    },
+    {
+      "contract": "src/VeHemi.sol:VeHemi",
+      "label": "userPointEpoch",
+      "offset": 0,
+      "slot": "8",
+      "type": "t_mapping(t_uint256,t_uint256)"
+    },
+    {
+      "contract": "src/VeHemi.sol:VeHemi",
+      "label": "slopeChanges",
+      "offset": 0,
+      "slot": "9",
+      "type": "t_mapping(t_uint256,t_int128)"
+    },
+    {
+      "contract": "src/VeHemi.sol:VeHemi",
+      "label": "locked",
+      "offset": 0,
+      "slot": "10",
+      "type": "t_mapping(t_uint256,t_struct(LockedBalance)_storage)"
+    },
+    {
+      "contract": "src/VeHemi.sol:VeHemi",
+      "label": "provider",
+      "offset": 0,
+      "slot": "11",
+      "type": "t_mapping(t_uint256,t_address)"
+    },
+    {
+      "contract": "src/VeHemi.sol:VeHemi",
+      "label": "transferableAfter",
+      "offset": 0,
+      "slot": "12",
+      "type": "t_mapping(t_uint256,t_uint256)"
+    },
+    {
+      "contract": "src/VeHemi.sol:VeHemi",
+      "label": "forfeitable",
+      "offset": 0,
+      "slot": "13",
+      "type": "t_mapping(t_uint256,t_bool)"
+    },
+    {
+      "contract": "src/VeHemi.sol:VeHemi",
+      "label": "__reservedSlot0",
+      "offset": 0,
+      "slot": "14",
+      "type": "t_uint256"
+    },
+    {
+      "contract": "src/VeHemi.sol:VeHemi",
+      "label": "__reservedSlot1",
+      "offset": 0,
+      "slot": "15",
+      "type": "t_uint256"
+    },
+    {
+      "contract": "src/VeHemi.sol:VeHemi",
+      "label": "lockedSlopeChanges",
+      "offset": 0,
+      "slot": "16",
+      "type": "t_mapping(t_uint256,t_int128)"
+    },
+    {
+      "contract": "src/VeHemi.sol:VeHemi",
+      "label": "lockedGlobalPointHistory",
+      "offset": 0,
+      "slot": "17",
+      "type": "t_mapping(t_uint256,t_struct(LockedPoint)_storage)"
+    },
+    {
+      "contract": "src/VeHemi.sol:VeHemi",
+      "label": "lockedSeedingFinalized",
+      "offset": 0,
+      "slot": "18",
+      "type": "t_bool"
+    },
+    {
+      "contract": "src/VeHemi.sol:VeHemi",
+      "label": "forfeitableSlopeChanges",
+      "offset": 0,
+      "slot": "19",
+      "type": "t_mapping(t_uint256,t_int128)"
+    },
+    {
+      "contract": "src/VeHemi.sol:VeHemi",
+      "label": "forfeitableGlobalPointHistory",
+      "offset": 0,
+      "slot": "20",
+      "type": "t_mapping(t_uint256,t_struct(LockedPoint)_storage)"
+    },
+    {
+      "contract": "src/VeHemi.sol:VeHemi",
+      "label": "seedingStarted",
+      "offset": 0,
+      "slot": "21",
+      "type": "t_bool"
+    },
+    {
+      "contract": "src/VeHemi.sol:VeHemi",
+      "label": "seedingStartedAt",
+      "offset": 1,
+      "slot": "21",
+      "type": "t_uint64"
+    },
+    {
+      "contract": "src/VeHemi.sol:VeHemi",
+      "label": "seedingTargetId",
+      "offset": 0,
+      "slot": "22",
+      "type": "t_uint256"
+    },
+    {
+      "contract": "src/VeHemi.sol:VeHemi",
+      "label": "_seedingProgress",
+      "offset": 0,
+      "slot": "23",
+      "type": "t_struct(SeedingProgress)_storage"
+    },
+    {
+      "contract": "src/VeHemi.sol:VeHemi",
+      "label": "__gapV2",
+      "offset": 0,
+      "slot": "27",
+      "type": "t_array(t_uint256)37_storage"
+    }
+  ],
+  "types": {
+    "t_address": {
+      "base": null,
+      "encoding": "inplace",
+      "key": null,
+      "label": "address",
+      "members": null,
+      "numberOfBytes": "20",
+      "value": null
+    },
+    "t_array(t_struct(UserPoint)_storage)1000000000_storage": {
+      "base": "t_struct(UserPoint)_storage",
+      "encoding": "inplace",
+      "key": null,
+      "label": "struct IVeHemi.UserPoint[1000000000]",
+      "members": null,
+      "numberOfBytes": "128000000000",
+      "value": null
+    },
+    "t_array(t_uint256)37_storage": {
+      "base": "t_uint256",
+      "encoding": "inplace",
+      "key": null,
+      "label": "uint256[37]",
+      "members": null,
+      "numberOfBytes": "1184",
+      "value": null
+    },
+    "t_bool": {
+      "base": null,
+      "encoding": "inplace",
+      "key": null,
+      "label": "bool",
+      "members": null,
+      "numberOfBytes": "1",
+      "value": null
+    },
+    "t_contract(IRewardDistributor)": {
+      "base": null,
+      "encoding": "inplace",
+      "key": null,
+      "label": "contract IRewardDistributor",
+      "members": null,
+      "numberOfBytes": "20",
+      "value": null
+    },
+    "t_contract(IVeHemiVoteDelegation)": {
+      "base": null,
+      "encoding": "inplace",
+      "key": null,
+      "label": "contract IVeHemiVoteDelegation",
+      "members": null,
+      "numberOfBytes": "20",
+      "value": null
+    },
+    "t_int128": {
+      "base": null,
+      "encoding": "inplace",
+      "key": null,
+      "label": "int128",
+      "members": null,
+      "numberOfBytes": "16",
+      "value": null
+    },
+    "t_mapping(t_uint256,t_address)": {
+      "base": null,
+      "encoding": "mapping",
+      "key": "t_uint256",
+      "label": "mapping(uint256 => address)",
+      "members": null,
+      "numberOfBytes": "32",
+      "value": "t_address"
+    },
+    "t_mapping(t_uint256,t_array(t_struct(UserPoint)_storage)1000000000_storage)": {
+      "base": null,
+      "encoding": "mapping",
+      "key": "t_uint256",
+      "label": "mapping(uint256 => struct IVeHemi.UserPoint[1000000000])",
+      "members": null,
+      "numberOfBytes": "32",
+      "value": "t_array(t_struct(UserPoint)_storage)1000000000_storage"
+    },
+    "t_mapping(t_uint256,t_bool)": {
+      "base": null,
+      "encoding": "mapping",
+      "key": "t_uint256",
+      "label": "mapping(uint256 => bool)",
+      "members": null,
+      "numberOfBytes": "32",
+      "value": "t_bool"
+    },
+    "t_mapping(t_uint256,t_int128)": {
+      "base": null,
+      "encoding": "mapping",
+      "key": "t_uint256",
+      "label": "mapping(uint256 => int128)",
+      "members": null,
+      "numberOfBytes": "32",
+      "value": "t_int128"
+    },
+    "t_mapping(t_uint256,t_struct(LockedBalance)_storage)": {
+      "base": null,
+      "encoding": "mapping",
+      "key": "t_uint256",
+      "label": "mapping(uint256 => struct IVeHemi.LockedBalance)",
+      "members": null,
+      "numberOfBytes": "32",
+      "value": "t_struct(LockedBalance)_storage"
+    },
+    "t_mapping(t_uint256,t_struct(LockedPoint)_storage)": {
+      "base": null,
+      "encoding": "mapping",
+      "key": "t_uint256",
+      "label": "mapping(uint256 => struct VeHemiStorageV2.LockedPoint)",
+      "members": null,
+      "numberOfBytes": "32",
+      "value": "t_struct(LockedPoint)_storage"
+    },
+    "t_mapping(t_uint256,t_struct(Point)_storage)": {
+      "base": null,
+      "encoding": "mapping",
+      "key": "t_uint256",
+      "label": "mapping(uint256 => struct IVeHemi.Point)",
+      "members": null,
+      "numberOfBytes": "32",
+      "value": "t_struct(Point)_storage"
+    },
+    "t_mapping(t_uint256,t_uint256)": {
+      "base": null,
+      "encoding": "mapping",
+      "key": "t_uint256",
+      "label": "mapping(uint256 => uint256)",
+      "members": null,
+      "numberOfBytes": "32",
+      "value": "t_uint256"
+    },
+    "t_struct(LockedBalance)_storage": {
+      "base": null,
+      "encoding": "inplace",
+      "key": null,
+      "label": "struct IVeHemi.LockedBalance",
+      "members": [
+        {
+          "contract": "src/VeHemi.sol:VeHemi",
+          "label": "amount",
+          "offset": 0,
+          "slot": "0",
+          "type": "t_int128"
+        },
+        {
+          "contract": "src/VeHemi.sol:VeHemi",
+          "label": "end",
+          "offset": 16,
+          "slot": "0",
+          "type": "t_uint64"
+        }
+      ],
+      "numberOfBytes": "32",
+      "value": null
+    },
+    "t_struct(LockedPoint)_storage": {
+      "base": null,
+      "encoding": "inplace",
+      "key": null,
+      "label": "struct VeHemiStorageV2.LockedPoint",
+      "members": [
+        {
+          "contract": "src/VeHemi.sol:VeHemi",
+          "label": "bias",
+          "offset": 0,
+          "slot": "0",
+          "type": "t_int128"
+        },
+        {
+          "contract": "src/VeHemi.sol:VeHemi",
+          "label": "slope",
+          "offset": 16,
+          "slot": "0",
+          "type": "t_int128"
+        },
+        {
+          "contract": "src/VeHemi.sol:VeHemi",
+          "label": "timestamp",
+          "offset": 0,
+          "slot": "1",
+          "type": "t_uint64"
+        },
+        {
+          "contract": "src/VeHemi.sol:VeHemi",
+          "label": "blockNumber",
+          "offset": 8,
+          "slot": "1",
+          "type": "t_uint64"
+        }
+      ],
+      "numberOfBytes": "64",
+      "value": null
+    },
+    "t_struct(Point)_storage": {
+      "base": null,
+      "encoding": "inplace",
+      "key": null,
+      "label": "struct IVeHemi.Point",
+      "members": [
+        {
+          "contract": "src/VeHemi.sol:VeHemi",
+          "label": "bias",
+          "offset": 0,
+          "slot": "0",
+          "type": "t_int128"
+        },
+        {
+          "contract": "src/VeHemi.sol:VeHemi",
+          "label": "slope",
+          "offset": 16,
+          "slot": "0",
+          "type": "t_int128"
+        },
+        {
+          "contract": "src/VeHemi.sol:VeHemi",
+          "label": "timestamp",
+          "offset": 0,
+          "slot": "1",
+          "type": "t_uint64"
+        },
+        {
+          "contract": "src/VeHemi.sol:VeHemi",
+          "label": "blockNumber",
+          "offset": 8,
+          "slot": "1",
+          "type": "t_uint64"
+        },
+        {
+          "contract": "src/VeHemi.sol:VeHemi",
+          "label": "amount",
+          "offset": 16,
+          "slot": "1",
+          "type": "t_uint128"
+        },
+        {
+          "contract": "src/VeHemi.sol:VeHemi",
+          "label": "fixedBias",
+          "offset": 0,
+          "slot": "2",
+          "type": "t_uint256"
+        }
+      ],
+      "numberOfBytes": "96",
+      "value": null
+    },
+    "t_struct(SeedingProgress)_storage": {
+      "base": null,
+      "encoding": "inplace",
+      "key": null,
+      "label": "struct VeHemiStorageV2.SeedingProgress",
+      "members": [
+        {
+          "contract": "src/VeHemi.sol:VeHemi",
+          "label": "lastProcessedId",
+          "offset": 0,
+          "slot": "0",
+          "type": "t_uint256"
+        },
+        {
+          "contract": "src/VeHemi.sol:VeHemi",
+          "label": "totalSlope",
+          "offset": 0,
+          "slot": "1",
+          "type": "t_int128"
+        },
+        {
+          "contract": "src/VeHemi.sol:VeHemi",
+          "label": "totalBias",
+          "offset": 16,
+          "slot": "1",
+          "type": "t_int128"
+        },
+        {
+          "contract": "src/VeHemi.sol:VeHemi",
+          "label": "totalForfeitableSlope",
+          "offset": 0,
+          "slot": "2",
+          "type": "t_int128"
+        },
+        {
+          "contract": "src/VeHemi.sol:VeHemi",
+          "label": "totalForfeitableBias",
+          "offset": 16,
+          "slot": "2",
+          "type": "t_int128"
+        },
+        {
+          "contract": "src/VeHemi.sol:VeHemi",
+          "label": "count",
+          "offset": 0,
+          "slot": "3",
+          "type": "t_uint256"
+        }
+      ],
+      "numberOfBytes": "128",
+      "value": null
+    },
+    "t_struct(UserPoint)_storage": {
+      "base": null,
+      "encoding": "inplace",
+      "key": null,
+      "label": "struct IVeHemi.UserPoint",
+      "members": [
+        {
+          "contract": "src/VeHemi.sol:VeHemi",
+          "label": "point",
+          "offset": 0,
+          "slot": "0",
+          "type": "t_struct(Point)_storage"
+        },
+        {
+          "contract": "src/VeHemi.sol:VeHemi",
+          "label": "owner",
+          "offset": 0,
+          "slot": "3",
+          "type": "t_address"
+        }
+      ],
+      "numberOfBytes": "128",
+      "value": null
+    },
+    "t_uint128": {
+      "base": null,
+      "encoding": "inplace",
+      "key": null,
+      "label": "uint128",
+      "members": null,
+      "numberOfBytes": "16",
+      "value": null
+    },
+    "t_uint256": {
+      "base": null,
+      "encoding": "inplace",
+      "key": null,
+      "label": "uint256",
+      "members": null,
+      "numberOfBytes": "32",
+      "value": null
+    },
+    "t_uint64": {
+      "base": null,
+      "encoding": "inplace",
+      "key": null,
+      "label": "uint64",
+      "members": null,
+      "numberOfBytes": "8",
+      "value": null
+    }
+  }
+}

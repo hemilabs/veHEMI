@@ -4,20 +4,74 @@ out = "out"
 libs = ["lib"]
 solc_version = "0.8.29"
 optimizer = true
-optimizer_runs = 200
+optimizer_runs = 1  # MUST match Hardhat/production setting
 via_ir = false
+evm_version = "cancun"  # Required for EIP-1153 transient storage (ReentrancyGuardTransient)
 block_timestamp = 1_738_368_000 # Feb 1, 2025 at 00:00 GMT
 
+# Allow reading the committed storage-layout goldens in test/fixtures/.
+# Needed by test/StorageLayoutGolden.t.sol to validate the fixtures directly
+# inside `forge test` (the CI shell gate is independent).
+fs_permissions = [{ access = "read", path = "test/fixtures/" }]
+
+# RPC aliases for fork tests.
+#
+# Use `--fork-url hemi` (the alias) rather than the raw URL so Foundry's
+# rate-limit-aware retry kicks in when public Hemi RPC returns HTTP 429.
+# `retries` = attempts per request (in addition to the first try); `retry_backoff`
+# is the initial delay in ms, doubled per retry. Values sized to absorb a short
+# burst of throttling without masking a sustained outage.
+#
+# Block pinning is opt-in via the HEMI_FORK_BLOCK env var: fork tests that want
+# a reproducible snapshot read `vm.envOr("HEMI_FORK_BLOCK", uint256(0))` and
+# call `vm.createSelectFork("hemi", pinnedBlock)` from setUp when non-zero.
+[rpc_endpoints]
+# retries + retry_backoff sized so the cumulative retry window
+# (1s + 2s + 4s + 8s + 16s + 32s = 63s) exceeds Hemi's 60s rate-limit
+# reset window, guaranteeing that a throttled request sees a cleared
+# budget on the final retry.
+hemi = { endpoint = "${HEMI_RPC_URL}", retries = 6, retry_backoff = 1000 }
+
 # Dependencies with specific versions for reproducible builds
+# NOTE: Actual OZ contracts resolve via node_modules (see remappings.txt).
+# These versions must match package.json to avoid confusion.
 [dependencies]
-openzeppelin-contracts = "5.4.0"
-openzeppelin-contracts-upgradeable = "5.4.0"
+openzeppelin-contracts = "5.3.0"
+openzeppelin-contracts-upgradeable = "5.3.0"
 
 # Linting and formatting
 [profile.default.fuzz]
 runs = 1000
 
 [profile.default.invariant]
+runs = 1024
+depth = 128
+fail_on_revert = true
+
+# `[profile.ci]` mirrors `[profile.default]` explicitly. CI sets
+# `FOUNDRY_PROFILE=ci` (see `.github/workflows/test.yml`), and Foundry would
+# silently fall back to `[profile.default]` if this section were missing —
+# safe today but a footgun: a future contributor could add a divergent
+# `[profile.ci]` (e.g., different `optimizer_runs`) and the tested bytecode
+# would no longer match what Hardhat deploys. Keep these values aligned with
+# `[profile.default]` AND with `hardhat.config.ts` (which uses runs: 1 +
+# evmVersion: "cancun" + viaIR: omitted/false).
+[profile.ci]
+src = "src"
+out = "out"
+libs = ["lib"]
+solc_version = "0.8.29"
+optimizer = true
+optimizer_runs = 1
+via_ir = false
+evm_version = "cancun"
+block_timestamp = 1_738_368_000
+fs_permissions = [{ access = "read", path = "test/fixtures/" }]
+
+[profile.ci.fuzz]
+runs = 1000
+
+[profile.ci.invariant]
 runs = 1024
 depth = 128
 fail_on_revert = true
