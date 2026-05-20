@@ -179,11 +179,24 @@ const func: DeployFunction = async function (hre) {
     console.log("Adapter interfaces:      OK (IVotes + ERC165 + ERC6372)");
 
     // Step 2: Set the adapter as trusted on VeHemiVoteDelegation.
-    // This call must come from the VeHemi owner (Gnosis Safe).
+    //
+    // Authorization detail: `VeHemiVoteDelegation.setTrustedAdapter` is
+    // gated by `msg.sender == IOwnable(address(veHemi)).owner()` — i.e.,
+    // the VeHemi owner, NOT a VVD-local owner (VVD doesn't have its own
+    // Ownable; it delegates auth to VeHemi). So `from` must be the
+    // current VeHemi owner (the Safe).
+    //
+    // `gasLimit: 100_000` skips hardhat-deploy's automatic
+    // `eth_estimateGas` call. The VVD V2 upgrade queued in the same
+    // batch hasn't executed yet; estimation against the V1 impl would
+    // revert (no `setTrustedAdapter` selector on V1) before
+    // `catchUnknownSigner` recognized the unknown-Safe-signer condition.
+    // With explicit gas, the call routes cleanly to the Safe batch.
+    const veHemiOwner = (await read(VE_HEMI, "owner")) as string;
     const setAdapterFunction = () =>
         execute(
             VOTE_DELEGATION,
-            { from: deployer, log: true },
+            { from: veHemiOwner, log: true, gasLimit: 100_000 },
             "setTrustedAdapter",
             adapterDeployment.address
         );

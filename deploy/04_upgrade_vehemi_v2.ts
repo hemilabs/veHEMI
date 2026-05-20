@@ -276,8 +276,27 @@ const func: DeployFunction = async function (hre) {
     // Snapshots `nextTokenId` into `seedingTargetId` so the seed range is
     // frozen at this point. New non-transferable mints are blocked until
     // `finalizeSeeding` runs.
+    //
+    // `from: <current VeHemi owner>` — the V2 upgrade queued in steps 1+2
+    // hasn't executed yet (it's pending in the Safe batch), so the proxy
+    // still points at V1 which has no `markSeedingStarted()` selector.
+    //
+    // `gasLimit: 200_000` — bypasses hardhat-deploy's automatic
+    // `eth_estimateGas` call. Without it, hardhat-deploy estimates the
+    // tx BEFORE checking whether the `from` has a signer; the estimation
+    // hits the V1 impl's fallback, reverts, and the error bubbles up
+    // before `catchUnknownSigner` can recognize the unknown-Safe-signer
+    // condition. With an explicit gas limit, hardhat-deploy skips
+    // estimation, reaches the signer check, throws "no signer for X",
+    // and `catchUnknownSigner` catches and routes to the Safe batch.
+    // 200_000 is a generous ceiling for `markSeedingStarted` (a single
+    // SSTORE + event emit + onlyOwner check, typically <80k gas).
     const markSeedingFunction = () =>
-        execute(VE_HEMI, { from: deployer, log: true }, "markSeedingStarted");
+        execute(
+            VE_HEMI,
+            { from: veHemiOwner, log: true, gasLimit: 200_000 },
+            "markSeedingStarted"
+        );
 
     const multiSigMarkTx = await catchUnknownSigner(markSeedingFunction, { log: true });
 

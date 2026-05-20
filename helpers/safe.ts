@@ -122,7 +122,13 @@ const proposeSafeTransaction = async (hre: HardhatRuntimeEnvironment, txs: MetaT
 
         const config = <HttpNetworkConfig>hre.config.networks[chainName];
         const provider = config.url;
-        const apiKit = new SafeApiKit({ chainId });
+        if (!process.env.SAFE_API_KEY) {
+            throw new Error(
+                "SAFE_API_KEY env var is required to propose a Safe transaction. " +
+                "Get one at https://app.safe.global → Settings → API Keys."
+            );
+        }
+        const apiKit = new SafeApiKit({ chainId, apiKey: process.env.SAFE_API_KEY });
 
         const protocolKit = await Safe.init({
             provider: provider,
