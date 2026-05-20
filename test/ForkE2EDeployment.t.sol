@@ -104,14 +104,22 @@ contract ForkE2EDeploymentTest is Test {
         // runs — crucial because this E2E test makes thousands of storage
         // reads (position iteration + seedBatch's full mainnet scan) and
         // can trip public RPC rate limits without a pin.
+        // Skip cleanly when no Hemi RPC is configured (e.g., CI without
+        // the env var). The `hemi` foundry alias resolves to an empty
+        // URL when HEMI_RPC_URL is unset, and vm.createSelectFork would
+        // fail with "Connection refused" — a noisy failure for what
+        // should be an environment-gated skip.
+        string memory rpcUrl = vm.envOr("HEMI_RPC_URL", string(""));
+        if (bytes(rpcUrl).length == 0) {
+            vm.skip(true);
+            return;
+        }
+
         uint256 pinnedBlock = vm.envOr("HEMI_FORK_BLOCK", uint256(0));
         if (pinnedBlock != 0) {
             vm.createSelectFork("hemi", pinnedBlock);
         } else {
-            // Unpinned: fork at the current tip. Previously the
-            // un-`else`'d shape silently skipped the fork when
-            // HEMI_FORK_BLOCK was unset, making the test no-op against
-            // the default 31337 chainid.
+            // Unpinned: fork at the current tip.
             vm.createSelectFork("hemi");
         }
 

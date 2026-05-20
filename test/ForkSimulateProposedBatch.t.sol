@@ -53,6 +53,17 @@ contract ForkSimulateProposedBatchTest is Test {
     uint256 constant MIN_LOCK_DURATION = 2 * SIX_DAYS;
 
     function setUp() public {
+        // Skip cleanly when no Hemi RPC is configured (e.g., CI without
+        // the env var). The `hemi` foundry alias resolves to an empty
+        // URL when HEMI_RPC_URL is unset, and vm.createSelectFork would
+        // fail with "Connection refused" — a noisy failure for what
+        // should be an environment-gated skip.
+        string memory rpcUrl = vm.envOr("HEMI_RPC_URL", string(""));
+        if (bytes(rpcUrl).length == 0) {
+            vm.skip(true);
+            return;
+        }
+
         // `hemi` RPC alias from foundry.toml; HEMI_FORK_BLOCK env pins
         // a block for reproducibility.
         uint256 pinnedBlock = vm.envOr("HEMI_FORK_BLOCK", uint256(0));
