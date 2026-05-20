@@ -98,8 +98,17 @@ jobs:
               id: storage-layout-gate
 
             - name: Run Forge tests
+              # The E2E deployment fork tests (ForkE2EDeployment and
+              # ForkSimulateProposedBatch) are excluded from the gated CI
+              # path. They require a private Hemi RPC endpoint, take
+              # 30–60 minutes each, and are deploy-time validation tools
+              # rather than per-commit regression gates. Run them locally
+              # via `HEMI_RPC_URL=... forge test --match-contract
+              # ForkSimulateProposedBatch` before queuing a Safe MultiSend.
               run: |
-                  forge test -vvv
+                  forge test \
+                    --no-match-contract "ForkE2EDeployment|ForkSimulateProposedBatch" \
+                    -vvv
               id: test
 
             - name: Run Hemi-fork tests (optional — requires HEMI_RPC_URL secret)
