@@ -725,11 +725,12 @@ contract ForkE2EDeploymentTest is Test {
         assertEq(veHemi.ownerOf(tidForfeitable), userB, "phase5: forfeitable mint works");
 
         // increaseAmount on the freshly-minted non-transferable (unblocked
-        // post-finalize). `increaseAmount` has no ownership check (INFO-7
-        // from the audit) so the test contract calling it on userB's
-        // position is intentional and pulls HEMI from the test contract.
-        deal(HEMI_TOKEN, address(this), 100 ether);
+        // post-finalize). `increaseAmount` is owner-only (NotOwner otherwise),
+        // so the owner userB tops up the position.
+        vm.startPrank(userB);
+        hemiToken.approve(address(veHemi), type(uint256).max);
         veHemi.increaseAmount(tidNonTransferable, 50 ether);
+        vm.stopPrank();
         assertGt(
             uint256(int256(veHemi.getLockedBalance(tidNonTransferable).amount)),
             100 ether,

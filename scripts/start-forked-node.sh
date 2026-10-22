@@ -18,7 +18,9 @@ echo -n "Press <ENTER> to continue: "
 read
 
 # Clean old files
-rm  -rf artifacts/ cache_hardhat/ multisig.batch.tmp.json
+# This also deletes multisig.batch.tmp.json, which may be the only record of a
+# queued Safe batch that was never proposed: move it aside before running this.
+rm -rf artifacts/ cache_hardhat/ multisig.batch.tmp.json
 
 # Run node
 npx hardhat node --fork $FORK_NODE_URL --fork-block-number $FORK_BLOCK_NUMBER --no-deploy

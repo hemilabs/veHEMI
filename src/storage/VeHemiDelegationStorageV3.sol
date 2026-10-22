@@ -8,8 +8,8 @@ import {VeHemiDelegationStorageV2} from "./VeHemiDelegationStorageV2.sol";
  * @notice Storage extension for VeHemiVoteDelegation V3 (migration tooling).
  *
  * @dev Chain-inherits V2 to preserve all prior slot positions.
- *      `VeHemiVoteDelegation` now inherits V3, which transitively pulls in
- *      V2 and V1. V1 (slots 0–3) and V2 (slots 4–5 plus __gapV2[44] at
+ *      `VeHemiVoteDelegation` inherits V4, which transitively pulls in
+ *      V3, V2 and V1. V1 (slots 0–3) and V2 (slots 4–5 plus __gapV2[44] at
  *      slots 6–49) remain BYTE-IDENTICAL — V3's new field lands at the
  *      first slot AFTER V2's reserved range.
  *
@@ -37,7 +37,7 @@ abstract contract VeHemiDelegationStorageV3 is VeHemiDelegationStorageV2 {
     /// @notice One-way latch sealing the legacy-import functions.
     ///         Initially `false`; flipped to `true` exactly once by
     ///         `finalizeMigration()`. After this flip the import paths
-    ///         revert with `MigrationFinalized` and cannot be re-opened
+    ///         revert with `MigrationFinalizedError()` and cannot be re-opened
     ///         by any caller (including the owner) — preventing
     ///         post-migration state injection that would corrupt
     ///         `getPastVotes` history for snapshots taken after finalize.

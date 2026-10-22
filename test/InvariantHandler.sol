@@ -131,6 +131,13 @@ contract InvariantHandler is Test {
         adapter = new CountingAdapter();
         vm.prank(admin_);
         delegation.setTrustedAdapter(address(adapter));
+
+        // Auto-relock feature probe: without `autoRelockRemaining(uint256)` the
+        // staticcall reverts and every auto-relock action below is a no-op.
+        (bool _probeOk, bytes memory _probeRet) = address(veHemi).staticcall(
+            abi.encodeWithSignature("autoRelockRemaining(uint256)", uint256(1))
+        );
+        autoRelockSupported = _probeOk && _probeRet.length >= 32;
     }
 
     // Return 0x0 instead of reverting if the NFT does not exist anymore
@@ -316,6 +323,7 @@ contract InvariantHandler is Test {
             vm.prank(veHemi.forfeitAdmin());
             veHemi.forfeit(id);
             forfeitedTokenIds.push(id);
+            _arRetire(id);
 
             maxWarp = MAX_ACCUMULATED_WARP;
 
@@ -357,6 +365,7 @@ contract InvariantHandler is Test {
             vm.prank(veHemi.forfeitAdmin());
             veHemi.forfeit(id);
             forfeitedTokenIds.push(id);
+            _arRetire(id);
 
             maxWarp = MAX_ACCUMULATED_WARP;
 
@@ -381,6 +390,10 @@ contract InvariantHandler is Test {
             veHemi.increaseAmount(id, amount);
             vm.stopPrank();
 
+            // A top-up re-bases a flat position's weight (slope * (R - S/2));
+            // R itself must not move.
+            _arResyncWeightOnly(id);
+
             maxWarp = MAX_ACCUMULATED_WARP;
 
             break;
@@ -394,6 +407,9 @@ contract InvariantHandler is Test {
             if (owner == address(0)) continue;
 
             IVeHemi.LockedBalance memory _lock = veHemi.getLockedBalance(id);
+            // Flat positions are extended by `probeExtendWhileFlat`, which
+            // re-anchors the auto-relock ghost.
+            if (isFlat(id)) continue;
             if (block.timestamp >= _lock.end) continue;
             uint256 currentDuration = _lock.end - block.timestamp;
             if (currentDuration + SIX_DAYS > MAX_DURATION) continue;
@@ -419,8 +435,11 @@ contract InvariantHandler is Test {
             // Skip non-transferrable positions (would revert)
             if (!veHemi.isTransferable(id)) continue;
 
+            bool _wasFlat = isFlat(id);
             vm.prank(from);
             veHemi.transferFrom(from, to, id);
+            // A transfer to another account disarms auto-relock.
+            if (_wasFlat) _flat[id].live = false;
 
             maxWarp = MAX_ACCUMULATED_WARP;
 
@@ -437,9 +456,13 @@ contract InvariantHandler is Test {
             IVeHemi.LockedBalance memory _lock = veHemi.getLockedBalance(id);
 
             if (block.timestamp < _lock.end) continue;
+            // A flat position's stored `lock.end` may be in the past, but it is
+            // not withdrawable (`probeFlatWithdrawBlocked` asserts the refusal).
+            if (isFlat(id)) continue;
 
             vm.prank(owner);
             veHemi.withdraw(id);
+            _arRetire(id);
 
             maxWarp = MAX_ACCUMULATED_WARP;
 
@@ -540,5 +563,478 @@ contract InvariantHandler is Test {
     ///      forfeitableGlobalPointHistory without an accompanying user mutation.
     function checkpoint() public {
         veHemi.checkpoint();
+    }
+
+    // =====================================================================
+    // Auto-relock actions and ghost state
+    // =====================================================================
+    //
+    // The feature is reached through the ABI only (`abi.encodeWithSignature`
+    // plus `autoRelockSupported`, probed in the constructor), so on a build
+    // without it every action below is a no-op and the invariants of
+    // test/Invariant.t.sol run unchanged; `invariant_autoRelockHarnessIsNotVacuous`
+    // (test/AutoRelockInvariant.t.sol) fails in that case.
+
+    bool public autoRelockSupported;
+
+    /// @dev Enables whose weight step was not the bucket-mean closed form
+    ///      `slope * (off - SIX_DAYS/2)` (signed), `off = now - grid(now)`.
+    uint256 public arEnableJumpViolations;
+
+    /// @notice Committed auto-relock actions in this run: enables, owner
+    ///         disables and flat extensions (`probeExtendWhileFlat`), counted
+    ///         on the success path only. Floored across runs by
+    ///         `AutoRelockInvariantTest.afterInvariant`.
+    uint256 public arEnableSuccesses;
+    uint256 public arDisableSuccesses;
+    uint256 public arExtendSuccesses;
+
+    /// @notice Per-token auto-relock ghost, written by this handler at each
+    ///         auto-relock action.
+    struct FlatGhost {
+        uint64 enabledAt;        // timestamp of the enable (or of the last flat extension)
+        uint64 endBeforeEnable;  // lock.end just before the enable (or the end bought by the last flat extension)
+        uint64 remainingAuthored; // R computed here: floor((endBeforeEnable - grid(enabledAt)) / S) * S
+        uint64 disabledAt;       // timestamp of the last owner disable
+        uint64 endAfterDisable;  // lock.end just after the last owner disable
+        uint256 flatWeight;      // balanceOfNFT just after the enable, re-based by top-ups
+        bool live;               // the handler believes the position is flat
+        bool everEnabled;
+        bool ownerDisabled;      // the last exit from flat was an owner disable
+    }
+
+    mapping(uint256 => FlatGhost) internal _flat;
+    uint256[] public arTouchedIds;
+
+    function flatGhost(uint256 tokenId) external view returns (FlatGhost memory) {
+        return _flat[tokenId];
+    }
+
+    function arTouchedIdsLength() external view returns (uint256) {
+        return arTouchedIds.length;
+    }
+
+    /// @notice Live read of `autoRelockRemaining`; 0 when the feature is absent.
+    function arRemaining(uint256 tokenId) public view returns (uint64) {
+        if (!autoRelockSupported) return 0;
+        (bool ok, bytes memory d) = address(veHemi).staticcall(
+            abi.encodeWithSignature("autoRelockRemaining(uint256)", tokenId)
+        );
+        if (!ok || d.length < 32) return 0;
+        return abi.decode(d, (uint64));
+    }
+
+    function isFlat(uint256 tokenId) public view returns (bool) {
+        return arRemaining(tokenId) != 0;
+    }
+
+    /// @dev `mustSucceed == true` re-throws the callee's revert data, so under
+    ///      `fail_on_revert = true` a refused mandatory call fails the run.
+    function _arCall(bytes memory data, bool mustSucceed) internal returns (bool ok) {
+        bytes memory ret;
+        (ok, ret) = address(veHemi).call(data);
+        if (!ok && mustSucceed) {
+            assembly {
+                revert(add(ret, 32), mload(ret))
+            }
+        }
+    }
+
+    function _arTouch(uint256 tokenId) internal {
+        if (!_flat[tokenId].everEnabled) {
+            _flat[tokenId].everEnabled = true;
+            arTouchedIds.push(tokenId);
+        }
+    }
+
+    /// @dev Re-snapshot only the flat weight after an action that may
+    ///      legitimately change it (a top-up or a flat extension).
+    function _arResyncWeightOnly(uint256 tokenId) internal {
+        if (!autoRelockSupported) return;
+        FlatGhost storage g = _flat[tokenId];
+        if (!g.everEnabled || !g.live) return;
+        g.flatWeight = veHemi.balanceOfNFT(tokenId);
+    }
+
+    /// @dev The position was burned (withdraw / forfeit).
+    function _arRetire(uint256 tokenId) internal {
+        if (!autoRelockSupported) return;
+        _flat[tokenId].live = false;
+    }
+
+    /// @notice Enable auto-relock on the first eligible position at or after a
+    ///         fuzz-chosen index, as its owner.
+    /// @dev Mirrors the contract's preconditions: not already flat, live lock,
+    ///      and `lock.end >= now + 2 * SIX_DAYS` (so R is at least two whole
+    ///      buckets). The one refusal the handler tolerates is
+    ///      `SeedingNotFinalized` on a non-transferable position before seeding
+    ///      is finalized; every other enable is mandatory-success.
+    function enableAutoRelock(uint256 rand) public {
+        if (!autoRelockSupported) return;
+
+        uint256 next = veHemi.nextTokenId();
+        if (next <= 1) return;
+        uint256 start = 1 + (rand % (next - 1));
+
+        for (uint256 k; k < next - 1; ++k) {
+            uint256 id = 1 + ((start - 1 + k) % (next - 1));
+
+            address owner = _ownerOf(id);
+            if (owner == address(0)) continue;
+            if (isFlat(id)) continue;
+
+            IVeHemi.LockedBalance memory lb = veHemi.getLockedBalance(id);
+            if (lb.amount <= 0) continue;
+            if (lb.end < block.timestamp + 2 * SIX_DAYS) continue;
+
+            bool mandatory =
+                veHemi.lockedSeedingFinalized() || veHemi.transferableAfter(id) <= block.timestamp;
+
+            uint256 wBefore = veHemi.balanceOfNFT(id);
+            vm.prank(owner);
+            bool ok = _arCall(abi.encodeWithSignature("enableAutoRelock(uint256)", id), mandatory);
+            if (!ok) return;
+            arEnableSuccesses += 1;
+
+            _arTouch(id);
+            FlatGhost storage g = _flat[id];
+            g.enabledAt = uint64(block.timestamp);
+            g.endBeforeEnable = lb.end;
+            g.remainingAuthored = uint64(
+                ((uint256(lb.end) - (block.timestamp / SIX_DAYS) * SIX_DAYS) / SIX_DAYS) * SIX_DAYS
+            );
+            g.ownerDisabled = false;
+            g.flatWeight = veHemi.balanceOfNFT(id);
+            g.live = true;
+            // The enable step: the flat level is `slope * (R - S/2)` and the
+            // decaying weight just before was `slope * (R - off)`, so
+            //     flatWeight - wBefore == slope * off - slope * S/2   (signed, exact).
+            {
+                uint256 _slopeE = uint256(uint128(lb.amount)) / MAX_DURATION;
+                uint256 _riseE =
+                    _slopeE * (block.timestamp - (block.timestamp / SIX_DAYS) * SIX_DAYS);
+                uint256 _halfE = _slopeE * (SIX_DAYS / 2);
+                uint256 _expectUp = _riseE >= _halfE ? _riseE - _halfE : 0;
+                uint256 _expectDown = _halfE > _riseE ? _halfE - _riseE : 0;
+                uint256 _actualUp = g.flatWeight >= wBefore ? g.flatWeight - wBefore : 0;
+                uint256 _actualDown = wBefore > g.flatWeight ? wBefore - g.flatWeight : 0;
+                if (_actualUp != _expectUp || _actualDown != _expectDown) {
+                    arEnableJumpViolations += 1;
+                }
+            }
+
+            maxWarp = MAX_ACCUMULATED_WARP;
+            return;
+        }
+    }
+
+    /// @notice Disable auto-relock on the first flat position at or after a
+    ///         fuzz-chosen index, as its owner. Mandatory-success: a disable
+    ///         that reverts would lock the principal.
+    function disableAutoRelock(uint256 rand) public {
+        if (!autoRelockSupported) return;
+        uint256 n = arTouchedIds.length;
+        if (n == 0) return;
+        uint256 start = rand % n;
+
+        for (uint256 k; k < n; ++k) {
+            uint256 id = arTouchedIds[(start + k) % n];
+            if (!isFlat(id)) continue;
+            address owner = _ownerOf(id);
+            if (owner == address(0)) continue;
+
+            vm.prank(owner);
+            _arCall(abi.encodeWithSignature("disableAutoRelock(uint256)", id), true);
+            arDisableSuccesses += 1;
+
+            FlatGhost storage g = _flat[id];
+            g.live = false;
+            g.ownerDisabled = true;
+            g.disabledAt = uint64(block.timestamp);
+            g.endAfterDisable = veHemi.getLockedBalance(id).end;
+
+            maxWarp = MAX_ACCUMULATED_WARP;
+            return;
+        }
+    }
+
+    /// @notice `increaseUnlockTime` on a flat position. The contract accepts it
+    ///         and sets `R = unlockTime - grid(now)`; the ghost is re-anchored
+    ///         from the handler's own inputs (the end it asked for and its own
+    ///         clock), never from the contract.
+    function probeExtendWhileFlat(uint256 rand) public {
+        if (!autoRelockSupported) return;
+        uint256 n = arTouchedIds.length;
+        if (n == 0) return;
+        uint256 start = rand % n;
+        for (uint256 k; k < n; ++k) {
+            uint256 id = arTouchedIds[(start + k) % n];
+            if (!isFlat(id)) continue;
+            address owner = _ownerOf(id);
+            if (owner == address(0)) continue;
+            IVeHemi.LockedBalance memory _lock = veHemi.getLockedBalance(id);
+            if (block.timestamp >= _lock.end) continue;
+            uint256 cur = _lock.end - block.timestamp;
+            if (cur + SIX_DAYS > MAX_DURATION) continue;
+            uint256 duration = bound(rand, cur + SIX_DAYS, MAX_DURATION);
+
+            vm.prank(owner);
+            bool ok = _arCall(
+                abi.encodeWithSignature("increaseUnlockTime(uint256,uint256)", id, duration),
+                false
+            );
+            if (ok) {
+                arExtendSuccesses += 1;
+                _arResyncWeightOnly(id);
+                uint256 _authoredEnd = ((block.timestamp + duration) / SIX_DAYS) * SIX_DAYS;
+                uint256 _gridNow = (block.timestamp / SIX_DAYS) * SIX_DAYS;
+                FlatGhost storage ge = _flat[id];
+                ge.remainingAuthored = uint64(_authoredEnd - _gridNow);
+                ge.enabledAt = uint64(block.timestamp);
+                ge.endBeforeEnable = uint64(_authoredEnd);
+            }
+            maxWarp = MAX_ACCUMULATED_WARP;
+            return;
+        }
+    }
+
+    /// @notice Enable / disable / enable inside one tick: cycling must not
+    ///         ratchet (`invariant_autoRelockDisableIsAntiRatchet`).
+    function autoRelockChurn(uint256 rand) public {
+        if (!autoRelockSupported) return;
+        enableAutoRelock(rand);
+        disableAutoRelock(rand);
+        enableAutoRelock(rand >> 8);
+    }
+
+    /// @notice Warp to (or one second past) a disabled position's restored
+    ///         `lock.end` and checkpoint there, so a restored slope that was
+    ///         never scheduled for retirement would show up in the supply
+    ///         invariants. Capped at the warp ceiling.
+    function warpPastRestoredEnd(uint256 rand) public {
+        if (!autoRelockSupported) return;
+        uint256 n = arTouchedIds.length;
+        if (n == 0) return;
+        uint256 start = rand % n;
+
+        for (uint256 k; k < n; ++k) {
+            uint256 id = arTouchedIds[(start + k) % n];
+            FlatGhost memory g = _flat[id];
+            if (!g.ownerDisabled) continue;
+            if (isFlat(id)) continue;
+            if (_ownerOf(id) == address(0)) continue;
+            uint256 end_ = veHemi.getLockedBalance(id).end;
+            if (end_ <= block.timestamp) continue;
+            uint256 delta = end_ - block.timestamp + (rand & 1);
+            if (delta > MAX_ACCUMULATED_WARP) continue;
+
+            vm.warp(block.timestamp + delta);
+            veHemi.checkpoint();
+
+            maxWarp = MAX_ACCUMULATED_WARP;
+            return;
+        }
+    }
+
+    /// @notice A flat position must not be withdrawable, even once its stored
+    ///         `lock.end` is in the past. Issues the call and fails the run if
+    ///         it succeeds; state is rolled back either way.
+    function probeFlatWithdrawBlocked(uint256 rand) public {
+        if (!autoRelockSupported) return;
+        uint256 n = arTouchedIds.length;
+        if (n == 0) return;
+        uint256 start = rand % n;
+
+        for (uint256 k; k < n; ++k) {
+            uint256 id = arTouchedIds[(start + k) % n];
+            if (!isFlat(id)) continue;
+            address owner = _ownerOf(id);
+            if (owner == address(0)) continue;
+
+            uint256 snap = vm.snapshotState();
+            vm.prank(owner);
+            (bool ok, ) = address(veHemi).call(
+                abi.encodeWithSignature("withdraw(uint256)", id)
+            );
+            vm.revertToState(snap);
+
+            assertFalse(ok, "withdraw() succeeded on an auto-relock-enabled position");
+            return;
+        }
+    }
+
+    /// @notice A flat position must stay delegatable (its stored `lock.end`
+    ///         may be in the past). A revert fails the run with a named reason.
+    function delegateFlat(uint256 rand) public {
+        if (!autoRelockSupported) return;
+        uint256 n = arTouchedIds.length;
+        if (n == 0) return;
+        address delegatee = users[rand % users.length];
+        uint256 start = rand % n;
+
+        for (uint256 k; k < n; ++k) {
+            uint256 id = arTouchedIds[(start + k) % n];
+            if (!isFlat(id)) continue;
+            address owner = _ownerOf(id);
+            if (owner == address(0)) continue;
+
+            vm.prank(owner);
+            (bool ok, bytes memory ret) = address(delegation).call(
+                abi.encodeWithSignature("delegate(uint256,address)", id, delegatee)
+            );
+            if (!ok) {
+                emit log_named_uint("delegate() reverted on a flat position, tokenId", id);
+                emit log_named_bytes("  revert data", ret);
+                assertTrue(false, "an auto-relock-enabled position is not delegatable");
+            }
+            return;
+        }
+    }
+
+    /// @notice The owner tops a flat position up by 1 wei. R must not move
+    ///         (`invariant_autoRelockRemainingMatchesAuthored`); the weight may,
+    ///         so the weight ghost is re-based. (A stranger's top-up reverts
+    ///         `NotOwner`, which would abort the run under `fail_on_revert`.)
+    function topUpFlatPosition(uint256 rand) public {
+        if (!autoRelockSupported) return;
+        uint256 n = arTouchedIds.length;
+        if (n == 0) return;
+        uint256 start = rand % n;
+
+        for (uint256 k; k < n; ++k) {
+            uint256 id = arTouchedIds[(start + k) % n];
+            if (!isFlat(id)) continue;
+            address owner = _ownerOf(id);
+            if (owner == address(0)) continue;
+
+            vm.startPrank(owner);
+            hemi.mint(owner, 1);
+            hemi.approve(address(veHemi), 1);
+            veHemi.increaseAmount(id, 1);
+            vm.stopPrank();
+
+            _arResyncWeightOnly(id);
+
+            maxWarp = MAX_ACCUMULATED_WARP;
+            return;
+        }
+    }
+
+    // =====================================================================
+    // Final-window operations, for `invariant_pastVotesNeverExceedPastTotalSupply`
+    //
+    // The delegation module books a change at the next hour boundary `H`,
+    // except that when a lock's `end <= H` its retirement is deferred to `H`,
+    // which happens only in the lock's last `end % 3600` seconds. `warp` and
+    // `warpSmall` cannot aim at `end`, so this action warps into that window
+    // and makes one escrow-changing call there, recording `(tau, end)` so the
+    // invariant can sample instants around both.
+    // =====================================================================
+
+    struct FinalWindowRec {
+        uint64 tau;       // the instant the escrow-changing call was made
+        uint64 endBefore; // the subject lock's `end` immediately BEFORE it
+    }
+
+    FinalWindowRec[] internal _finalWindowRecs;
+    uint256 private constant FINAL_WINDOW_RING = 8;
+    /// @dev Records written so far; once the ring is full, the next write
+    ///      replaces slot `_finalWindowWrites % FINAL_WINDOW_RING`, the oldest.
+    uint256 private _finalWindowWrites;
+
+    function finalWindowRecsLength() external view returns (uint256) {
+        return _finalWindowRecs.length;
+    }
+
+    function finalWindowRec(uint256 i) external view returns (uint64 tau, uint64 endBefore) {
+        FinalWindowRec storage r = _finalWindowRecs[i];
+        return (r.tau, r.endBefore);
+    }
+
+    function _nextHourBoundary(uint256 t) internal pure returns (uint256) {
+        return (t / 3600) * 3600 + 3600;
+    }
+
+    function _noteFinalWindowOp(uint256 tau_, uint256 endBefore_) private {
+        FinalWindowRec memory r = FinalWindowRec({tau: uint64(tau_), endBefore: uint64(endBefore_)});
+        if (_finalWindowRecs.length < FINAL_WINDOW_RING) _finalWindowRecs.push(r);
+        else _finalWindowRecs[_finalWindowWrites % FINAL_WINDOW_RING] = r;
+        ++_finalWindowWrites;
+    }
+
+    /// @notice Warp into a live, decaying lock's deferral window (the earliest
+    ///         `tau` with `H(tau) >= end`) and make one escrow-changing call
+    ///         there: an extension, a top-up, a transfer or an unrelated mint.
+    /// @dev Every branch is precondition-complete (`fail_on_revert = true`).
+    ///      When no subject exists it creates one.
+    function finalWindowOp(uint256 rand, uint256 pick) public {
+        uint256 next = veHemi.nextTokenId();
+        if (next <= 1) {
+            _primeFinalWindowSubject(rand);
+            return;
+        }
+        uint256 start = 1 + (rand % (next - 1));
+        for (uint256 k; k < next - 1; ++k) {
+            uint256 id = 1 + ((start - 1 + k) % (next - 1));
+            address owner_ = _ownerOf(id);
+            if (owner_ == address(0)) continue;
+            if (isFlat(id)) continue; // a flat lock's stored `end` is not where it expires
+            IVeHemi.LockedBalance memory lb = veHemi.getLockedBalance(id);
+            if (lb.amount <= 0) continue;
+            uint256 end_ = lb.end;
+            if (end_ <= block.timestamp + 1) continue;
+
+            uint256 tau = (end_ / 3600) * 3600;
+            if (tau <= block.timestamp) tau = block.timestamp + 1;
+            if (tau >= end_) continue;
+            if (_nextHourBoundary(tau) < end_) continue;      // not the deferral branch
+            if (tau - block.timestamp > maxWarp) continue;
+
+            vm.warp(tau);
+
+            uint256 sel = pick % 4;
+            if (sel == 0) {
+                uint256 cur = end_ - block.timestamp;
+                if (cur + SIX_DAYS > MAX_DURATION) return;
+                vm.prank(owner_);
+                veHemi.increaseUnlockTime(id, MAX_DURATION / 2);
+            } else if (sel == 1) {
+                vm.startPrank(owner_);
+                hemi.mint(owner_, MIN_AMOUNT);
+                hemi.approve(address(veHemi), MIN_AMOUNT);
+                veHemi.increaseAmount(id, MIN_AMOUNT);
+                vm.stopPrank();
+            } else if (sel == 2 && veHemi.isTransferable(id)) {
+                address to = users[rand % users.length];
+                // Reduce before adding: `rand` may be type(uint256).max.
+                if (to == owner_) to = users[(rand % users.length + 1) % users.length];
+                if (to == owner_) return;
+                vm.prank(owner_);
+                veHemi.transferFrom(owner_, to, id);
+            } else {
+                address maker = users[rand % users.length];
+                vm.startPrank(maker);
+                hemi.mint(maker, MIN_AMOUNT);
+                hemi.approve(address(veHemi), MIN_AMOUNT);
+                veHemi.createLock(MIN_AMOUNT, MIN_DURATION);
+                vm.stopPrank();
+            }
+
+            _noteFinalWindowOp(tau, end_);
+            maxWarp = MAX_ACCUMULATED_WARP;
+            return;
+        }
+        _primeFinalWindowSubject(rand);
+    }
+
+    /// @dev Make a plain transferable lock so a later draw has a subject.
+    function _primeFinalWindowSubject(uint256 rand) private {
+        address maker = users[rand % users.length];
+        vm.startPrank(maker);
+        hemi.mint(maker, MIN_AMOUNT);
+        hemi.approve(address(veHemi), MIN_AMOUNT);
+        veHemi.createLock(MIN_AMOUNT, MIN_DURATION);
+        vm.stopPrank();
+        maxWarp = MAX_ACCUMULATED_WARP;
     }
 }

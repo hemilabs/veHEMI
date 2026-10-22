@@ -1,4 +1,7 @@
 /**
+ * OBSOLETE: `main()` refuses to run (see the error it throws). The text below
+ * describes the V2-era behaviour and is kept for reference only.
+ *
  * One-shot V2-upgrade Safe MultiSend proposer.
  *
  * Background: the hardhat-deploy flow normally builds and proposes this
@@ -54,6 +57,11 @@ function loadAddress(artifactName: string): string {
 }
 
 async function main() {
+    // Obsolete: refuses to run. The code below is kept for reference only.
+    throw new Error(
+        "OBSOLETE (V2 era): builds PLAIN ProxyAdmin.upgrade legs (no armLegacyDatingWindow) plus seeding " +
+            "legs that revert on mainnet. Use deploy/08_upgrade_autorelock.ts."
+    );
     if (!process.env.PROVIDER_URL) throw new Error("PROVIDER_URL is required");
     if (!process.env.DEPLOYER_PRIVATE_KEY) throw new Error("DEPLOYER_PRIVATE_KEY is required");
     if (!process.env.SAFE_API_KEY) throw new Error("SAFE_API_KEY is required");

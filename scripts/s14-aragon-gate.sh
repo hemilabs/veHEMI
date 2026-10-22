@@ -1,0 +1,110 @@
+#!/usr/bin/env bash
+# =============================================================================
+# Aragon lifecycle gate. CI runs it as
+#   scripts/s47-rpc-retry.sh scripts/s14-aragon-gate.sh .
+#
+#   bash scripts/s14-aragon-gate.sh [tree]
+#
+# It runs the 14-body `VeHemiAragonAdapterForkTest` -- DAO creation, proposal
+# creation, voting, tallying, execution, quorum defeat, support defeat,
+# minProposerVotingPower and delegated-power aggregation -- through the real
+# AragonOSx v1.4.0 DAOFactory on Ethereum mainnet, and refuses to report a pass
+# it did not earn. It guards three ways the suite can pass while checking nothing:
+#
+#   Guard 1  ETH_RPC_URL unset: every body `vm.skip`s and forge prints
+#            "14 passed". The gate refuses to start without ETH_RPC_URL and
+#            fails on skipped > 0.
+#
+#   Guard 2  The fork block: below block 23,341,186 TokenVoting release 1 /
+#            build 4 is not yet published in the PluginRepo, so setUp reverts
+#            and forge shows one red row (the DAOFactory has had code since
+#            21,995,355). The gate checks the block against that floor over RPC
+#            before spending fork time, so a wrong block reads as a one-line
+#            diagnosis instead of 14 reverts.
+#
+#   Guard 3  An empty selection: `forge test --list` prints bare names but
+#            `--match-test` matches signatures, so a mistyped filter selects
+#            nothing and exits 0. The gate asserts that `--list` returns exactly
+#            EXPECTED_BODIES bodies before running them.
+#
+# `https://eth.drpc.org` is a free Ethereum mainnet archive endpoint and is
+# enough for ETH_RPC_URL. FORK_NODE_URL is not used here.
+#
+# Every failure exits 3. A transport failure keeps the endpoint's own error
+# text in its message, so scripts/s47-rpc-retry.sh can tell it from a red tree.
+# =============================================================================
+set -uo pipefail
+T="${1:-.}"
+cd "$T"
+
+EXPECTED_BODIES=14
+CONTRACT="${S14_CONTRACT:-VeHemiAragonAdapterForkTest}"
+# Chain 1: PluginRepo 0xb740..287f buildCount(1) reaches 4 at this block.
+# Below it, `createDao` with versionTag (1,4) reverts in setUp.
+BUILD4_FLOOR=23341186
+DAO_FACTORY=0x246503df057A9a85E0144b6867a828c99676128B
+TOKEN_VOTING_REPO=0xb7401cD221ceAFC54093168B814Cc3d42579287f
+DEFAULT_PIN=26000000
+
+fail(){ echo "S14-GATE FAIL: $*"; exit 3; }
+
+# ---- Guard 1: the endpoint must exist -------------------------------------
+[ -n "${ETH_RPC_URL:-}" ] || fail "ETH_RPC_URL is unset.  With it unset this suite reports
+        '14 passed' having executed NOTHING.  A free Ethereum-mainnet archive
+        endpoint is enough: ETH_RPC_URL=https://eth.drpc.org"
+
+# Keep `cast`'s stderr. Discarding it would report an endpoint timeout as a
+# chain fact ("buildCount(1)= ...; need >= 4"). The endpoint's own words go into
+# the failure text, where scripts/s47-rpc-retry.sh looks for them.
+S47ERR=$(mktemp); trap 'rm -f "$S47ERR"' EXIT
+CID=$(cast chain-id --rpc-url "$ETH_RPC_URL" 2>"$S47ERR") || fail "ETH_RPC_URL does not answer eth_chainId -- the endpoint's own words: $(cat "$S47ERR")"
+[ "$CID" = "1" ] || fail "ETH_RPC_URL is chain $CID; this suite needs Ethereum mainnet (chain 1).
+        (The Hemi fork suites use HEMI_RPC_URL / chain 43111 -- different variable, different chain.)"
+
+# ---- Guard 2: the block ---------------------------------------------------
+PIN="${ETH_FORK_BLOCK:-$DEFAULT_PIN}"
+if [ "$PIN" = "0" ]; then
+  echo "S14-GATE WARN: ETH_FORK_BLOCK=0 -- forking at HEAD.  This run is NOT reproducible"
+  echo "               and a change to Aragon's mainnet deployment can turn it red without"
+  echo "               the diff moving.  Pin it."
+  PIN=$(cast block-number --rpc-url "$ETH_RPC_URL")
+fi
+[ "$PIN" -ge "$BUILD4_FLOOR" ] || fail "ETH_FORK_BLOCK=$PIN is below the measured floor $BUILD4_FLOOR.
+        TokenVoting release 1 build 4 does not exist in the PluginRepo at that block,
+        so every body dies in setUp and forge reports ONE red row, not 14."
+CODE=$(cast code "$DAO_FACTORY" --block "$PIN" --rpc-url "$ETH_RPC_URL" 2>"$S47ERR") || fail "cast code on the DAOFactory did not complete at block $PIN -- the endpoint's own words: $(cat "$S47ERR")"
+[ "${#CODE}" -gt 2 ] || fail "DAOFactory $DAO_FACTORY has no code at block $PIN
+        (is the endpoint an archive node?  known to work: https://eth.drpc.org)"
+S47BUILDS=$(cast call "$TOKEN_VOTING_REPO" 'buildCount(uint8)(uint256)' 1 --block "$PIN" --rpc-url "$ETH_RPC_URL" 2>"$S47ERR") || fail "cast call buildCount(1) did not complete at block $PIN -- the endpoint's own words: $(cat "$S47ERR")"
+BUILDS=$(echo "$S47BUILDS" | awk '{print $1}')
+[ -n "$BUILDS" ] && [ "$BUILDS" -ge 4 ] || fail "PluginRepo buildCount(1)=$BUILDS at block $PIN; need >= 4"
+echo "S14-GATE  chain 1 (Ethereum mainnet), fork block $PIN, DAOFactory code ${#CODE} hex chars, buildCount(1)=$BUILDS"
+
+# ---- the stale-artifact rule: BUILD before a filtered run -----------------
+forge build >/dev/null 2>&1 || fail "forge build failed"
+
+# ---- Guard 3: the selection must be non-empty -----------------------------
+N=$(forge test --list --match-contract "$CONTRACT" 2>/dev/null | grep -cE '^    test')
+[ "$N" = "$EXPECTED_BODIES" ] || fail "--list selected $N bodies for $CONTRACT, expected $EXPECTED_BODIES.
+        An empty or short selection exits 0 and reads as a pass."
+
+# ---- run ------------------------------------------------------------------
+OUT=$(ETH_FORK_BLOCK="$PIN" FOUNDRY_INVARIANT_RUNS=16 FOUNDRY_INVARIANT_DEPTH=64 \
+      FOUNDRY_INVARIANT_SHRINK_RUN_LIMIT=0 FOUNDRY_FUZZ_RUNS=16 \
+      forge test --match-contract "$CONTRACT" --threads 1 \
+                 --compute-units-per-second "${S14_CUPS:-40}" -vv 2>&1)
+echo "$OUT" | sed 's/^/    /'
+
+LINE=$(echo "$OUT" | grep -E '^Suite result' | tail -1)
+[ -n "$LINE" ] || fail "no 'Suite result' line -- the run produced no suite at all"
+P=$(echo "$LINE" | sed -nE 's/.* ([0-9]+) passed.*/\1/p')
+F=$(echo "$LINE" | sed -nE 's/.* ([0-9]+) failed.*/\1/p')
+S=$(echo "$LINE" | sed -nE 's/.* ([0-9]+) skipped.*/\1/p')
+echo "S14-GATE  passed=$P failed=$F skipped=$S (expected $EXPECTED_BODIES / 0 / 0)"
+[ "$S" = "0" ] || fail "$S body/bodies SKIPPED.  A skip is not a pass."
+[ "$F" = "0" ] || fail "$F body/bodies FAILED."
+[ "$P" = "$EXPECTED_BODIES" ] || fail "passed=$P, expected $EXPECTED_BODIES."
+
+echo "S14-GATE OK  --  $EXPECTED_BODIES/$EXPECTED_BODIES Aragon lifecycle bodies executed"
+echo "             against the real AragonOSx v1.4.0 DAOFactory on Ethereum mainnet"
+echo "             at block $PIN.  Nothing skipped."

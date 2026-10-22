@@ -35,7 +35,21 @@ async function main() {
     const veHemi = new Contract(VE_HEMI, ABI, provider);
     const multicall = new Contract(MULTICALL3, MULTICALL3_ABI, provider);
 
-    const safetyHours = Number(process.env.HEMI_SUBEND_SAFETY_HOURS ?? 24);
+    // `??` fires only on null/undefined, so `HEMI_SUBEND_SAFETY_HOURS=""` passes
+    // it and `Number("")` is 0. `threshold` would then be `now`, and every
+    // candidate that reaches the comparison is already `> now` (the `ta > now`
+    // and `lockEnd <= now` guards below), so the margin check would pass
+    // unconditionally and still print "PREFLIGHT PASS". `Number("abc")` is NaN,
+    // and every comparison with NaN is false, so that would pass too. Reject both,
+    // as `deploy/04` does.
+    const rawSafetyHours = process.env.HEMI_SUBEND_SAFETY_HOURS?.trim() || "24";
+    const safetyHours = Number(rawSafetyHours);
+    if (!Number.isFinite(safetyHours) || safetyHours <= 0) {
+        throw new Error(
+            `HEMI_SUBEND_SAFETY_HOURS must be a positive number of hours; got "${rawSafetyHours}". ` +
+            "A zero, empty or non-numeric value makes the margin check pass unconditionally."
+        );
+    }
     const block = await provider.getBlock("latest");
     const now: number = Number(block!.timestamp);
     const threshold = now + Math.floor(safetyHours * 3600);

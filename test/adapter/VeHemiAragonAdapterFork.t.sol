@@ -123,6 +123,11 @@ contract VeHemiAragonAdapterForkTest is Test {
     address constant DAO_FACTORY = 0x246503df057A9a85E0144b6867a828c99676128B;
     address constant TOKEN_VOTING_REPO = 0xb7401cD221ceAFC54093168B814Cc3d42579287f;
 
+    /// @dev Ethereum-mainnet block this suite forks by default (ETH_FORK_BLOCK=0 forks head).
+    ///      Aragon OSx v1.4.0's DAOFactory and the TokenVoting PluginRepo are
+    ///      both immutable at this block.
+    uint256 constant DEFAULT_ETH_FORK_BLOCK = 26000000;
+
     uint8 constant VOTE_NONE = 0;
     uint8 constant VOTE_ABSTAIN = 1;
     uint8 constant VOTE_YES = 2;
@@ -147,7 +152,14 @@ contract VeHemiAragonAdapterForkTest is Test {
         if (bytes(rpcUrl).length == 0) return;
 
         forkEnabled = true;
-        vm.createSelectFork(rpcUrl);
+        // Pin the block so the result does not move with the chain head; fork
+        // through the `ethereum` RPC alias (foundry.toml [rpc_endpoints]).
+        uint256 pinnedBlock = vm.envOr("ETH_FORK_BLOCK", uint256(DEFAULT_ETH_FORK_BLOCK));
+        if (pinnedBlock == 0) {
+            vm.createSelectFork("ethereum");
+        } else {
+            vm.createSelectFork("ethereum", pinnedBlock);
+        }
 
         alice = makeAddr("alice");
         bob = makeAddr("bob");

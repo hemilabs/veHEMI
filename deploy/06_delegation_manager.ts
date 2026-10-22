@@ -106,7 +106,8 @@ const func: DeployFunction = async function (hre) {
     console.log("restakeManagerAddress:", restakeManagerAddress);
 
     // ── Step 1: Deploy DelegateRewardDistributor (UUPS proxy) ────────────
-    // Owner is the Gnosis Safe (acts as the TimelockController / governance).
+    // Owner is the Gnosis Safe. There is no timelock: an owner action executes as
+    // soon as the Safe's threshold of owners has signed it.
     // The DRD is inert until setDelegationManager() is called in Step 5.
     console.log("\n--- Step 1: Deploy DelegateRewardDistributor ---");
 

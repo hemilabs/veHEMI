@@ -4,6 +4,7 @@ import { Contract, Interface } from "ethers";
 import { HardhatRuntimeEnvironment } from "hardhat/types";
 import { Addresses } from "../helpers/addresses";
 import { saveForSafeBatchExecution } from "../helpers/safe";
+import { deployVeHemiLibraries } from "../helpers/vehemiLibraries";
 
 const VE_HEMI = "VeHemi";
 const VOTE_DELEGATION = "VeHemiVoteDelegation";
@@ -255,11 +256,16 @@ const func: DeployFunction = async function (hre) {
     // ── Step 2: Upgrade VeHemi to V2 ───────────────────────────────────────
     // Same pattern: bare upgrade with no initializer call. The V2
     // locked-curve logic is dormant until finalizeSeeding (step 5) runs.
+    // `src/VeHemi.sol` links two DELEGATECALL libraries (helpers/vehemiLibraries.ts),
+    // so every VeHemi implementation deploy must pass `libraries:`.
+    const libraries = await deployVeHemiLibraries(hre, deployer);
+
     const upgradeVeHemiFunction = () =>
         deploy(VE_HEMI, {
             from: deployer,
             log: true,
             args: [Addresses.Hemi.HEMI_TOKEN],
+            libraries,
             proxy: {
                 owner: Addresses.Hemi.GNOSIS_SAFE,
                 proxyContract: "OpenZeppelinTransparentProxy",

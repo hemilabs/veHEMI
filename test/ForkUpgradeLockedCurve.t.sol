@@ -2087,9 +2087,9 @@ contract ForkUpgradeLockedCurveTest is Test {
     //  42. NON-OWNER increaseAmount ON FORFEITABLE POSITION
     // ═════════════════════════════════════════════════════════════════════
 
-    /// @notice increaseAmount is permissionless — anyone can add tokens to any position.
-    ///         Verify this works correctly for forfeitable positions and updates both curves.
-    function testNonOwnerIncreaseAmountOnForfeitablePosition() public onlyFork {
+    /// @notice increaseAmount is owner-only: a non-owner is refused with NotOwner. Verify the
+    ///         owner's top-up works correctly for forfeitable positions and updates both curves.
+    function testOwnerIncreaseAmountOnForfeitablePosition() public onlyFork {
         _upgradeAndSeed();
 
         // Create a forfeitable position owned by 0xCAFE
@@ -2102,10 +2102,18 @@ contract ForkUpgradeLockedCurveTest is Test {
         uint256 lockedBefore = veHemi.nonTransferableTotalVeHemiSupply();
         uint256 forfeitableBefore = veHemi.forfeitableTotalVeHemiSupply();
 
-        // A DIFFERENT address (not the owner) increases the amount
+        // A DIFFERENT address (not the owner) is refused
         address donator = address(0xD000);
         deal(HEMI_TOKEN, donator, 50 ether);
         vm.startPrank(donator);
+        hemiToken.approve(address(veHemi), 50 ether);
+        vm.expectRevert(VeHemi.NotOwner.selector);
+        veHemi.increaseAmount(tokenId, 50 ether);
+        vm.stopPrank();
+
+        // The owner increases the amount
+        deal(HEMI_TOKEN, address(0xCAFE), 50 ether);
+        vm.startPrank(address(0xCAFE));
         hemiToken.approve(address(veHemi), 50 ether);
         veHemi.increaseAmount(tokenId, 50 ether);
         vm.stopPrank();
@@ -2343,7 +2351,9 @@ contract ForkUpgradeLockedCurveTest is Test {
         assertEq(veHemi.forfeitableTotalVeHemiSupply(), 0, "Forfeitable should be 0 before mutation");
 
         // increaseAmount on the locked-only position (triggers _scheduleSlopeChanges with curveFlags=1)
-        vm.startPrank(GNOSIS_SAFE);
+        deal(HEMI_TOKEN, address(0xBBBB), 100 ether);
+        vm.startPrank(address(0xBBBB));
+        hemiToken.approve(address(veHemi), 100 ether);
         veHemi.increaseAmount(tokenId, 100 ether);
         vm.stopPrank();
 

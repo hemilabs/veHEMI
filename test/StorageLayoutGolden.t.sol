@@ -13,19 +13,66 @@ import "forge-std/Test.sol";
 ///         Covers:
 ///           - Every VeHemi slot label lives at the expected absolute slot.
 ///           - `__gapV2` is `uint256[37]` starting at slot 27.
+///           - V3 is slots 64-113: `autoRelockRemaining` at 64,
+///             `autoRelockRefreshedAt` at 65, `__gapV3` = `uint256[48]` at 66.
 ///           - `userPointHistory` inner array length is EXACTLY 1,000,000,000
 ///             (catches a regex that accidentally strips array lengths).
 ///           - `VeHemiAragonAdapter` has ZERO storage fields (stateless).
 ///           - `VeHemiVoteDelegation`'s V1 fields begin at slot 0.
+///
+///         The hardcoded slot, label and entry-count expectations are also
+///         asserted against the compiled artifacts in `out/` (`extra_output = ["storageLayout"]` in
+///         foundry.toml), so a `src/` layout change fails here even while the
+///         fixture is stale. `test/StorageLayoutCompiledParity.t.sol` compares
+///         fixture and artifact generically; the hardcoded numbers here also
+///         fail after the fixture is regenerated to match a shifted layout.
 contract StorageLayoutGoldenTest is Test {
     string veHemiJson;
     string delegationJson;
     string adapterJson;
 
+    // The compiled artifacts, read from the `out/` directory of this build.
+    string veHemiArtifact;
+    string delegationArtifact;
+    string adapterArtifact;
+
     function setUp() public {
         veHemiJson = vm.readFile("test/fixtures/storage-layouts/VeHemi.json");
         delegationJson = vm.readFile("test/fixtures/storage-layouts/VeHemiVoteDelegation.json");
         adapterJson = vm.readFile("test/fixtures/storage-layouts/VeHemiAragonAdapter.json");
+
+        veHemiArtifact = vm.readFile("out/VeHemi.sol/VeHemi.json");
+        delegationArtifact = vm.readFile("out/VeHemiVoteDelegation.sol/VeHemiVoteDelegation.json");
+        adapterArtifact = vm.readFile("out/VeHemiAragonAdapter.sol/VeHemiAragonAdapter.json");
+    }
+
+    /// @dev The artifact-side assertions need `.storageLayout` in the
+    ///      artifacts (an incremental build can omit it). Assert the key exists
+    ///      and that the two proxied contracts have a non-empty layout.
+    function test_ArtifactLayoutsAreNotVacuous() public {
+        assertTrue(
+            vm.keyExistsJson(veHemiArtifact, ".storageLayout"),
+            "out/VeHemi.sol/VeHemi.json has no .storageLayout - this suite would be a "
+            "tautology again. Set extra_output = [\"storageLayout\"] in foundry.toml and rebuild."
+        );
+        assertTrue(
+            vm.keyExistsJson(delegationArtifact, ".storageLayout"),
+            "out/VeHemiVoteDelegation.sol/VeHemiVoteDelegation.json has no .storageLayout"
+        );
+        assertTrue(
+            vm.keyExistsJson(adapterArtifact, ".storageLayout"),
+            "out/VeHemiAragonAdapter.sol/VeHemiAragonAdapter.json has no .storageLayout"
+        );
+        assertGt(
+            _countStorageEntries(veHemiArtifact, ".storageLayout.storage", 128),
+            0,
+            "compiled VeHemi layout is empty - every artifact-side pin would pass on nothing"
+        );
+        assertGt(
+            _countStorageEntries(delegationArtifact, ".storageLayout.storage", 64),
+            0,
+            "compiled VeHemiVoteDelegation layout is empty"
+        );
     }
 
     // ─── VeHemi slot pinning ───────────────────────────────────────────────
@@ -46,6 +93,23 @@ contract StorageLayoutGoldenTest is Test {
         string memory gotLabel = vm.parseJsonString(veHemiJson, labelKey);
         assertEq(gotSlot, expectedSlot, string.concat("slot mismatch at entry ", vm.toString(i)));
         assertEq(gotLabel, expectedLabel, string.concat("label mismatch at entry ", vm.toString(i)));
+
+        // The same hardcoded expectation, against what solc compiled.
+        string memory aSlotKey = string.concat(".storageLayout.storage[", vm.toString(i), "].slot");
+        string memory aLabelKey = string.concat(".storageLayout.storage[", vm.toString(i), "].label");
+        assertEq(
+            vm.parseJsonString(veHemiArtifact, aSlotKey),
+            expectedSlot,
+            string.concat(
+                "COMPILED slot mismatch at entry ", vm.toString(i),
+                " - src/ moved this field. This shifts the live proxy's storage."
+            )
+        );
+        assertEq(
+            vm.parseJsonString(veHemiArtifact, aLabelKey),
+            expectedLabel,
+            string.concat("COMPILED label mismatch at entry ", vm.toString(i), " - src/ reordered or renamed this field.")
+        );
     }
 
     function test_VeHemi_V1SlotsAtExpectedPositions() public view {
@@ -203,34 +267,151 @@ contract StorageLayoutGoldenTest is Test {
         assertEq(innerLabel, "struct IVeHemi.UserPoint[1000000000]", "UserPoint array length");
     }
 
-    function test_VeHemi_TotalSlotsExactly26() public {
-        // VeHemi.json should contain exactly 26 storage entries:
-        //   V1: 0-13 (14 entries)
-        //   V2: 14-24 plus __gapV2 at 25 (12 entries — seedingStarted and
-        //       seedingStartedAt are distinct JSON entries that share slot
-        //       21 via packing at offsets 0 and 1).
-        // The `.storage` array enumerates ONLY the directly-declared
-        // sequential fields; OZ parent slots are ERC-7201 namespaced and do
-        // not appear. The 4-slot `_seedingProgress` struct contributes one
-        // entry (the struct base), not four.
-        //
-        // Count entries by probing sequentially until parse fails.
-        uint256 count = _countStorageEntries(veHemiJson, 64);
-        assertEq(count, 26, "VeHemi.json must have exactly 26 storage entries");
+    /// @dev VeHemi has exactly 29 storage entries: the 26 V1 + V2 entries,
+    ///      unchanged, followed by three V3 entries appended after `__gapV2`.
+    ///
+    ///        0..25  V1 + V2, unchanged, `__gapV2` = uint256[37] at slot 27
+    ///        26     autoRelockRemaining      slot 64   (27 + 37, exactly)
+    ///        27     autoRelockRefreshedAt    slot 65
+    ///        28     __gapV3 = uint256[48]    slot 66
+    function test_VeHemi_V3SlotsAreAppendOnly() public {
+        uint256 count = _countStorageEntries(veHemiJson, ".storage", 64);
+        assertEq(count, 29, "VeHemi.json must have exactly 29 storage entries (26 V1+V2 + 3 V3)");
+        // The compiled contract must have the same 29 entries.
+        assertEq(
+            _countStorageEntries(veHemiArtifact, ".storageLayout.storage", 64),
+            29,
+            "the COMPILED VeHemi has a different number of storage entries than 29 - src/ added or removed a field"
+        );
+
+        // Anchor the boundary to the fixture, not to a bare constant.
+        _assertVeHemiEntry(25, "27", "__gapV2");
+        assertEq(
+            vm.parseJsonString(veHemiJson, ".storage[25].type"),
+            "t_array(t_uint256)37_storage",
+            "__gapV2 is no longer uint256[37] - the V3 base slot 64 is not 27+37 any more"
+        );
+
+        // Every V3 entry lies strictly past __gapV2's extent.
+        for (uint256 i = 26; i < count; ++i) {
+            uint256 slot = vm.parseUint(
+                vm.parseJsonString(veHemiJson, string.concat(".storage[", vm.toString(i), "].slot"))
+            );
+            assertGe(
+                slot, 27 + 37,
+                string.concat("V3 entry ", vm.toString(i), " overlaps live V2 storage")
+            );
+        }
     }
 
-    /// @dev External wrapper so we can try/catch the parseJson call.
-    function probeStorageEntry(string calldata json, uint256 i) external view returns (string memory) {
-        return vm.parseJsonString(json, string.concat(".storage[", vm.toString(i), "].slot"));
+    /// @dev Pin the V3 block itself: its three entries by index, slot and
+    ///      label (fixture and compiled), and `__gapV3` as `uint256[48]` at
+    ///      slot 66, so V3 ends at slot 113. The onchain anchor compares types
+    ///      only for the deployed entries 0-25, and Layer A of
+    ///      `StorageLayoutMirrorParity.t.sol` compares the mirror with the
+    ///      fixture, so a change made consistently to `VeHemiStorageV3` and
+    ///      `VeHemiLayout` (say `uint256[48] __gapV3` -> `[47]`) passes both
+    ///      once the fixture is regenerated; it fails here.
+    function test_VeHemi_V3BlockEndsAtSlot113() public view {
+        _assertVeHemiEntry(26, "64", "autoRelockRemaining");
+        _assertVeHemiEntry(27, "65", "autoRelockRefreshedAt");
+        _assertVeHemiEntry(28, "66", "__gapV3");
+
+        string memory gapType = vm.parseJsonString(veHemiJson, ".storage[28].type");
+        assertEq(gapType, "t_array(t_uint256)48_storage", "__gapV3 must be uint256[48]");
+        assertEq(
+            vm.parseJsonString(veHemiArtifact, ".storageLayout.storage[28].type"),
+            "t_array(t_uint256)48_storage",
+            "COMPILED __gapV3 is no longer uint256[48] - src/ resized V3's reserved block"
+        );
+        string memory gapPath = string.concat(".types.[\"", gapType, "\"]");
+        assertEq(vm.parseJsonString(veHemiJson, string.concat(gapPath, ".label")), "uint256[48]", "__gapV3 type label");
+        assertEq(vm.parseJsonString(veHemiJson, string.concat(gapPath, ".base")), "t_uint256", "__gapV3 element type must be uint256");
+        string memory gapBytes = vm.parseJsonString(veHemiJson, string.concat(gapPath, ".numberOfBytes"));
+        assertEq(gapBytes, "1536", "__gapV3 numberOfBytes (48 * 32 = 1536)");
+
+        // The last V3 word, derived from the fixture: gap base + gap words - 1.
+        uint256 lastSlot = vm.parseUint(vm.parseJsonString(veHemiJson, ".storage[28].slot"))
+            + vm.parseUint(gapBytes) / 32 - 1;
+        assertEq(lastSlot, 113, "V3 no longer ends at slot 113");
+    }
+
+    /// @dev External wrapper so we can try/catch the parseJson call. `base` is
+    ///      `.storage` for a fixture and `.storageLayout.storage` for an artifact.
+    function probeStorageEntry(string calldata json, string calldata base, uint256 i)
+        external
+        view
+        returns (string memory)
+    {
+        return vm.parseJsonString(json, string.concat(base, "[", vm.toString(i), "].slot"));
+    }
+
+    /// @dev Probe `.members[i].label` of a struct type, for member counting.
+    function probeStructMemberLabel(string calldata json, string calldata typePath, uint256 i)
+        external
+        view
+        returns (string memory)
+    {
+        return vm.parseJsonString(json, string.concat(typePath, ".members[", vm.toString(i), "].label"));
+    }
+
+    /// @dev Pin the exact member count of a fixture struct to a hardcoded
+    ///      number. A member appended into a struct's free padding moves no
+    ///      top-level entry, no existing member offset and not `numberOfBytes`,
+    ///      so in this file only a hardcoded count catches it once the fixture
+    ///      has been regenerated with `scripts/update-storage-layouts.sh`
+    ///      (test/StorageLayoutOnchainAnchor.t.sol also catches it for a struct
+    ///      the deployed layout already stores).
+    function _assertFixtureMemberCount(
+        string memory json,
+        string memory typeKey,
+        uint256 expected,
+        string memory name
+    ) internal {
+        string memory typePath = string.concat(".types.[\"", typeKey, "\"]");
+        uint256 n = type(uint256).max;
+        for (uint256 i; i <= expected + 8; ++i) {
+            try this.probeStructMemberLabel(json, typePath, i) {
+                // member i exists
+            } catch {
+                n = i;
+                break;
+            }
+        }
+        assertEq(
+            n,
+            expected,
+            string.concat(
+                name,
+                ": member COUNT changed. A member was added to or removed from this struct. "
+                "If it landed in free padding it moved neither numberOfBytes nor any existing "
+                "member offset, so no other assertion in this file sees it."
+            )
+        );
+    }
+
+    /// @dev Every struct this file pins, by exact member count.
+    function test_StructMemberCountsArePinned() public {
+        _assertFixtureMemberCount(veHemiJson, "t_struct(Point)_storage", 6, "Point");
+        _assertFixtureMemberCount(veHemiJson, "t_struct(UserPoint)_storage", 2, "UserPoint");
+        _assertFixtureMemberCount(veHemiJson, "t_struct(LockedBalance)_storage", 2, "LockedBalance");
+        _assertFixtureMemberCount(veHemiJson, "t_struct(LockedPoint)_storage", 4, "LockedPoint");
+        _assertFixtureMemberCount(veHemiJson, "t_struct(SeedingProgress)_storage", 6, "SeedingProgress");
+        _assertFixtureMemberCount(delegationJson, "t_struct(Delegation)_storage", 5, "Delegation");
+        _assertFixtureMemberCount(delegationJson, "t_struct(DelegateCheckpoint)_storage", 5, "DelegateCheckpoint");
+        _assertFixtureMemberCount(delegationJson, "t_struct(Expiration)_storage", 3, "Expiration");
     }
 
     /// @dev Count `.storage` entries by probing consecutive indices. Version-
     ///      independent of `parseJsonStringArray` wildcard support. `maxProbe`
     ///      caps the scan for safety — must exceed the expected count by at
     ///      least one to distinguish "exactly N" from "at least N".
-    function _countStorageEntries(string memory json, uint256 maxProbe) internal returns (uint256) {
+    function _countStorageEntries(string memory json, string memory base, uint256 maxProbe)
+        internal
+        returns (uint256)
+    {
         for (uint256 i; i < maxProbe; ++i) {
-            try this.probeStorageEntry(json, i) {
+            try this.probeStorageEntry(json, base, i) {
                 // entry i exists, continue
             } catch {
                 return i;
@@ -245,8 +426,13 @@ contract StorageLayoutGoldenTest is Test {
         // The adapter holds an `immutable` VeHemi reference in bytecode, no
         // storage. A regression that added a state variable would break the
         // "not a proxy" assumption in the deploy scripts.
-        uint256 count = _countStorageEntries(adapterJson, 8);
+        uint256 count = _countStorageEntries(adapterJson, ".storage", 8);
         assertEq(count, 0, "VeHemiAragonAdapter must have zero storage entries");
+        assertEq(
+            _countStorageEntries(adapterArtifact, ".storageLayout.storage", 8),
+            0,
+            "the COMPILED VeHemiAragonAdapter has storage - it is deployed as a plain contract, not a proxy"
+        );
     }
 
     // ─── VeHemi struct numberOfBytes pinning ────────────────────────────────
@@ -292,7 +478,7 @@ contract StorageLayoutGoldenTest is Test {
     ///      `finalizeSeeding` — corrupting the materialized LockedPoint
     ///      without any test failure surface. This pins the offsets and
     ///      types explicitly so a future reorder of declarations inside
-    ///      `struct SeedingProgress` (`VeHemiStorageV2.sol:103-110`) fails
+    ///      `struct SeedingProgress` (`VeHemiStorageV2.sol`) fails
     ///      this assertion at CI time rather than producing a silent
     ///      accounting bug post-seed. Parallel defense to
     ///      `test_VeHemi_LockedPointMemberLayout` below.
@@ -530,14 +716,29 @@ contract StorageLayoutGoldenTest is Test {
         assertEq(vm.parseJsonString(json, string.concat(idx, ".type")), typeStr, string.concat(label, ".type"));
     }
 
-    /// @dev VeHemiVoteDelegation has exactly 9 storage entries (6 V1+V2 named +
-    ///      V2 gap + V3 named `migrationFinalized` + V3 gap).
-    function test_VeHemiVoteDelegation_TotalSlotsExactly9() public {
-        uint256 count = _countStorageEntries(delegationJson, 16);
-        assertEq(count, 9, "VeHemiVoteDelegation must have exactly 9 storage entries");
+    /// @dev VeHemiVoteDelegation has exactly 12 storage entries (6 V1+V2 named +
+    ///      V2 gap + V3 named `migrationFinalized` + V3 gap + V4 named
+    ///      `delegationBookedAt` at slot 100 + V4 named `legacyDatingUntil` at
+    ///      slot 101 (uint64, offset 0) + V4 gap at slots 102-149). The V4
+    ///      entries are appended after V3's reserved range ends at slot 99.
+    function test_VeHemiVoteDelegation_TotalSlotsExactly12() public {
+        uint256 count = _countStorageEntries(delegationJson, ".storage", 16);
+        assertEq(count, 12, "VeHemiVoteDelegation must have exactly 12 storage entries");
+        assertEq(
+            _countStorageEntries(delegationArtifact, ".storageLayout.storage", 16),
+            12,
+            "the COMPILED VeHemiVoteDelegation has a different number of storage entries than 12"
+        );
         _assertDelegationEntry(6, "6", "__gapV2");
         _assertDelegationEntry(7, "50", "migrationFinalized");
         _assertDelegationEntry(8, "51", "__gapV3");
+        _assertDelegationEntry(9, "100", "delegationBookedAt");
+        // The upgrade-hour dating window word.
+        _assertDelegationEntry(10, "101", "legacyDatingUntil");
+        assertEq(vm.parseJsonString(delegationJson, ".storage[10].offset"), "0", "legacyDatingUntil offset");
+        assertEq(vm.parseJsonString(delegationJson, ".storage[10].type"), "t_uint64", "legacyDatingUntil type");
+        assertEq(vm.parseJsonString(delegationArtifact, ".storageLayout.storage[10].offset"), "0", "COMPILED legacyDatingUntil offset");
+        _assertDelegationEntry(11, "102", "__gapV4");
     }
 
     function _assertDelegationEntry(
@@ -551,6 +752,18 @@ contract StorageLayoutGoldenTest is Test {
         string memory gotLabel = vm.parseJsonString(delegationJson, labelKey);
         assertEq(gotSlot, expectedSlot, string.concat("delegation slot mismatch at ", vm.toString(i)));
         assertEq(gotLabel, expectedLabel, string.concat("delegation label mismatch at ", vm.toString(i)));
+
+        // The same expectation against the compiled artifact.
+        assertEq(
+            vm.parseJsonString(delegationArtifact, string.concat(".storageLayout.storage[", vm.toString(i), "].slot")),
+            expectedSlot,
+            string.concat("COMPILED delegation slot mismatch at ", vm.toString(i))
+        );
+        assertEq(
+            vm.parseJsonString(delegationArtifact, string.concat(".storageLayout.storage[", vm.toString(i), "].label")),
+            expectedLabel,
+            string.concat("COMPILED delegation label mismatch at ", vm.toString(i))
+        );
     }
 
     // ─── Forge-layer type pinning (NA-3) ────────────────────────────────────
@@ -581,6 +794,9 @@ contract StorageLayoutGoldenTest is Test {
         _assertVeHemiType(18, "t_bool"); // lockedSeedingFinalized — not a mapping, but pin the type.
         _assertVeHemiType(19, "t_mapping(t_uint256,t_int128)");
         _assertVeHemiType(20, "t_mapping(t_uint256,t_struct(LockedPoint)_storage)");
+        // V3 mappings (entry 28 is `__gapV3`, pinned in test_VeHemi_V3BlockEndsAtSlot113).
+        _assertVeHemiType(26, "t_mapping(t_uint256,t_uint64)");
+        _assertVeHemiType(27, "t_mapping(t_uint256,t_uint64)");
     }
 
     /// @dev Pin the exact type string for every delegation mapping + trustedAdapter.

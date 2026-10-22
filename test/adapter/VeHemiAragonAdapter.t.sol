@@ -231,11 +231,12 @@ contract VeHemiAragonAdapterTest is Test {
     function test_getPastTotalSupply_forwardsCorrectly() public {
         _createLock(ALICE, 11e18, YEAR);
 
-        uint256 ts = block.timestamp;
-        vm.warp(ts + 1);
+        // getPastTotalSupply(T) reads the supply at T - 1: read one Hemi block (12 s) later.
+        vm.warp(block.timestamp + 12);
+        uint256 snapshot = block.timestamp - 1;
 
-        assertEq(adapter.getPastTotalSupply(ts), delegation.getPastTotalSupply(ts));
-        assertGt(adapter.getPastTotalSupply(ts), 0);
+        assertEq(adapter.getPastTotalSupply(snapshot), delegation.getPastTotalSupply(snapshot));
+        assertGt(adapter.getPastTotalSupply(snapshot), 0);
     }
 
     function test_getPastTotalSupply_zeroBeforeAnyLocks() public view {
@@ -246,12 +247,13 @@ contract VeHemiAragonAdapterTest is Test {
         _createLock(ALICE, 10e18, YEAR);
         _createLock(BOB, 20e18, 2 * YEAR);
 
-        uint256 ts = block.timestamp;
-        vm.warp(ts + 1);
+        // getPastTotalSupply(T) reads the supply at T - 1: read one Hemi block (12 s) later.
+        vm.warp(block.timestamp + 12);
+        uint256 snapshot = block.timestamp - 1;
 
-        uint256 totalSupply = adapter.getPastTotalSupply(ts);
+        uint256 totalSupply = adapter.getPastTotalSupply(snapshot);
         assertGt(totalSupply, 0);
-        assertEq(totalSupply, delegation.getPastTotalSupply(ts));
+        assertEq(totalSupply, delegation.getPastTotalSupply(snapshot));
     }
 
     // ─── clock / CLOCK_MODE ─────────────────────────────────────────────
@@ -872,33 +874,36 @@ contract VeHemiAragonAdapterTest is Test {
         assertGt(powerLater, 0, "voting power should not be zero yet");
     }
 
-    // ─── Hourly checkpoint boundary precision ───────────────────────────
+    // ─── Delegation checkpoint timing ───────────────────────────────────
 
-    function test_hourlyCheckpointBoundaryPrecision() public {
+    /// A delegation is not live in the block that makes it (no same-block
+    /// flash-delegation) and is live from `block.timestamp + 1` on.
+    function test_delegationCheckpoint_noSameBlockFlash_liveAtTPlusOne() public {
         // 1. Create a lock for ALICE
         _createLock(ALICE, 10e18, 2 * YEAR);
 
-        // 2. Delegate ALICE's token to BOB via the adapter
+        // 2. Move strictly inside an hour so t+1 and the next boundary are far apart
+        uint256 nextEpoch = ((block.timestamp / CHECKPOINT_INTERVAL) * CHECKPOINT_INTERVAL) + CHECKPOINT_INTERVAL;
+        vm.warp(nextEpoch - 1800);
+        uint256 tDelegate = block.timestamp;
+
+        // 3. Delegate ALICE's token to BOB via the adapter
         vm.prank(ALICE);
         adapter.delegate(BOB);
 
-        // 3. Compute the next epoch boundary
-        uint256 nextEpoch = ((block.timestamp / CHECKPOINT_INTERVAL) * CHECKPOINT_INTERVAL) + CHECKPOINT_INTERVAL;
+        // 4. Not live in the delegating block
+        assertEq(adapter.getVotes(BOB), 0, "getVotes must be 0 in the delegating block");
+        assertEq(adapter.getPastVotes(BOB, tDelegate), 0, "getPastVotes must be 0 at the delegating instant");
 
-        // 4. Warp to one second before the boundary
+        // 5. Live one second later, well before the hour boundary
+        vm.warp(tDelegate + 1);
+        assertGt(adapter.getVotes(BOB), 0, "getVotes must be > 0 at t+1");
         vm.warp(nextEpoch - 1);
+        assertGt(adapter.getVotes(BOB), 0, "getVotes must be > 0 one second before epoch boundary");
 
-        // 5. Delegation not yet active: checkpoint timestamp (nextEpoch) > query timestamp (nextEpoch - 1)
-        assertEq(adapter.getVotes(BOB), 0, "getVotes must be 0 one second before epoch boundary");
-        // 6. getPastVotes also returns 0 before the boundary
-        assertEq(adapter.getPastVotes(BOB, block.timestamp), 0, "getPastVotes must be 0 one second before epoch boundary");
-
-        // 7. Warp to exactly the epoch boundary
+        // 6. Still live at the boundary
         vm.warp(nextEpoch);
-
-        // 8. Delegation now active: checkpoint timestamp (nextEpoch) == query timestamp (nextEpoch)
         assertGt(adapter.getVotes(BOB), 0, "getVotes must be > 0 at epoch boundary");
-        // 9. getPastVotes also returns > 0 at the boundary
         assertGt(adapter.getPastVotes(BOB, block.timestamp), 0, "getPastVotes must be > 0 at epoch boundary");
     }
 
@@ -979,8 +984,8 @@ contract VeHemiAragonAdapterTest is Test {
         _createLock(ALICE, 10e18, YEAR);
         _createLock(BOB, 20e18, 2 * YEAR);
 
-        // Advance time so we have a valid past timestamp
-        vm.warp(block.timestamp + 1);
+        // Advance one Hemi block (12 s) so the T - 1 read lands after the locks exist
+        vm.warp(block.timestamp + 12);
 
         // Simulate Aragon's snapshot pattern: block.timestamp - 1
         uint256 snapshot = block.timestamp - 1;

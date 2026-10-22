@@ -1,0 +1,14 @@
+# EIP-170 gate coverage manifest: every contract compiled from src/ with
+# runtime code. Not all of them are deployed: VeHemiLayoutProbe is a
+# compile-only probe for scripts/check-library-layout-mirror.sh, and
+# VeHemiLayoutLib and VeHemiTime are internal-only libraries.
+# Regenerate: scripts/check-eip170.sh --update-manifest
+src/VeHemi.sol:VeHemi
+src/VeHemiVoteDelegation.sol:VeHemiVoteDelegation
+src/adapter/VeHemiAragonAdapter.sol:VeHemiAragonAdapter
+src/lib/VeHemiCurveLib.sol:VeHemiCurveLib
+src/lib/VeHemiLayout.sol:VeHemiLayoutLib
+src/lib/VeHemiLayoutProbe.sol:VeHemiLayoutProbe
+src/lib/VeHemiSupplyLib.sol:VeHemiSupplyLib
+src/lib/VeHemiTime.sol:VeHemiTime
+src/utils/PositionFactory.sol:PositionFactory

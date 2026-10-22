@@ -84,6 +84,13 @@ contract ForkUpgradeVoteDelegationTest is Test {
     }
 
     function setUp() public {
+        // Skip cleanly when no Hemi RPC is configured (the `hemi` alias is empty).
+        string memory rpcUrl = vm.envOr("HEMI_RPC_URL", string(""));
+        if (bytes(rpcUrl).length == 0) {
+            vm.skip(true);
+            return;
+        }
+
         // Optional block pin: if HEMI_FORK_BLOCK is set in env, fork `hemi`
         // at that block (see foundry.toml [rpc_endpoints]). This gives
         // reproducible results and lets Foundry's RPC cache absorb repeated

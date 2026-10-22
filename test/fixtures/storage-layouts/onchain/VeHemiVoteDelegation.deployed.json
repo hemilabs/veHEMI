@@ -1,0 +1,334 @@
+{
+  "storage": [
+    {
+      "contract": "src/VeHemiVoteDelegation.sol:VeHemiVoteDelegation",
+      "label": "delegations",
+      "offset": 0,
+      "slot": "0",
+      "type": "t_mapping(t_uint256,t_struct(Delegation)_storage)"
+    },
+    {
+      "contract": "src/VeHemiVoteDelegation.sol:VeHemiVoteDelegation",
+      "label": "delegateCheckpoints",
+      "offset": 0,
+      "slot": "1",
+      "type": "t_mapping(t_address,t_array(t_struct(DelegateCheckpoint)_storage)dyn_storage)"
+    },
+    {
+      "contract": "src/VeHemiVoteDelegation.sol:VeHemiVoteDelegation",
+      "label": "expiredDelegations",
+      "offset": 0,
+      "slot": "2",
+      "type": "t_mapping(t_address,t_mapping(t_uint256,t_struct(Expiration)_storage))"
+    },
+    {
+      "contract": "src/VeHemiVoteDelegation.sol:VeHemiVoteDelegation",
+      "label": "nonces",
+      "offset": 0,
+      "slot": "3",
+      "type": "t_mapping(t_address,t_uint256)"
+    },
+    {
+      "contract": "src/VeHemiVoteDelegation.sol:VeHemiVoteDelegation",
+      "label": "autoDelegate",
+      "offset": 0,
+      "slot": "4",
+      "type": "t_mapping(t_address,t_address)"
+    },
+    {
+      "contract": "src/VeHemiVoteDelegation.sol:VeHemiVoteDelegation",
+      "label": "trustedAdapter",
+      "offset": 0,
+      "slot": "5",
+      "type": "t_address"
+    },
+    {
+      "contract": "src/VeHemiVoteDelegation.sol:VeHemiVoteDelegation",
+      "label": "__gapV2",
+      "offset": 0,
+      "slot": "6",
+      "type": "t_array(t_uint256)44_storage"
+    },
+    {
+      "contract": "src/VeHemiVoteDelegation.sol:VeHemiVoteDelegation",
+      "label": "migrationFinalized",
+      "offset": 0,
+      "slot": "50",
+      "type": "t_bool"
+    },
+    {
+      "contract": "src/VeHemiVoteDelegation.sol:VeHemiVoteDelegation",
+      "label": "__gapV3",
+      "offset": 0,
+      "slot": "51",
+      "type": "t_array(t_uint256)49_storage"
+    }
+  ],
+  "types": {
+    "t_address": {
+      "base": null,
+      "encoding": "inplace",
+      "key": null,
+      "label": "address",
+      "members": null,
+      "numberOfBytes": "20",
+      "value": null
+    },
+    "t_array(t_struct(DelegateCheckpoint)_storage)dyn_storage": {
+      "base": "t_struct(DelegateCheckpoint)_storage",
+      "encoding": "dynamic_array",
+      "key": null,
+      "label": "struct IVeHemiVoteDelegation.DelegateCheckpoint[]",
+      "members": null,
+      "numberOfBytes": "32",
+      "value": null
+    },
+    "t_array(t_uint256)44_storage": {
+      "base": "t_uint256",
+      "encoding": "inplace",
+      "key": null,
+      "label": "uint256[44]",
+      "members": null,
+      "numberOfBytes": "1408",
+      "value": null
+    },
+    "t_array(t_uint256)49_storage": {
+      "base": "t_uint256",
+      "encoding": "inplace",
+      "key": null,
+      "label": "uint256[49]",
+      "members": null,
+      "numberOfBytes": "1568",
+      "value": null
+    },
+    "t_bool": {
+      "base": null,
+      "encoding": "inplace",
+      "key": null,
+      "label": "bool",
+      "members": null,
+      "numberOfBytes": "1",
+      "value": null
+    },
+    "t_mapping(t_address,t_address)": {
+      "base": null,
+      "encoding": "mapping",
+      "key": "t_address",
+      "label": "mapping(address => address)",
+      "members": null,
+      "numberOfBytes": "32",
+      "value": "t_address"
+    },
+    "t_mapping(t_address,t_array(t_struct(DelegateCheckpoint)_storage)dyn_storage)": {
+      "base": null,
+      "encoding": "mapping",
+      "key": "t_address",
+      "label": "mapping(address => struct IVeHemiVoteDelegation.DelegateCheckpoint[])",
+      "members": null,
+      "numberOfBytes": "32",
+      "value": "t_array(t_struct(DelegateCheckpoint)_storage)dyn_storage"
+    },
+    "t_mapping(t_address,t_mapping(t_uint256,t_struct(Expiration)_storage))": {
+      "base": null,
+      "encoding": "mapping",
+      "key": "t_address",
+      "label": "mapping(address => mapping(uint256 => struct IVeHemiVoteDelegation.Expiration))",
+      "members": null,
+      "numberOfBytes": "32",
+      "value": "t_mapping(t_uint256,t_struct(Expiration)_storage)"
+    },
+    "t_mapping(t_address,t_uint256)": {
+      "base": null,
+      "encoding": "mapping",
+      "key": "t_address",
+      "label": "mapping(address => uint256)",
+      "members": null,
+      "numberOfBytes": "32",
+      "value": "t_uint256"
+    },
+    "t_mapping(t_uint256,t_struct(Delegation)_storage)": {
+      "base": null,
+      "encoding": "mapping",
+      "key": "t_uint256",
+      "label": "mapping(uint256 => struct IVeHemiVoteDelegation.Delegation)",
+      "members": null,
+      "numberOfBytes": "32",
+      "value": "t_struct(Delegation)_storage"
+    },
+    "t_mapping(t_uint256,t_struct(Expiration)_storage)": {
+      "base": null,
+      "encoding": "mapping",
+      "key": "t_uint256",
+      "label": "mapping(uint256 => struct IVeHemiVoteDelegation.Expiration)",
+      "members": null,
+      "numberOfBytes": "32",
+      "value": "t_struct(Expiration)_storage"
+    },
+    "t_struct(DelegateCheckpoint)_storage": {
+      "base": null,
+      "encoding": "inplace",
+      "key": null,
+      "label": "struct IVeHemiVoteDelegation.DelegateCheckpoint",
+      "members": [
+        {
+          "contract": "src/VeHemiVoteDelegation.sol:VeHemiVoteDelegation",
+          "label": "normalizedBias",
+          "offset": 0,
+          "slot": "0",
+          "type": "t_uint128"
+        },
+        {
+          "contract": "src/VeHemiVoteDelegation.sol:VeHemiVoteDelegation",
+          "label": "fixedBias",
+          "offset": 16,
+          "slot": "0",
+          "type": "t_uint128"
+        },
+        {
+          "contract": "src/VeHemiVoteDelegation.sol:VeHemiVoteDelegation",
+          "label": "totalAmount",
+          "offset": 0,
+          "slot": "1",
+          "type": "t_uint128"
+        },
+        {
+          "contract": "src/VeHemiVoteDelegation.sol:VeHemiVoteDelegation",
+          "label": "normalizedSlope",
+          "offset": 16,
+          "slot": "1",
+          "type": "t_uint64"
+        },
+        {
+          "contract": "src/VeHemiVoteDelegation.sol:VeHemiVoteDelegation",
+          "label": "timestamp",
+          "offset": 24,
+          "slot": "1",
+          "type": "t_uint64"
+        }
+      ],
+      "numberOfBytes": "64",
+      "value": null
+    },
+    "t_struct(Delegation)_storage": {
+      "base": null,
+      "encoding": "inplace",
+      "key": null,
+      "label": "struct IVeHemiVoteDelegation.Delegation",
+      "members": [
+        {
+          "contract": "src/VeHemiVoteDelegation.sol:VeHemiVoteDelegation",
+          "label": "delegatee",
+          "offset": 0,
+          "slot": "0",
+          "type": "t_address"
+        },
+        {
+          "contract": "src/VeHemiVoteDelegation.sol:VeHemiVoteDelegation",
+          "label": "end",
+          "offset": 20,
+          "slot": "0",
+          "type": "t_uint48"
+        },
+        {
+          "contract": "src/VeHemiVoteDelegation.sol:VeHemiVoteDelegation",
+          "label": "bias",
+          "offset": 0,
+          "slot": "1",
+          "type": "t_uint96"
+        },
+        {
+          "contract": "src/VeHemiVoteDelegation.sol:VeHemiVoteDelegation",
+          "label": "amount",
+          "offset": 12,
+          "slot": "1",
+          "type": "t_uint96"
+        },
+        {
+          "contract": "src/VeHemiVoteDelegation.sol:VeHemiVoteDelegation",
+          "label": "slope",
+          "offset": 24,
+          "slot": "1",
+          "type": "t_uint64"
+        }
+      ],
+      "numberOfBytes": "64",
+      "value": null
+    },
+    "t_struct(Expiration)_storage": {
+      "base": null,
+      "encoding": "inplace",
+      "key": null,
+      "label": "struct IVeHemiVoteDelegation.Expiration",
+      "members": [
+        {
+          "contract": "src/VeHemiVoteDelegation.sol:VeHemiVoteDelegation",
+          "label": "bias",
+          "offset": 0,
+          "slot": "0",
+          "type": "t_uint96"
+        },
+        {
+          "contract": "src/VeHemiVoteDelegation.sol:VeHemiVoteDelegation",
+          "label": "amount",
+          "offset": 12,
+          "slot": "0",
+          "type": "t_uint96"
+        },
+        {
+          "contract": "src/VeHemiVoteDelegation.sol:VeHemiVoteDelegation",
+          "label": "slope",
+          "offset": 24,
+          "slot": "0",
+          "type": "t_uint64"
+        }
+      ],
+      "numberOfBytes": "32",
+      "value": null
+    },
+    "t_uint128": {
+      "base": null,
+      "encoding": "inplace",
+      "key": null,
+      "label": "uint128",
+      "members": null,
+      "numberOfBytes": "16",
+      "value": null
+    },
+    "t_uint256": {
+      "base": null,
+      "encoding": "inplace",
+      "key": null,
+      "label": "uint256",
+      "members": null,
+      "numberOfBytes": "32",
+      "value": null
+    },
+    "t_uint48": {
+      "base": null,
+      "encoding": "inplace",
+      "key": null,
+      "label": "uint48",
+      "members": null,
+      "numberOfBytes": "6",
+      "value": null
+    },
+    "t_uint64": {
+      "base": null,
+      "encoding": "inplace",
+      "key": null,
+      "label": "uint64",
+      "members": null,
+      "numberOfBytes": "8",
+      "value": null
+    },
+    "t_uint96": {
+      "base": null,
+      "encoding": "inplace",
+      "key": null,
+      "label": "uint96",
+      "members": null,
+      "numberOfBytes": "12",
+      "value": null
+    }
+  }
+}

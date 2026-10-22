@@ -1,0 +1,74 @@
+{
+  "_comment": "Written ONLY by a passing scripts/check-eip170.sh. test/d12/EIP170Gate.t.sol recomputes `digest` from out/ and fails on any drift.",
+  "contractCount": 9,
+  "contracts": {
+    "src/VeHemi.sol:VeHemi": {
+      "artifact": "out/VeHemi.sol/VeHemi.json",
+      "id": "src/VeHemi.sol:VeHemi",
+      "initcodeSize": 21857,
+      "runtimeSha256": "6c105893e2a746af46a738ccd14d6f75e0caaede863cf4a8609e2597c75092e9",
+      "runtimeSize": 21297
+    },
+    "src/VeHemiVoteDelegation.sol:VeHemiVoteDelegation": {
+      "artifact": "out/VeHemiVoteDelegation.sol/VeHemiVoteDelegation.json",
+      "id": "src/VeHemiVoteDelegation.sol:VeHemiVoteDelegation",
+      "initcodeSize": 21308,
+      "runtimeSha256": "a87fc1e2e335eb7ee9667b10cab2d954e230d56327068b52d5c78941dc78b9e8",
+      "runtimeSize": 20783
+    },
+    "src/adapter/VeHemiAragonAdapter.sol:VeHemiAragonAdapter": {
+      "artifact": "out/VeHemiAragonAdapter.sol/VeHemiAragonAdapter.json",
+      "id": "src/adapter/VeHemiAragonAdapter.sol:VeHemiAragonAdapter",
+      "initcodeSize": 6048,
+      "runtimeSha256": "d0949db3fc505f9caeb67b4ca3c043879ae024c93a359bad87d1885ad5c0c6cf",
+      "runtimeSize": 5767
+    },
+    "src/lib/VeHemiCurveLib.sol:VeHemiCurveLib": {
+      "artifact": "out/VeHemiCurveLib.sol/VeHemiCurveLib.json",
+      "id": "src/lib/VeHemiCurveLib.sol:VeHemiCurveLib",
+      "initcodeSize": 6749,
+      "runtimeSha256": "91fe71d894266cf1bd180366e10be0b3b79b000576198d465def430a62b42686",
+      "runtimeSize": 6697
+    },
+    "src/lib/VeHemiLayout.sol:VeHemiLayoutLib": {
+      "artifact": "out/VeHemiLayout.sol/VeHemiLayoutLib.json",
+      "id": "src/lib/VeHemiLayout.sol:VeHemiLayoutLib",
+      "initcodeSize": 135,
+      "runtimeSha256": "0c800c09e4c138d4c6c1a77de94f3905377e975ec918b76d78e50cc1e9b4182f",
+      "runtimeSize": 85
+    },
+    "src/lib/VeHemiLayoutProbe.sol:VeHemiLayoutProbe": {
+      "artifact": "out/VeHemiLayoutProbe.sol/VeHemiLayoutProbe.json",
+      "id": "src/lib/VeHemiLayoutProbe.sol:VeHemiLayoutProbe",
+      "initcodeSize": 88,
+      "runtimeSha256": "7134e175434928ea729863e11f50c66b847e94ecb5ae01da48e40ae01e79da74",
+      "runtimeSize": 62
+    },
+    "src/lib/VeHemiSupplyLib.sol:VeHemiSupplyLib": {
+      "artifact": "out/VeHemiSupplyLib.sol/VeHemiSupplyLib.json",
+      "id": "src/lib/VeHemiSupplyLib.sol:VeHemiSupplyLib",
+      "initcodeSize": 3174,
+      "runtimeSha256": "e10e5f218ae8f9eb94a8c2936c7642307fb19167df1125d1bd4b292d9da8e06e",
+      "runtimeSize": 3122
+    },
+    "src/lib/VeHemiTime.sol:VeHemiTime": {
+      "artifact": "out/VeHemiTime.sol/VeHemiTime.json",
+      "id": "src/lib/VeHemiTime.sol:VeHemiTime",
+      "initcodeSize": 135,
+      "runtimeSha256": "0427dadda748d7b8bc603b995a685cfdaf7c2b0ce3010fc0b73aefa67ae2dfbe",
+      "runtimeSize": 85
+    },
+    "src/utils/PositionFactory.sol:PositionFactory": {
+      "artifact": "out/PositionFactory.sol/PositionFactory.json",
+      "id": "src/utils/PositionFactory.sol:PositionFactory",
+      "initcodeSize": 3822,
+      "runtimeSha256": "d0f0cfb09265a56bc66bb29a9cc27531e9b5ef2af829a541e6f662b405084576",
+      "runtimeSize": 3272
+    }
+  },
+  "digest": "0x96cf565507deabcb709e2769a580c878ce6ab5e8754730d3fd195520711d2293",
+  "generatedAt": 1792663874,
+  "initcodeLimit": 49152,
+  "limit": 24576,
+  "srcTreeSha256": "0x5f67b41e3712c92668127d4f93a7d3e62b9b0ee5f8d444a1ba6a0273019644c8"
+}

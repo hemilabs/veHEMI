@@ -9,8 +9,8 @@ import {VeHemiStorageV1} from "./VeHemiStorageV1.sol";
  *         and forfeitable subcurves).
  *
  * @dev Inherits VeHemiStorageV1 to enforce the V1-before-V2 slot ordering at the
- *      inheritance level. VeHemi inherits only VeHemiStorageV2, which transitively
- *      includes V1. This is the standard upgradeable-storage chain pattern used by
+ *      inheritance level. VeHemi inherits the most-derived link, VeHemiStorageV3, which
+ *      transitively includes V2 and V1. This is the standard upgradeable-storage chain pattern used by
  *      OpenZeppelin, Aave, Synthetix, Pendle, and Compound — it removes the risk of
  *      a future edit to VeHemi's base list accidentally reordering V1 and V2.
  *
@@ -22,15 +22,24 @@ import {VeHemiStorageV1} from "./VeHemiStorageV1.sol";
  *        - `lockedSeedingFinalized` gates all locked-curve logic in `_checkpoint`.
  *          Before finalization, `_checkpoint` skips locked tracking entirely.
  *        - Slots 0-1 (V2-relative) are intra-V2 emergency reserves
- *          (`__reservedSlot0/1`). NOTE: the v75 delegation plan chose Path B
- *          for V3 storage — V3 fields (`restakeManager`, `pendingRestakeManager`,
- *          `pendingForfeitAdmin`, etc.) will land at absolute slot 64+ via a
- *          new `abstract contract VeHemiStorageV3` extending this contract,
- *          NOT by repurposing slots 14/15. These reserved slots remain as
- *          defensive zero-padding for any unforeseen mid-V2 extension that
- *          must precede the subcurve mappings. Do not allocate them lightly.
- *        - A storage gap (`__gapV2`) is reserved for V3-style append-only
- *          extensions that consume the gap rather than the reserved slots.
+ *          (`__reservedSlot0/1`). V3 fields land at absolute slot 64 and
+ *          above via `abstract contract VeHemiStorageV3 is VeHemiStorageV2`,
+ *          NOT by repurposing slots 14/15. V3 occupies absolute slots 64-113
+ *          (two mappings at 64-65, `__gapV3` at 66-113), so further fields
+ *          (`restakeManager`, `pendingRestakeManager`, `pendingForfeitAdmin`,
+ *          ...) go into a V4 starting at absolute slot 114. Shrinking
+ *          `__gapV3` to append inside V3's block is safe on chain while those
+ *          words are unwritten, but once this layout is live and re-anchored,
+ *          `test/StorageLayoutOnchainAnchor.t.sol`, which compares every
+ *          deployed entry by index, label, slot, offset and type, refuses it
+ *          until amended. These V2 reserved slots remain as defensive
+ *          zero-padding for any unforeseen mid-V2 extension that must precede
+ *          the subcurve mappings; allocating one renames it, which that test
+ *          also refuses until amended. Do not allocate them lightly.
+ *        - A storage gap (`__gapV2`, slots 27-63) pads V2 to 50 slots. V3
+ *          starts after it, at slot 64, and does not consume it; shrinking it
+ *          changes a deployed entry, which
+ *          `test/StorageLayoutOnchainAnchor.t.sol` refuses.
  */
 abstract contract VeHemiStorageV2 is VeHemiStorageV1 {
     /// @dev Reserved slot for future extensions (preserves storage layout).
@@ -99,7 +108,7 @@ abstract contract VeHemiStorageV2 is VeHemiStorageV1 {
     ///         struct packs `lastProcessedId` (1 slot) + two int128 pairs
     ///         (2 slots) + `count` (1 slot) = 4 slots total. Cleared
     ///         (`delete`) during `finalizeSeeding` after the aggregate
-    ///         `SupplyPoint`s are written.
+    ///         `LockedPoint`s are written.
     struct SeedingProgress {
         uint256 lastProcessedId;
         int128 totalSlope;

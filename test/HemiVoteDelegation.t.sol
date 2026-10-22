@@ -91,16 +91,16 @@ contract TestVeHemiVoteDelegation is Test {
         hemiToken.approve(address(veHemi), amount);
 
         uint256 tokenId = 1;
-        uint256 expectedVotes = 99941535477891810000; // 99.94e18 (evaluated at next hour boundary)
+        uint256 expectedVotes = 99944386613592874650; // 99.94e18 (evaluated at block.timestamp + 1)
 
         //
         // Emit events when creating lock
         //
         vm.expectEmit();
-        emit IVeHemiVoteDelegation.DelegateVotesChanged(user1, 0, expectedVotes);
+        emit IVeHemiVoteDelegation.DelegateChanged(tokenId, address(0), user1);
 
         vm.expectEmit();
-        emit IVeHemiVoteDelegation.DelegateChanged(tokenId, address(0), user1);
+        emit IVeHemiVoteDelegation.DelegateVotesChanged(user1, 0, expectedVotes);
 
         vm.prank(user1);
         veHemi.createLock(amount, MAX_TIME);
@@ -109,13 +109,13 @@ contract TestVeHemiVoteDelegation is Test {
         // Emit events when delegating
         //
         vm.expectEmit();
+        emit IVeHemiVoteDelegation.DelegateChanged(tokenId, user1, user2);
+
+        vm.expectEmit();
         emit IVeHemiVoteDelegation.DelegateVotesChanged(user1, expectedVotes, 0);
 
         vm.expectEmit();
         emit IVeHemiVoteDelegation.DelegateVotesChanged(user2, 0, expectedVotes);
-
-        vm.expectEmit();
-        emit IVeHemiVoteDelegation.DelegateChanged(tokenId, user1, user2);
 
         vm.prank(user1);
         hemiVoteDelegation.delegate(tokenId, user2);
@@ -289,9 +289,9 @@ contract TestVeHemiVoteDelegation is Test {
 
         uint256 billVoteBefore = hemiVoteDelegation.getVotes(BILL);
 
-        // more amount added to Bill's lock by someone else
-        hemiToken.mint(ALICE, LOCK_AMOUNT);
-        vm.startPrank(ALICE);
+        // more amount added to Bill's lock by Bill (increaseAmount is owner-only)
+        hemiToken.mint(BILL, LOCK_AMOUNT);
+        vm.startPrank(BILL);
         hemiToken.approve(address(veHemi), LOCK_AMOUNT);
         veHemi.increaseAmount(billTokenId, LOCK_AMOUNT);
         vm.stopPrank();

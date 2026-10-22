@@ -181,6 +181,27 @@
       "offset": 0,
       "slot": "27",
       "type": "t_array(t_uint256)37_storage"
+    },
+    {
+      "contract": "src/VeHemi.sol:VeHemi",
+      "label": "autoRelockRemaining",
+      "offset": 0,
+      "slot": "64",
+      "type": "t_mapping(t_uint256,t_uint64)"
+    },
+    {
+      "contract": "src/VeHemi.sol:VeHemi",
+      "label": "autoRelockRefreshedAt",
+      "offset": 0,
+      "slot": "65",
+      "type": "t_mapping(t_uint256,t_uint64)"
+    },
+    {
+      "contract": "src/VeHemi.sol:VeHemi",
+      "label": "__gapV3",
+      "offset": 0,
+      "slot": "66",
+      "type": "t_array(t_uint256)48_storage"
     }
   ],
   "types": {
@@ -209,6 +230,15 @@
       "label": "uint256[37]",
       "members": null,
       "numberOfBytes": "1184",
+      "value": null
+    },
+    "t_array(t_uint256)48_storage": {
+      "base": "t_uint256",
+      "encoding": "inplace",
+      "key": null,
+      "label": "uint256[48]",
+      "members": null,
+      "numberOfBytes": "1536",
       "value": null
     },
     "t_bool": {
@@ -318,6 +348,15 @@
       "members": null,
       "numberOfBytes": "32",
       "value": "t_uint256"
+    },
+    "t_mapping(t_uint256,t_uint64)": {
+      "base": null,
+      "encoding": "mapping",
+      "key": "t_uint256",
+      "label": "mapping(uint256 => uint64)",
+      "members": null,
+      "numberOfBytes": "32",
+      "value": "t_uint64"
     },
     "t_struct(LockedBalance)_storage": {
       "base": null,

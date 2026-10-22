@@ -70,8 +70,31 @@ async function main() {
     const privateKey = process.env.PRIVATE_KEY;
     if (!privateKey) throw new Error("PRIVATE_KEY env var required");
 
-    const batchSize = BigInt(process.env.SEED_BATCH_SIZE ?? "1000");
-    const maxLoops = Number(process.env.MAX_LOOPS ?? "200");
+    // `??` fires only on null/undefined, so an empty value (`SEED_BATCH_SIZE=` in
+    // a .env file) passes it, and `BigInt("")` is `0n`: `seedBatch(0)` advances no
+    // cursor, so the loop would broadcast MAX_LOOPS gas-burning no-ops. Treat
+    // empty/whitespace as unset, and reject a non-positive batch size.
+    const rawBatchSize = process.env.SEED_BATCH_SIZE?.trim() || "1000";
+    let batchSize: bigint;
+    try {
+        batchSize = BigInt(rawBatchSize);
+    } catch {
+        throw new Error(`SEED_BATCH_SIZE must be a positive integer; got "${rawBatchSize}".`);
+    }
+    if (batchSize <= 0n) {
+        throw new Error(
+            `SEED_BATCH_SIZE must be > 0; got "${rawBatchSize}". ` +
+            "seedBatch(0) advances no cursor and would burn the whole loop budget on no-ops."
+        );
+    }
+
+    // Same for MAX_LOOPS: `Number("")` is 0, which skips the loop and then
+    // reports "Loop budget exhausted" after zero attempts.
+    const rawMaxLoops = process.env.MAX_LOOPS?.trim() || "200";
+    const maxLoops = Number(rawMaxLoops);
+    if (!Number.isInteger(maxLoops) || maxLoops <= 0) {
+        throw new Error(`MAX_LOOPS must be a positive integer; got "${rawMaxLoops}".`);
+    }
 
     const provider = new JsonRpcProvider(rpcUrl);
     const signer = new Wallet(privateKey, provider);

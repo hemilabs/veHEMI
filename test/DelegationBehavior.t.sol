@@ -878,11 +878,11 @@ contract DelegationBehaviorTest is Test {
     ///         past `DelegateChanged`) fails loudly.
     ///
     ///         Expected order in the recorded log stream:
-    ///           1. `DelegateVotesChanged(oldDelegate, prev, new)`
+    ///           1. `DelegateChanged(tokenId, oldDelegate, address(0))`
+    ///              from `address(delegation)` — cache retirement marker.
+    ///           2. `DelegateVotesChanged(oldDelegate, prev, new)`
     ///              from `address(delegation)` — checkpoint subtracts the
     ///              forfeited voting weight from the delegatee.
-    ///           2. `DelegateChanged(tokenId, oldDelegate, address(0))`
-    ///              from `address(delegation)` — cache retirement marker.
     ///           3. `Withdraw(provider, tokenId, amount, timestamp)`
     ///              from `address(veHemi)` — token-burn / refund.
     ///
@@ -897,8 +897,8 @@ contract DelegationBehaviorTest is Test {
         delegation.delegate(tokenId, bob);
 
         assertEq(delegation.delegation(tokenId).delegatee, bob, "pre: delegated to bob");
-        // Note: getVotes(bob) is 0 at this exact second because checkpoints
-        // apply at the NEXT hour boundary. The DelegateVotesChanged event is
+        // Note: getVotes(bob) is 0 at this exact second because a delegation
+        // change lands at block.timestamp + 1. The DelegateVotesChanged event is
         // still emitted unconditionally inside _moveVotingPowerFromPreviousDelegate,
         // so we don't need a non-zero precondition to pin the order.
 
@@ -966,9 +966,9 @@ contract DelegationBehaviorTest is Test {
         assertGt(idxDc, -1, "DelegateChanged not emitted");
         assertGt(idxW, -1, "Withdraw not emitted");
 
-        // Strict ordering: DelegateVotesChanged < DelegateChanged < Withdraw.
-        assertLt(idxDvc, idxDc, "order: DelegateVotesChanged must precede DelegateChanged");
-        assertLt(idxDc, idxW, "order: DelegateChanged must precede Withdraw");
+        // Strict ordering: DelegateChanged < DelegateVotesChanged < Withdraw.
+        assertLt(idxDc, idxDvc, "order: DelegateChanged must precede DelegateVotesChanged");
+        assertLt(idxDvc, idxW, "order: DelegateVotesChanged must precede Withdraw");
     }
 
     // -------------------------------------------------------------------------
