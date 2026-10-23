@@ -25,7 +25,7 @@ contract J12U2GuardTest is LockedCurveTestBase {
         assertEq(
             uint256(veHemi.autoRelockRemaining(id)),
             R + SIX_DAYS,
-            "U2G2: a genuine one-bucket extension must be accepted and must move R"
+            "a genuine one-bucket extension must be accepted and must move R"
         );
     }
 
@@ -78,12 +78,12 @@ contract J12U2GuardTest is LockedCurveTestBase {
             assertEq(
                 bytes4(reason),
                 VeHemi.NewLockDurationNotGreater.selector,
-                "U2G5: the no-op must be refused with NewLockDurationNotGreater"
+                "the no-op must be refused with NewLockDurationNotGreater"
             );
         }
 
-        assertEq(uint256(veHemi.autoRelockRemaining(id)), R, "U2G5: R unmoved by a refused call");
-        assertEq(veHemi.balanceOfNFT(id), wBefore, "U2G5: weight unmoved by a refused call");
-        assertEq(veHemi.getLockedBalance(id).end, endBefore, "U2G5: end unmoved by a refused call");
+        assertEq(uint256(veHemi.autoRelockRemaining(id)), R, "R unmoved by a refused call");
+        assertEq(veHemi.balanceOfNFT(id), wBefore, "weight unmoved by a refused call");
+        assertEq(veHemi.getLockedBalance(id).end, endBefore, "end unmoved by a refused call");
     }
 }

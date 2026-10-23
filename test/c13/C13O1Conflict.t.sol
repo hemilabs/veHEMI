@@ -7,8 +7,9 @@ import "../LockedCurveTestBase.sol";
 ///         SIX_DAYS grid and R is whole buckets from `grid(now)`, so a disable
 ///         restores the end `grid(now) + R`: a position that is enabled and
 ///         disabled on the grid gets exactly R back (and steps UP from the
-///         V-MEAN flat level by `slope * S/2`), while a disable one second short
-///         of a bucket loses the most, `slope * (S/2 - 1)` against the flat level.
+///         bucket-mean flat level by `slope * S/2`), while a disable one second
+///         short of a bucket loses the most, `slope * (S/2 - 1)` against the
+///         flat level.
 contract C13O1Conflict is LockedCurveTestBase {
     uint256 constant AMT = 1_000 ether;
 
@@ -31,7 +32,7 @@ contract C13O1Conflict is LockedCurveTestBase {
         veHemi.enableAutoRelock(a);
         assertEq(uint256(veHemi.autoRelockRemaining(a)), 6 * SIX_DAYS, "precondition: R == 6 buckets");
         uint256 wFlat = veHemi.balanceOfNFT(a);
-        assertEq(wFlat, slope * (6 * SIX_DAYS - SIX_DAYS / 2), "flat level is not V-MEAN");
+        assertEq(wFlat, slope * (6 * SIX_DAYS - SIX_DAYS / 2), "flat level is not the bucket mean");
 
         vm.warp(block.timestamp + 3 * SIX_DAYS);
         vm.prank(alice);
@@ -53,7 +54,7 @@ contract C13O1Conflict is LockedCurveTestBase {
         veHemi.enableAutoRelock(id);
         assertEq(uint256(veHemi.autoRelockRemaining(id)), 2 * SIX_DAYS, "precondition: R == 2 buckets");
         uint256 w0 = veHemi.balanceOfNFT(id);
-        assertEq(w0, slope * (3 * SIX_DAYS / 2), "flat level is not V-MEAN");
+        assertEq(w0, slope * (3 * SIX_DAYS / 2), "flat level is not the bucket mean");
 
         vm.warp(block.timestamp + SIX_DAYS - 1);
         vm.prank(alice);

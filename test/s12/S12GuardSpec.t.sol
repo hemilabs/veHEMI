@@ -4,7 +4,7 @@ pragma solidity ^0.8.29;
 import "../LockedCurveTestBase.sol";
 import "@openzeppelin/contracts/token/ERC721/IERC721Receiver.sol";
 
-/// S12 — THE GUARD SPEC. Behavioural coverage of VeHemi's `nonReentrant`
+/// THE GUARD SPEC. Behavioural coverage of VeHemi's `nonReentrant`
 /// guard, asserted by the guard's own selector (`ReentrancyGuardReentrantCall`):
 ///
 ///   G1-G3  `safeTransferFrom` takes the guard itself and holds it across
@@ -108,13 +108,13 @@ contract S12GuardSpec is LockedCurveTestBase {
             bool innerOk = rc.innerOk();
             bytes4 e = rc.innerErr();
             emit log_named_string(
-                string.concat("S12/G1 hook re-entry mode ", vm.toString(uint256(m))),
+                string.concat("G1 hook re-entry mode ", vm.toString(uint256(m))),
                 innerOk ? "ADMITTED" : string.concat("refused ", vm.toString(bytes32(e)))
             );
             if (!innerOk && e == GUARD) refusedByGuard++;
             vm.revertToState(snap);
         }
-        emit log_named_uint("S12/G1 modes refused by the GUARD", refusedByGuard);
+        emit log_named_uint("G1 modes refused by the GUARD", refusedByGuard);
         assertEq(refusedByGuard, 3, "G1: onERC721Received re-entry is NOT refused by the reentrancy guard");
     }
 
@@ -167,13 +167,13 @@ contract S12GuardSpec is LockedCurveTestBase {
             ve2.createLock(100 ether, 365 days);
             vm.stopPrank();
             emit log_named_string(
-                string.concat("S12/G4 ", names[i]),
+                string.concat("G4 ", names[i]),
                 mod.ok() ? "ADMITTED" : string.concat("refused ", vm.toString(bytes32(mod.err())))
             );
             if (!mod.ok() && mod.err() == GUARD) refused++;
             vm.revertToState(snap);
         }
-        emit log_named_uint("S12/G4 refused by the GUARD", refused);
+        emit log_named_uint("G4 refused by the GUARD", refused);
         assertEq(refused, 5, "G4: a guarded VeHemi entry point admitted a re-entrant module");
     }
 }

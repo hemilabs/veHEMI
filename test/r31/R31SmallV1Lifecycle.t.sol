@@ -48,7 +48,7 @@ contract R31SmallV1LifecycleTest is R31Base {
             if (d == address(0)) continue;
             return (i, veHemi.ownerOf(i), d);
         }
-        revert("R31: no live delegated sub-10-HEMI V1 position among the candidates");
+        revert("no live delegated sub-10-HEMI V1 position among the candidates");
     }
 
     function _weight() internal view returns (uint256) {

@@ -2,7 +2,7 @@
 pragma solidity ^0.8.29;
 
 // ============================================================================
-// G08 -- the stale retire takes a THIRD-PARTY delegatee's votes and the
+// The stale retire takes a THIRD-PARTY delegatee's votes and the
 // quorum denominator to zero.
 // ----------------------------------------------------------------------------
 // The retire path must not lean on a revert: `VeHemi._reDelegate` swallows a
@@ -46,21 +46,21 @@ contract G08ZeroTest is TwinOracle {
         assertEq(block.timestamp, open, "clock did not land on staleAt");
     }
 
-    // =================================================================== Z1
+    // ===================================================================
     /// @notice THE RETIRE IS NOT SWALLOWED, AND THE DELEGATEE'S VOTES FOLLOW
     ///         THE ESCROW FROM THE NEXT SECOND.
     ///           (a) no `DelegationUpdateFailed` is emitted;
     ///           (b) at the retire instant the escrow is the restored decaying
     ///               weight `slope * N * SIX_DAYS` (end = grid(now) + N buckets)
-    ///               while the delegatee still reads the V-MEAN flat level: the
-    ///               re-booking is dated `block.timestamp + 1`, so nothing moves
-    ///               in the same second;
+    ///               while the delegatee still reads the bucket-mean flat level:
+    ///               the re-booking is dated `block.timestamp + 1`, so nothing
+    ///               moves in the same second;
     ///           (c) from `t + 1` on, every second for two hours, the
     ///               delegatee's live votes equal the position's escrow weight.
     function test_Z1_retire_moves_the_delegatee_votes_to_the_escrow() public {
         _toStale();
         uint256 flat = X.ve.balanceOfNFT(_id(bi));
-        assertEq(flat, meanLevelOf(AMT, N), "not flat at the V-MEAN level");
+        assertEq(flat, meanLevelOf(AMT, N), "not flat at the bucket-mean level");
         assertEq(X.del.getVotes(CAROL), flat, "delegatee is not carrying the flat level");
 
         // (a) the forced re-delegation must NOT be swallowed.
@@ -86,7 +86,7 @@ contract G08ZeroTest is TwinOracle {
         }
     }
 
-    // =================================================================== Z3
+    // ===================================================================
     /// @notice VOTES TO ZERO, AND THEY STAY THERE. Uses universe M, which
     ///         holds this one retired position alone.
     function test_Z3_votes_and_supply_reach_exact_zero_and_stay() public {
@@ -136,7 +136,7 @@ contract G08ZeroTest is TwinOracle {
         }
     }
 
-    // =================================================================== Z4
+    // ===================================================================
     /// @notice NO ARITHMETIC PANIC ON ANY RETIRE PATH. The swallow at
     ///         `_reDelegate` means a panic INSIDE the delegation module would
     ///         not surface as a revert. Drive the retire in eight distinct
@@ -180,7 +180,7 @@ contract G08ZeroTest is TwinOracle {
         assertEq(done, 8, "not every phase retired");
     }
 
-    // =================================================================== Z5
+    // ===================================================================
     /// @notice A TOP-UP MOVES NEITHER THE CLOCK NOR THE VOTES ABOVE ESCROW.
     ///         `increaseAmount` (owner-only) re-materialises the lazy end but
     ///         must not stamp, and a 10-HEMI top-up must not leave the
@@ -207,7 +207,7 @@ contract G08ZeroTest is TwinOracle {
         assertEq(uint256(X.ve.autoRelockRemaining(_id(bi))), 0, "retire did not open on time");
     }
 
-    // =================================================================== Z6
+    // ===================================================================
     /// @notice THE STAMP'S WHOLE LIFECYCLE: written at enable, rewritten by
     ///         the heartbeat, deleted at disable, deleted at retire, deleted
     ///         with the token.
@@ -238,7 +238,7 @@ contract G08ZeroTest is TwinOracle {
         assertEq(uint256(X.ve.autoRelockRefreshedAt(id)), 0, "stamp survived the burn");
     }
 
-    // =================================================================== Z7
+    // ===================================================================
     /// @notice THE STAMP REALLY LIVES AT SLOT 65, AT RUNTIME. After a real
     ///         enable (in `setUp`) and a real refresh, this body reads the raw
     ///         word at `keccak256(id . 65)` back off the proxy. It pins VeHemi's

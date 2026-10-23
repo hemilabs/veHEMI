@@ -2,7 +2,7 @@
 pragma solidity ^0.8.29;
 
 // ============================================================================
-// G08 -- the abandonment clock of an armed position.
+// The abandonment clock of an armed position.
 // ----------------------------------------------------------------------------
 // `autoRelockRefreshedAt` is written only when a position is armed
 // (`enableAutoRelock`, or `createLockWithAutoRelock` at mint) and by

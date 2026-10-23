@@ -4,12 +4,14 @@ pragma solidity ^0.8.29;
 import "../j17/J17Base.sol";
 import {LyingVoteDelegation} from "../mocks/LyingVoteDelegation.sol";
 
-/// @title  Q29 — detectors for guards whose necessity is conditional.
+/// @title  Detectors for guards whose necessity is conditional.
 ///
-/// @notice Three bodies pin D01's `force_` flag in `_endAutoRelock` (redundant on
-///         this build, and only because `enableAutoRelock` refuses N == 1),
-///         and one pins that a stranded flat term stays retirable after its
-///         restored end has passed (D01's `tolerateExpired_` branch).
+/// @notice Three bodies pin the `force_` flag `_endAutoRelock` passes to
+///         `_reDelegate` (redundant on this build, and only because
+///         `enableAutoRelock` refuses N == 1), and one pins that a stranded
+///         flat term stays retirable after its restored end has passed (the
+///         `tolerateExpired_` flag of
+///         `VeHemiVoteDelegation._getNormalizedLockedInfo`).
 ///
 /// @dev    Every sweep carries a reachability counter and fails loudly when it
 ///         observed nothing; the single-shot bodies assert their own premises
@@ -19,7 +21,7 @@ import {LyingVoteDelegation} from "../mocks/LyingVoteDelegation.sol";
 ///         time forward.
 contract Q29Detectors is J17Base {
     // =====================================================================
-    // D01 — THE `force_` FLAG IN `_endAutoRelock`. REDUNDANT ON THIS BUILD,
+    // THE `force_` FLAG IN `_endAutoRelock`. REDUNDANT ON THIS BUILD,
     // CONDITIONALLY.
     //
     // `VeHemi._endAutoRelock` calls `_reDelegate(tokenId_, true, strict_)` so the
@@ -79,7 +81,7 @@ contract Q29Detectors is J17Base {
                 assertLt(
                     nextHour,
                     end,
-                    "Q29/D01: the restored end is INSIDE the next hourly checkpoint -- "
+                    "the restored end is INSIDE the next hourly checkpoint -- "
                     "`force_` in _endAutoRelock IS load-bearing after all"
                 );
                 if (end - nextHour < minSlackSeconds) minSlackSeconds = end - nextHour;
@@ -87,13 +89,13 @@ contract Q29Detectors is J17Base {
             }
         }
 
-        emit log_named_uint("Q29/D01 cells executed", cells);
-        emit log_named_uint("Q29/D01 tightest R (seconds)", tightestR);
-        emit log_named_uint("Q29/D01 MIN slack end-nextHour (s)", minSlackSeconds);
+        emit log_named_uint("cells executed", cells);
+        emit log_named_uint("tightest R (seconds)", tightestR);
+        emit log_named_uint("MIN slack end-nextHour (s)", minSlackSeconds);
         // NON-VACUITY FLOOR.
-        assertEq(cells, 16, "Q29/D01 VACUITY: the sweep did not execute 16 cells");
-        assertEq(tightestR, 2 * SIX_DAYS, "Q29/D01: the tightest admissible R is not 2*SIX_DAYS");
-        assertGt(minSlackSeconds, 1 hours, "Q29/D01: slack collapsed to within one hourly epoch");
+        assertEq(cells, 16, "VACUITY: the sweep did not execute 16 cells");
+        assertEq(tightestR, 2 * SIX_DAYS, "the tightest admissible R is not 2*SIX_DAYS");
+        assertGt(minSlackSeconds, 1 hours, "slack collapsed to within one hourly epoch");
     }
 
     /// @notice Leg 2 — THE COUPLING TRIPWIRE. `force_` is redundant ONLY
@@ -110,8 +112,8 @@ contract Q29Detectors is J17Base {
         vm.warp(block.timestamp + SIX_DAYS);
         uint256 end = uint256(veHemi.getLockedBalance(id).end);
         uint256 n = (end - (block.timestamp / SIX_DAYS) * SIX_DAYS) / SIX_DAYS;
-        emit log_named_uint("Q29/D01 leg2: N at enable", n);
-        assertEq(n, 1, "Q29/D01 leg2 SETUP: the probe position is not N == 1");
+        emit log_named_uint("leg 2: N at enable", n);
+        assertEq(n, 1, "leg 2 SETUP: the probe position is not N == 1");
 
         vm.prank(victim);
         (bool ok, bytes memory ret) = address(veHemi).call(
@@ -119,14 +121,14 @@ contract Q29Detectors is J17Base {
         );
         assertFalse(
             ok,
-            "Q29/D01 leg2: enableAutoRelock NO LONGER REFUSES N == 1. `force_` in "
+            "leg 2: enableAutoRelock NO LONGER REFUSES N == 1. `force_` in "
             "`_endAutoRelock` is LOAD-BEARING again -- restore a directed control "
             "for it before shipping."
         );
         assertEq(
             bytes4(ret),
             VeHemi.AutoRelockDurationTooShort.selector,
-            "Q29/D01 leg2: N == 1 is refused, but not by AutoRelockDurationTooShort -- the premise moved"
+            "leg 2: N == 1 is refused, but not by AutoRelockDurationTooShort -- the premise moved"
         );
     }
 
@@ -152,7 +154,7 @@ contract Q29Detectors is J17Base {
             enable(victim, id);
             // NON-VACUITY (a): the enable really did book a FLAT term.
             IVeHemiVoteDelegation.Delegation memory pre = delegation.delegation(id);
-            assertTrue(pre.slope == 0 && pre.bias > 0, "Q29/D01 leg3 VACUITY: enable booked no flat term");
+            assertTrue(pre.slope == 0 && pre.bias > 0, "leg 3 VACUITY: enable booked no flat term");
 
             vm.warp(grid() + SIX_DAYS + phases[i]);
             disable(victim, id);
@@ -175,9 +177,9 @@ contract Q29Detectors is J17Base {
                 abi.encodeWithSignature("enableAutoRelock(uint256)", id7)
             );
             if (ok7) {
-                emit log("Q29/D01 leg3: N == 1 IS ENABLEABLE ON THIS TREE -- cell 7 armed");
+                emit log("leg 3: N == 1 IS ENABLEABLE -- cell 7 armed");
                 IVeHemiVoteDelegation.Delegation memory p7 = delegation.delegation(id7);
-                assertTrue(p7.slope == 0 && p7.bias > 0, "Q29/D01 leg3 cell7 VACUITY: no flat term booked");
+                assertTrue(p7.slope == 0 && p7.bias > 0, "leg 3 cell7 VACUITY: no flat term booked");
                 // the worst phase: the last second of the bucket
                 vm.warp(grid() + SIX_DAYS - 1);
                 disable(victim, id7);
@@ -187,19 +189,19 @@ contract Q29Detectors is J17Base {
             }
         }
 
-        emit log_named_uint("Q29/D01 leg3 cells executed", cells);
-        emit log_named_uint("Q29/D01 leg3 flat terms still standing", flatSurvivors);
-        assertGe(cells, 6, "Q29/D01 leg3 VACUITY: the sweep did not execute its 6 base cells");
+        emit log_named_uint("leg 3 cells executed", cells);
+        emit log_named_uint("leg 3 flat terms still standing", flatSurvivors);
+        assertGe(cells, 6, "leg 3 VACUITY: the sweep did not execute its 6 base cells");
         assertEq(
             flatSurvivors,
             0,
-            "Q29/D01 leg3: disableAutoRelock left the FLAT term standing at the delegatee -- "
-            "PHANTOM GOVERNANCE POWER (D01)"
+            "leg 3: disableAutoRelock left the FLAT term standing at the delegatee -- "
+            "PHANTOM GOVERNANCE POWER"
         );
     }
 
     // =====================================================================
-    // D01 `tolerateExpired_`. When the stored record is FLAT,
+    // THE `tolerateExpired_` FLAG. When the stored record is FLAT,
     // `autoRelockRemaining == 0` and `locked[id].end <= checkpoint`, moving the
     // record away must not revert `CanNotDelegateExpiredLocks`: if it did, a
     // stranded flat term could never be retired. This body builds exactly that
@@ -218,24 +220,24 @@ contract Q29Detectors is J17Base {
         vm.warp(block.timestamp + 7200);
 
         uint256 wFlat = delegation.getVotes(dele);
-        assertGt(wFlat, 0, "Q29/D01-tol VACUITY: the enable booked no flat term");
+        assertGt(wFlat, 0, "VACUITY: the enable booked no flat term");
 
         // STRAND IT: the module answers reads but does not perform the
         // retirement, so `delegations[id]` keeps its FLAT shape.
         veHemi.updateVoteDelegation(IVeHemiVoteDelegation(address(new LyingVoteDelegation(delegation))));
         disable(victim, id);
         assertEq(delegation.getVotes(dele), wFlat,
-            "Q29/D01-tol VACUITY: the term was not stranded -- the probe proves nothing");
+            "VACUITY: the term was not stranded -- the probe proves nothing");
         IVeHemiVoteDelegation.Delegation memory mid = delegation.delegation(id);
         assertTrue(mid.slope == 0 && mid.bias > 0,
-            "Q29/D01-tol VACUITY: the stored record is not FLAT");
+            "VACUITY: the stored record is not FLAT");
 
         veHemi.updateVoteDelegation(good);          // the module is repaired...
 
         // ...but `_endAutoRelock` already ran, so `autoRelockRemaining == 0`;
         // let the restored end fall into the past.
         uint256 end = uint256(veHemi.getLockedBalance(id).end);
-        assertGt(end, block.timestamp, "Q29/D01-tol SETUP: the end is already past");
+        assertGt(end, block.timestamp, "SETUP: the end is already past");
         vm.warp(end + 1 hours);
 
         // THE HOLDER'S CURE: the holder moves the stranded flat term away with
@@ -247,17 +249,18 @@ contract Q29Detectors is J17Base {
         );
         assertTrue(
             ok,
-            "Q29/D01-tol: the holder CANNOT retire a stranded flat term once "
+            "the holder CANNOT retire a stranded flat term once "
             "its restored end has passed -- CanNotDelegateExpiredLocks, "
-            "PERMANENTLY. D01's `tolerateExpired_` is what prevents this."
+            "PERMANENTLY. The `tolerateExpired_` flag of "
+            "`_getNormalizedLockedInfo` is what prevents this."
         );
 
         IVeHemiVoteDelegation.Delegation memory post = delegation.delegation(id);
         assertFalse(
             post.slope == 0 && post.bias > 0,
-            "Q29/D01-tol: the call committed but the record is STILL FLAT -- "
+            "the call committed but the record is STILL FLAT -- "
             "the term is stranded anyway"
         );
-        emit log_named_uint("Q29/D01-tol votes at dele after the cure", delegation.getVotes(dele));
+        emit log_named_uint("votes at dele after the cure", delegation.getVotes(dele));
     }
 }

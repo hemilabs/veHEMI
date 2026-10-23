@@ -4,7 +4,7 @@ pragma solidity ^0.8.29;
 import "../j11/J11Base.sol";
 import {IVeHemiVoteDelegation} from "../../src/interfaces/IVeHemiVoteDelegation.sol";
 
-/// @title  Q14 / A1 — `updateVoteDelegation` REQUIRES `code.length > 0`.
+/// @title  `updateVoteDelegation` REQUIRES `code.length > 0`.
 ///
 /// @notice A codeless module would make every `voteDelegation.delegation(id)`
 ///         read in VeHemi decode zero bytes and revert, so `disableAutoRelock`,
@@ -94,11 +94,11 @@ contract Q14A1 is J11Base {
         address moduleBefore = address(veHemi.voteDelegation());
 
         bool accepted = _tryInstall(EOA_MODULE);
-        emit log_named_uint("A1/R codeless module ACCEPTED", accepted ? 1 : 0);
-        emit log_named_address("A1/R module after", address(veHemi.voteDelegation()));
+        emit log_named_uint("R codeless module ACCEPTED", accepted ? 1 : 0);
+        emit log_named_address("R module after", address(veHemi.voteDelegation()));
 
         if (!accepted) {
-            assertEq(address(veHemi.voteDelegation()), moduleBefore, "A1/R: pointer moved on a refused set");
+            assertEq(address(veHemi.voteDelegation()), moduleBefore, "R: pointer moved on a refused set");
         }
 
         // The `createLock` leg (`_depositFor` -> `_reDelegate` ->
@@ -110,13 +110,13 @@ contract Q14A1 is J11Base {
         (bool createOk, ) = address(veHemi).call{gas: BIG_GAS}(
             abi.encodeWithSignature("createLock(uint256,uint256)", uint256(100 ether), uint256(4 * 365 days))
         );
-        emit log_named_uint("A1/R createLock survived", createOk ? 1 : 0);
+        emit log_named_uint("R createLock survived", createOk ? 1 : 0);
         // non-vacuity: the SAME call on a healthy module must succeed
-        if (!accepted) assertTrue(createOk, "A1/R: createLock failed on a HEALTHY module -- probe is vacuous");
+        if (!accepted) assertTrue(createOk, "R: createLock failed on a HEALTHY module -- probe is vacuous");
 
         uint256 got = _recoverPrincipal(id, victim);
-        emit log_named_uint("A1/R recovered", got);
-        assertEq(got, PRINCIPAL, "Q14/A1 R: PRINCIPAL TRAPPED behind a codeless module");
+        emit log_named_uint("R recovered", got);
+        assertEq(got, PRINCIPAL, "R: PRINCIPAL TRAPPED behind a codeless module");
     }
 
     // ==================================================================
@@ -130,7 +130,7 @@ contract Q14A1 is J11Base {
         address moduleBefore = address(veHemi.voteDelegation());
         vm.expectRevert(VeHemi.VoteDelegationHasNoCode.selector);
         veHemi.updateVoteDelegation(IVeHemiVoteDelegation(EOA_MODULE));
-        assertEq(address(veHemi.voteDelegation()), moduleBefore, "Q14/A1 G: pointer moved on a refused set");
+        assertEq(address(veHemi.voteDelegation()), moduleBefore, "G: pointer moved on a refused set");
     }
 
     /// @notice A precompile also has `code.length == 0` and would drop every
@@ -150,11 +150,11 @@ contract Q14A1 is J11Base {
     function test_Q14_A1_N_contractModuleStillInstalls() public {
         address real = address(delegation);
         assertGt(real.code.length, 0, "premise: the shipped module has no code");
-        assertTrue(_tryInstall(real), "Q14/A1 N: a REAL module was refused");
-        assertEq(address(veHemi.voteDelegation()), real, "Q14/A1 N: pointer did not land");
+        assertTrue(_tryInstall(real), "N: a REAL module was refused");
+        assertEq(address(veHemi.voteDelegation()), real, "N: pointer did not land");
         uint256 id = _flatDelegated(victim, dele);
-        assertGt(delegation.getVotes(dele), 0, "Q14/A1 N: delegation broken after re-install");
-        assertEq(_recoverPrincipal(id, victim), PRINCIPAL, "Q14/A1 N: principal lost");
+        assertGt(delegation.getVotes(dele), 0, "N: delegation broken after re-install");
+        assertEq(_recoverPrincipal(id, victim), PRINCIPAL, "N: principal lost");
     }
 
     /// @notice Non-owner is still refused FIRST, with the ownership error —

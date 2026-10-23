@@ -2,9 +2,9 @@
 pragma solidity ^0.8.29;
 
 // ============================================================================
-// F07 — the heartbeat (`refreshAutoRelock`) and the permissionless stale
+// The heartbeat (`refreshAutoRelock`) and the permissionless stale
 // retire (`retireStaleAutoRelock`), checked against a live manual twin and the
-// closed-form V-MEAN level.
+// closed-form bucket-mean level.
 // ============================================================================
 
 import "./TwinOracle.sol";
@@ -40,9 +40,9 @@ contract F07RetireTest is TwinOracle {
 
     // =================================================================== R1
     /// @notice THE HEARTBEAT COSTS THE CURVE NOTHING. A flat position refreshed
-    ///         every 6 buckets sits at the closed-form V-MEAN level at every
-    ///         sample (weight and supply), and its time-integral matches the
-    ///         live manual twin's to within 1 bps.
+    ///         every 6 buckets sits at the closed-form bucket-mean level at
+    ///         every sample (weight and supply), and its time-integral matches
+    ///         the live manual twin's to within 1 bps.
     function test_R1_heartbeat_is_curve_invisible() public {
         assertEq(X.ve.autoRelockStaleAt(_id(xi)), t0 + K * SIX_DAYS, "staleAt");
         // heartbeat every 6 buckets during the sweep
@@ -61,8 +61,8 @@ contract F07RetireTest is TwinOracle {
         uint256 W = meanLevelOf(AMT, N);
         Sample[] storage b2 = series[xi];
         for (uint256 k; k < b2.length; ++k) {
-            assertEq(b2[k].weight, W, "not flat at the V-MEAN level");
-            assertEq(b2[k].totalSupply, W, "supply not flat at the V-MEAN level");
+            assertEq(b2[k].weight, W, "not flat at the bucket-mean level");
+            assertEq(b2[k].totalSupply, W, "supply not flat at the bucket-mean level");
         }
         assertEq(_bps(integral(xi, Field.WEIGHT), integral(mi, Field.WEIGHT)), int256(0), "integral != the twin's");
     }
@@ -152,7 +152,7 @@ contract F07RetireTest is TwinOracle {
         // REMAINING lock buys.
         X.ve.enableAutoRelock(_id(xi));
         assertEq(uint256(X.ve.autoRelockRemaining(_id(xi))), (N - 2) * SIX_DAYS, "R not the remaining lock");
-        assertEq(X.ve.balanceOfNFT(_id(xi)), meanLevelOf(AMT, N - 2), "re-enable did not restore the V-MEAN level of the remaining lock");
+        assertEq(X.ve.balanceOfNFT(_id(xi)), meanLevelOf(AMT, N - 2), "re-enable did not restore the bucket-mean level of the remaining lock");
         assertEq(X.ve.autoRelockStaleAt(_id(xi)), block.timestamp + K * SIX_DAYS, "clock did not restart");
 
         // ... or, had they not, they withdraw at the restored end

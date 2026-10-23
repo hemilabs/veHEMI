@@ -3,7 +3,7 @@ pragma solidity ^0.8.29;
 
 import "../LockedCurveTestBase.sol";
 
-/// @title  J11Base -- shared fixture for many of the auto-relock suites.
+/// @title  Shared fixture for many of the auto-relock suites.
 /// @notice A seeded `LockedCurveTestBase` with funded, approved actors
 ///         (attacker, victim, stranger) and two delegatees, plus small helpers:
 ///         `grid()`, `slopeOf`, `residualLockup` (`effectiveLockEnd - now`),

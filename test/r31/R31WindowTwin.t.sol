@@ -89,7 +89,7 @@ contract R31WindowTwinTest is R31Base {
             if (veHemi.balanceOfNFT(i) < 1e18) continue;
             return (i, veHemi.ownerOf(i), d);
         }
-        revert("R31: no transferable position");
+        revert("no transferable position");
     }
 
     /// @dev Shared pre-state: locks at t0, then deployed-implementation
@@ -104,17 +104,17 @@ contract R31WindowTwinTest is R31Base {
         t.h = t.K - (t.K % HOUR);
         t.U = t.h + 1211;
         t.B = t.h + HOUR;
-        t.pK = _addr("R31-pK");
-        t.pE = _addr("R31-pE");
-        t.pA = _addr("R31-pA");
-        t.keyS = uint256(keccak256("R31-keyS"));
+        t.pK = _addr("twin-pK");
+        t.pE = _addr("twin-pE");
+        t.pA = _addr("twin-pA");
+        t.keyS = uint256(keccak256("twin-keyS"));
         t.pS = vm.addr(t.keyS);
-        t.pZ = _addr("R31-pZ");
-        t.dZ = _addr("R31-dZ");
-        t.f1 = _addr("R31-f1"); t.f2 = _addr("R31-f2");
-        t.g1 = _addr("R31-g1"); t.g2 = _addr("R31-g2"); t.g3 = _addr("R31-g3");
-        t.buyer4 = _addr("R31-buyer4");
-        t.gb4 = _addr("R31-gb4");
+        t.pZ = _addr("twin-pZ");
+        t.dZ = _addr("twin-dZ");
+        t.f1 = _addr("twin-f1"); t.f2 = _addr("twin-f2");
+        t.g1 = _addr("twin-g1"); t.g2 = _addr("twin-g2"); t.g3 = _addr("twin-g3");
+        t.buyer4 = _addr("twin-buyer4");
+        t.gb4 = _addr("twin-gb4");
         // t0: deployed VeHemi + VVD.
         t.idE = _lockUntil(t.pE, t.eEnd);
         t.idK = _lockUntil(t.pK, t.K);
@@ -136,7 +136,7 @@ contract R31WindowTwinTest is R31Base {
         for (uint256 i; i < 5; ++i) {
             (t.bId[i], t.bO[i], t.bA[i]) = _pickFrom(next, 1e18);
             next = t.bId[i] + 1;
-            t.bF[i] = _addr(string.concat("R31-bF", vm.toString(i)));
+            t.bF[i] = _addr(string.concat("twin-bF", vm.toString(i)));
         }
         vm.prank(t.o1);
         vvd.delegate(t.id1, t.f1); // live: in-hour booking at fresh f1 (len 1, pending only)
@@ -406,8 +406,8 @@ contract R31WindowTwinTest is R31Base {
         L1 memory c;
         (c.idX, c.oX, c.aX) = _pick();
         (c.idY, c.oY, c.dY) = _pickFrom(c.idX + 1, 1e18);
-        c.f = _addr("R31-len1-F");
-        c.g = _addr("R31-len1-G");
+        c.f = _addr("twin-len1-F");
+        c.g = _addr("twin-len1-G");
         c.h = _nb(block.timestamp);
         _to(c.h + 611);
         vm.prank(c.oY);

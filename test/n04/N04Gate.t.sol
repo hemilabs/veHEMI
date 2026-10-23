@@ -4,7 +4,7 @@ pragma solidity ^0.8.29;
 import "../LockedCurveTestBase.sol";
 import {N04VoteContinuityLaw as N04} from "./N04VoteContinuityLaw.sol";
 
-/// N04 — CLAUSE 4, THE GATE: a stranger cannot mutate the delegatee's ledger
+/// CLAUSE 4, THE GATE: a stranger cannot mutate the delegatee's ledger
 /// through `increaseAmount`.
 ///
 /// No law over `getVotes`/`getPastVotes` can tell an owner's write from a

@@ -321,7 +321,7 @@ interface IVeHemi is IERC721Enumerable {
     ///      `withdraw` refuses an enabled position, so its clear is a no-op. `forfeit` has no
     ///      auto-relock guard: the forfeit admin clears a live R with no auto-relock event (its
     ///      `Checkpoint` with a zeroed `newLock` and the burn announce it). A guard on auto-relock
-    ///      state must be reviewed on every one of these paths.
+    ///      state must account for every one of these paths.
     function enableAutoRelock(uint256 tokenId) external;
 
     /// @notice Disable auto-relock (owner only): `end` becomes `effectiveLockEnd` (the start of

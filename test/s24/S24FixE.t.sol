@@ -2,7 +2,7 @@
 pragma solidity ^0.8.29;
 
 // ============================================================================
-// S24/FixE -- `DelegationUpdateSkipped`: THE NEAR-EXPIRY TRANSFER SKIP.
+// `DelegationUpdateSkipped`: THE NEAR-EXPIRY TRANSFER SKIP.
 // ----------------------------------------------------------------------------
 // A transfer of an UNARMED position in the last `((end - 1) mod 3600) + 1`
 // seconds of its lock is not forwarded to the delegation module: the NFT
@@ -12,7 +12,7 @@ pragma solidity ^0.8.29;
 //   E1  the skip is attributable from the log stream alone, against a control
 //       one second before the window;
 //   E2  the receipt is sound and complete: events == skips measured from state;
-//   E3  DOCUMENTED BEHAVIOUR (accepted): after such a transfer, the new
+//   E3  DOCUMENTED BEHAVIOUR: after such a transfer, the new
 //       owner's `increaseUnlockTime` re-books the weight at the PREVIOUS
 //       delegatee, and the new owner's own `delegate()` then takes it back.
 //   E4  the same with auto-relock: the new owner's `enableAutoRelock` after
@@ -53,7 +53,7 @@ contract S24FixE is J11Base {
     }
 
     // =====================================================================
-    // S24/E1 -- THE SKIP IS ATTRIBUTABLE FROM THE LOG STREAM ALONE.
+    // E1 -- THE SKIP IS ATTRIBUTABLE FROM THE LOG STREAM ALONE.
     // With a matched control ONE SECOND before the window, which must emit
     // NO skip event and MUST move the delegation.  Both halves asserted, so
     // neither can pass vacuously.
@@ -72,14 +72,14 @@ contract S24FixE is J11Base {
         veHemi.transferFrom(victim, buyer, idCtl);
         Vm.Log[] memory ctlLogs = vm.getRecordedLogs();
         uint256 ctlSkips = _count(ctlLogs, T_SKIPPED);
-        emit log_named_uint("S24/E1 control DelegationUpdateSkipped", ctlSkips);
+        emit log_named_uint("E1 control DelegationUpdateSkipped", ctlSkips);
         _obs++;
         assertEq(
             delegation.delegation(idCtl).delegatee,
             buyer,
             "NON-VACUOUS: the control transfer did NOT move the delegation -- it is not a control"
         );
-        assertEq(ctlSkips, 0, "S24/E1: the control emitted a skip event");
+        assertEq(ctlSkips, 0, "E1: the control emitted a skip event");
 
         // ---- THE SKIP: the first second of the window ----
         vm.warp(_windowStart(end));
@@ -88,7 +88,7 @@ contract S24FixE is J11Base {
         veHemi.transferFrom(seller, buyer, idSkip);
         Vm.Log[] memory logs = vm.getRecordedLogs();
         uint256 skips = _count(logs, T_SKIPPED);
-        emit log_named_uint("S24/E1 skipping-transfer DelegationUpdateSkipped", skips);
+        emit log_named_uint("E1 skipping-transfer DelegationUpdateSkipped", skips);
         _obs++;
 
         // NON-VACUITY: the transfer really did skip.
@@ -102,7 +102,7 @@ contract S24FixE is J11Base {
         assertEq(
             skips,
             1,
-            "S24/E1 KILLED: an escrow-changing call left the delegation behind with NO event to attribute it"
+            "E1: an escrow-changing call left the delegation behind with NO event to attribute it"
         );
         // the payload must identify the position, or it attributes nothing.
         bool found;
@@ -111,12 +111,12 @@ contract S24FixE is J11Base {
                 if (uint256(logs[i].topics[1]) == idSkip) found = true;
             }
         }
-        assertTrue(found, "S24/E1 KILLED: the event does not carry the tokenId it is about");
-        _ok("S24/E1");
+        assertTrue(found, "E1: the event does not carry the tokenId it is about");
+        _ok("E1");
     }
 
     // =====================================================================
-    // S24/E2 -- THE RECEIPT IS SOUND AND COMPLETE.
+    // E2 -- THE RECEIPT IS SOUND AND COMPLETE.
     // Seven independent positions sharing one `end`, transferred at seven
     // instants spanning the window boundary.  The number of events must equal
     // the number of transfers that actually skipped, measured from STATE --
@@ -133,7 +133,7 @@ contract S24FixE is J11Base {
         uint256 end = veHemi.getLockedBalance(ids[0]).end;
         uint256 ws = _windowStart(end);
         uint256 w = end - ws; // the shipped window length
-        emit log_named_uint("S24/E2 window length (shipped formula)", w);
+        emit log_named_uint("E2 window length (shipped formula)", w);
         assertGt(w, 4, "E2 setup: the window is too short to subdivide");
 
         uint256[7] memory ts;
@@ -156,22 +156,22 @@ contract S24FixE is J11Base {
             if (delegation.delegation(ids[i]).delegatee == dele) ++stateSkips;
             _obs++;
         }
-        emit log_named_uint("S24/E2 transfers", 7);
-        emit log_named_uint("S24/E2 skips measured from STATE", stateSkips);
-        emit log_named_uint("S24/E2 DelegationUpdateSkipped events", events);
+        emit log_named_uint("E2 transfers", 7);
+        emit log_named_uint("E2 skips measured from STATE", stateSkips);
+        emit log_named_uint("E2 DelegationUpdateSkipped events", events);
 
         assertGt(stateSkips, 0, "NON-VACUOUS: no transfer in the grid skipped");
         assertLt(stateSkips, 7, "NON-VACUOUS: every transfer in the grid skipped -- no negative side");
         assertEq(
             events,
             stateSkips,
-            "S24/E2 KILLED: the receipt is not sound-and-complete -- event count != skip count"
+            "E2: the receipt is not sound-and-complete -- event count != skip count"
         );
-        _ok("S24/E2");
+        _ok("E2");
     }
 
     // =====================================================================
-    // S24/E3 -- DOCUMENTED BEHAVIOUR: THE LATE-TRANSFER RE-BOOKING.
+    // E3 -- DOCUMENTED BEHAVIOUR: THE LATE-TRANSFER RE-BOOKING.
     // A transfer in the window leaves the record on the seller's delegatee.
     // The buyer cannot `delegate()` while the lock ends at or before the next
     // hour boundary (`CanNotDelegateExpiredLocks`); extending the lock with
@@ -204,9 +204,9 @@ contract S24FixE is J11Base {
         vm.warp(block.timestamp + 1);
         uint256 w = veHemi.balanceOfNFT(id);
         assertGt(w, 0, "NON-VACUOUS: the extended position has no weight");
-        assertEq(delegation.delegation(id).delegatee, dele, "S24/E3: the extension did not re-book at the previous delegatee");
-        assertEq(delegation.getVotes(dele), w, "S24/E3: the previous delegatee does not hold the extended weight");
-        assertEq(delegation.getVotes(buyer), 0, "S24/E3: the new owner already holds weight");
+        assertEq(delegation.delegation(id).delegatee, dele, "E3: the extension did not re-book at the previous delegatee");
+        assertEq(delegation.getVotes(dele), w, "E3: the previous delegatee does not hold the extended weight");
+        assertEq(delegation.getVotes(buyer), 0, "E3: the new owner already holds weight");
         _obs++;
 
         // (3) The buyer's own `delegate()` takes it back.
@@ -214,15 +214,15 @@ contract S24FixE is J11Base {
         delegation.delegate(id, buyer);
         uint256 tMove = block.timestamp;
         vm.warp(tMove + 1);
-        assertEq(delegation.delegation(id).delegatee, buyer, "S24/E3: the new owner's delegate() was not recorded");
-        assertEq(delegation.getVotes(dele), 0, "S24/E3: the previous delegatee kept the weight after the new owner's delegate()");
-        assertEq(delegation.getVotes(buyer), veHemi.balanceOfNFT(id), "S24/E3: the new owner does not hold the position's weight");
+        assertEq(delegation.delegation(id).delegatee, buyer, "E3: the new owner's delegate() was not recorded");
+        assertEq(delegation.getVotes(dele), 0, "E3: the previous delegatee kept the weight after the new owner's delegate()");
+        assertEq(delegation.getVotes(buyer), veHemi.balanceOfNFT(id), "E3: the new owner does not hold the position's weight");
         _obs++;
-        _ok("S24/E3");
+        _ok("E3");
     }
 
     // =====================================================================
-    // S24/E4 -- DOCUMENTED BEHAVIOUR, ARMED: THE LATE-TRANSFER RE-BOOKING
+    // E4 -- DOCUMENTED BEHAVIOUR, ARMED: THE LATE-TRANSFER RE-BOOKING
     // UNDER AUTO-RELOCK. As E3, but the new owner arms the position after the
     // extension instead of delegating. The arm re-books the record FLAT at
     // the PREVIOUS delegatee; if nobody refreshes it, the permissionless
@@ -251,12 +251,12 @@ contract S24FixE is J11Base {
         assertTrue(veHemi.isAutoRelockEnabled(id), "NON-VACUOUS: the arm did not commit");
         vm.warp(block.timestamp + 1);
         IVeHemiVoteDelegation.Delegation memory d = delegation.delegation(id);
-        assertEq(d.delegatee, dele, "S24/E4: the arm did not re-book at the previous delegatee");
-        assertTrue(d.slope == 0 && d.bias > 0, "S24/E4: the armed record is not flat");
+        assertEq(d.delegatee, dele, "E4: the arm did not re-book at the previous delegatee");
+        assertTrue(d.slope == 0 && d.bias > 0, "E4: the armed record is not flat");
         uint256 w = veHemi.balanceOfNFT(id);
         assertGt(w, 0, "NON-VACUOUS: the armed position has no weight");
-        assertEq(delegation.getVotes(dele), w, "S24/E4: the previous delegatee does not hold the flat weight");
-        assertEq(delegation.getVotes(buyer), 0, "S24/E4: the new owner already holds weight");
+        assertEq(delegation.getVotes(dele), w, "E4: the previous delegatee does not hold the flat weight");
+        assertEq(delegation.getVotes(buyer), 0, "E4: the new owner already holds weight");
         _obs++;
 
         // (2) Nobody refreshes; a stranger retires the stale position. The
@@ -266,16 +266,16 @@ contract S24FixE is J11Base {
         veHemi.retireStaleAutoRelock(id);
         assertFalse(veHemi.isAutoRelockEnabled(id), "NON-VACUOUS: the retirement did not commit");
         d = delegation.delegation(id);
-        assertEq(d.delegatee, dele, "S24/E4: the retirement moved the record off the previous delegatee");
-        assertGt(d.slope, 0, "S24/E4: the retired record is not decaying");
+        assertEq(d.delegatee, dele, "E4: the retirement moved the record off the previous delegatee");
+        assertGt(d.slope, 0, "E4: the retired record is not decaying");
         vm.warp(block.timestamp + 1);
         uint256 w1 = delegation.getVotes(dele);
-        assertEq(w1, veHemi.balanceOfNFT(id), "S24/E4: the previous delegatee does not hold the retired weight");
+        assertEq(w1, veHemi.balanceOfNFT(id), "E4: the previous delegatee does not hold the retired weight");
         assertGt(w1, 0, "NON-VACUOUS: the retired position has no weight");
         vm.warp(block.timestamp + SIX_DAYS);
-        assertLt(delegation.getVotes(dele), w1, "S24/E4: the weight at the previous delegatee does not decay");
-        assertEq(delegation.getVotes(buyer), 0, "S24/E4: the new owner holds weight it never delegated");
+        assertLt(delegation.getVotes(dele), w1, "E4: the weight at the previous delegatee does not decay");
+        assertEq(delegation.getVotes(buyer), 0, "E4: the new owner holds weight it never delegated");
         _obs++;
-        _ok("S24/E4");
+        _ok("E4");
     }
 }

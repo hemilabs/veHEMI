@@ -62,8 +62,8 @@ contract O05MoveTest is LockedCurveTestBase {
         vm.warp(S + 400 days);
         uint256 sealedVotes = delegation.getPastVotes(DEL_A, S);
 
-        assertEq(z, 0, "O05/M1: the owner's self-transfer opened a zero-second");
-        assertGt(sealedVotes, 0, "O05/M1: boundary-1 sealed zero");
+        assertEq(z, 0, "M1: the owner's self-transfer opened a zero-second");
+        assertGt(sealedVotes, 0, "M1: boundary-1 sealed zero");
     }
 
     // M2. The same on a FLAT (auto-relock) position.
@@ -84,6 +84,6 @@ contract O05MoveTest is LockedCurveTestBase {
         vm.prank(alice); veHemi.transferFrom(alice, alice, id);
 
         (uint256 z, ) = _sweep(DEL_A, T + 1, _b(T));
-        assertEq(z, 0, "O05/M2: the owner's self-transfer opened a zero-second on the flat path");
+        assertEq(z, 0, "M2: the owner's self-transfer opened a zero-second on the flat path");
     }
 }

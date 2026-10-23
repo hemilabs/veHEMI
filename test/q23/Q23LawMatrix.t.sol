@@ -8,7 +8,7 @@ import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.s
 import {MockERC20} from "test/mocks/MockERC20.sol";
 
 /**
- * @title Q23 — THE GOVERNANCE DENOMINATOR LAW, DIRECTED MATRIX
+ * @title THE GOVERNANCE DENOMINATOR LAW, DIRECTED MATRIX
  *
  * @notice  L1  (SAFETY, one-sided):
  *              for every past instant `t` and every set `D` of DISTINCT addresses,
@@ -43,7 +43,8 @@ import {MockERC20} from "test/mocks/MockERC20.sol";
  *          legs change). A campaign that samples phases off the hour/SIX_DAYS
  *          grids is STRUCTURALLY unable to land there.
  *
- *          F3 pins the documented near-expiry skip of `increaseAmount`.
+ *          A separate body pins the documented near-expiry skip of
+ *          `increaseAmount`.
  */
 contract Q23LawMatrixTest is Test {
     VeHemi internal veHemi;
@@ -176,9 +177,9 @@ contract Q23LawMatrixTest is Test {
     ///      WHY A MAX AND NOT `E(t-1) - E(t)`. At an instant where the escrow
     ///      curve JUMPS UP (`createLock`, `increaseAmount`) that single
     ///      difference is negative and the bound collapses to 0, so a correct
-    ///      tree would report a spurious violation at `t == tau`. Widening to
-    ///      the nearest clean second in the three preceding it removes those
-    ///      and leaves real residuals untouched.
+    ///      implementation would report a spurious violation at `t == tau`.
+    ///      Widening to the nearest clean second in the three preceding it
+    ///      removes those and leaves real residuals untouched.
     function _l2Bound(uint256 t) internal view returns (uint256 bound) {
         uint256 e0 = veHemi.totalVeHemiSupplyAt(t);
         uint256 e1 = veHemi.totalVeHemiSupplyAt(t - 1);
@@ -446,7 +447,7 @@ contract Q23LawMatrixTest is Test {
             vm.warp(_hourBoundary(endForScan) + 2 hours);
             // `increaseAmount` inside the near-expiry window is not forwarded
             // to the delegatee (documented; see `excludeF3`), so this one cell
-            // is L2-excluded here and pinned by F3.
+            // is L2-excluded here and pinned by its own body below.
             (uint256 pos,) =
                 _scanCell(tau, endForScan, !(excludeF3 && ep == EP_INC_AMT && deferral), tag);
             if (deferral) {
@@ -472,20 +473,20 @@ contract Q23LawMatrixTest is Test {
     }
 
     function _reportL1() internal {
-        emit log_named_uint("Q23 cells executed       ", cellsExecuted);
-        emit log_named_uint("Q23 cells skipped        ", cellsSkipped);
-        emit log_named_uint("Q23 deferral-branch cells", deferralCells);
-        emit log_named_uint("Q23 instants compared    ", instantsCompared);
-        emit log_named_uint("Q23 deferral instants    ", deferralInstants);
-        emit log_named_uint("Q23 L1 violating cells   ", violatingCells);
-        emit log_named_uint("Q23 L1 violating instants", violatingInstants);
-        emit log_named_int("Q23 L1 worst (wei)       ", worstOverall);
+        emit log_named_uint("cells executed           ", cellsExecuted);
+        emit log_named_uint("cells skipped            ", cellsSkipped);
+        emit log_named_uint("deferral-branch cells    ", deferralCells);
+        emit log_named_uint("instants compared        ", instantsCompared);
+        emit log_named_uint("deferral instants        ", deferralInstants);
+        emit log_named_uint("L1 violating cells       ", violatingCells);
+        emit log_named_uint("L1 violating instants    ", violatingInstants);
+        emit log_named_int("L1 worst (wei)           ", worstOverall);
     }
 
     function _reportL2() internal {
-        emit log_named_uint("Q23 L2 instants          ", l2Instants);
-        emit log_named_uint("Q23 L2 violating instants", l2ViolatingInstants);
-        emit log_named_int("Q23 L2 worst over (wei)  ", l2Worst);
+        emit log_named_uint("L2 instants              ", l2Instants);
+        emit log_named_uint("L2 violating instants    ", l2ViolatingInstants);
+        emit log_named_int("L2 worst over (wei)      ", l2Worst);
     }
 
     /// @notice L1 over the whole 9 x 4 grid.
@@ -496,15 +497,15 @@ contract Q23LawMatrixTest is Test {
         _reportL1();
 
         // --- NON-VACUITY FIRST. A matrix that reached nothing must be RED. ---
-        assertGe(cellsExecuted, MIN_CELLS, "Q23 VACUOUS: too few matrix cells actually executed");
-        assertGe(deferralCells, MIN_DEFERRAL_CELLS, "Q23 VACUOUS: the H>=end deferral branch was never entered");
-        assertGe(instantsCompared, MIN_INSTANTS, "Q23 VACUOUS: too few instants compared");
+        assertGe(cellsExecuted, MIN_CELLS, "VACUOUS: too few matrix cells actually executed");
+        assertGe(deferralCells, MIN_DEFERRAL_CELLS, "VACUOUS: the H>=end deferral branch was never entered");
+        assertGe(instantsCompared, MIN_INSTANTS, "VACUOUS: too few instants compared");
         assertGe(
-            deferralInstants, MIN_DEFERRAL_INSTANTS, "Q23 VACUOUS: too few instants sampled inside the deferral branch"
+            deferralInstants, MIN_DEFERRAL_INSTANTS, "VACUOUS: too few instants sampled inside the deferral branch"
         );
 
         // --- THE LAW ---
-        assertEq(violatingInstants, 0, "Q23 L1 VIOLATED: sum getPastVotes > getPastTotalSupply");
+        assertEq(violatingInstants, 0, "L1 VIOLATED: sum getPastVotes > getPastTotalSupply");
     }
 
     /// @notice L2 over `createLock .. forfeit`. Split from the rest purely for
@@ -517,11 +518,11 @@ contract Q23LawMatrixTest is Test {
         epHi = EP_TRANSFER;
         _runRange();
         _reportL2();
-        assertGe(l2Instants, 2000, "Q23 VACUOUS: L2 core never evaluated");
+        assertGe(l2Instants, 2000, "VACUOUS: L2 core never evaluated");
         assertEq(
             l2ViolatingInstants,
             0,
-            "Q23 L2 VIOLATED: the denominator exceeds the delegated votes by more than one second of decay"
+            "L2 VIOLATED: the denominator exceeds the delegated votes by more than one second of decay"
         );
     }
 
@@ -533,15 +534,15 @@ contract Q23LawMatrixTest is Test {
         epHi = N_EP;
         _runRange();
         _reportL2();
-        assertGe(l2Instants, 2000, "Q23 VACUOUS: L2 transfer/flat never evaluated");
+        assertGe(l2Instants, 2000, "VACUOUS: L2 transfer/flat never evaluated");
         assertEq(
             l2ViolatingInstants,
             0,
-            "Q23 L2 VIOLATED: the denominator exceeds the delegated votes by more than one second of decay"
+            "L2 VIOLATED: the denominator exceeds the delegated votes by more than one second of decay"
         );
     }
 
-    /// @notice F3 — DOCUMENTED BEHAVIOUR: the near-expiry skip of
+    /// @notice DOCUMENTED BEHAVIOUR: the near-expiry skip of
     ///         `increaseAmount`.
     ///
     ///         An `increaseAmount` on an unarmed position in its final
@@ -559,13 +560,13 @@ contract Q23LawMatrixTest is Test {
         uint256 end = veHemi.getLockedBalance(id).end;
         uint256 window = ((end - 1) % 3600) + 1;
         uint256 tau = end - window; // the first second of the window
-        assertTrue(_hourBoundary(tau) >= end, "F3 fixture: tau is not in the near-expiry window");
-        assertTrue(_hourBoundary(tau - 1) < end, "F3 fixture: tau is not the first second of the window");
-        assertTrue(tau > block.timestamp, "F3 fixture: tau in the past");
+        assertTrue(_hourBoundary(tau) >= end, "fixture: tau is not in the near-expiry window");
+        assertTrue(_hourBoundary(tau - 1) < end, "fixture: tau is not the first second of the window");
+        assertTrue(tau > block.timestamp, "fixture: tau in the past");
 
         vm.warp(tau);
         (address d0, , , , ) = del.delegations(id);
-        assertEq(d0, alice, "F3 fixture: the position is not self-delegated");
+        assertEq(d0, alice, "fixture: the position is not self-delegated");
         bytes32 recordBefore = _recordHash(id);
         uint256 votesBefore = del.getVotes(alice);
 
@@ -578,23 +579,23 @@ contract Q23LawMatrixTest is Test {
 
         // (1) The skip is announced, once, for this position, by VeHemi.
         assertEq(_skipEvents(vm.getRecordedLogs(), id), 1,
-            "F3: the near-expiry increaseAmount did not emit DelegationUpdateSkipped once");
-        assertEq(uint256(uint128(veHemi.getLockedBalance(id).amount)), 2 * AMT, "F3: the escrow did not take the deposit");
+            "the near-expiry increaseAmount did not emit DelegationUpdateSkipped once");
+        assertEq(uint256(uint128(veHemi.getLockedBalance(id).amount)), 2 * AMT, "the escrow did not take the deposit");
 
         // (2) The delegatee is unchanged: same record (delegatee, end, bias,
         //     amount, slope), same votes.
-        assertEq(_recordHash(id), recordBefore, "F3: the delegation record changed");
-        assertEq(del.getVotes(alice), votesBefore, "F3: the delegatee's votes changed");
+        assertEq(_recordHash(id), recordBefore, "the delegation record changed");
+        assertEq(del.getVotes(alice), votesBefore, "the delegatee's votes changed");
 
         // (3) The weight left out is the added amount's remaining decay:
         //     positive inside the window, at most `addedSlope * 3600`, zero at `end`.
         vm.warp(_hourBoundary(end) + 2 hours);
         uint256 worstGap = _worstSkippedWeight(id, tau + 1, end);
-        emit log_named_uint("F3 window (s)               ", window);
-        emit log_named_uint("F3 worst skipped weight     ", worstGap);
-        assertGt(worstGap, 0, "F3 VACUOUS: no weight was left out -- the update was forwarded");
-        assertEq(veHemi.balanceOfNFTAt(id, end), 0, "F3: the escrow weight is not zero at end");
-        assertEq(del.getPastVotes(alice, end), 0, "F3: the delegatee's weight is not zero at end");
+        emit log_named_uint("near-expiry window (s)      ", window);
+        emit log_named_uint("worst skipped weight        ", worstGap);
+        assertGt(worstGap, 0, "VACUOUS: no weight was left out -- the update was forwarded");
+        assertEq(veHemi.balanceOfNFTAt(id, end), 0, "the escrow weight is not zero at end");
+        assertEq(del.getPastVotes(alice, end), 0, "the delegatee's weight is not zero at end");
     }
 
     function _recordHash(uint256 id_) internal view returns (bytes32) {
@@ -606,7 +607,7 @@ contract Q23LawMatrixTest is Test {
         bytes32 tSkipped = keccak256("DelegationUpdateSkipped(uint256)");
         for (uint256 i; i < logs_.length; ++i) {
             if (logs_[i].emitter == address(veHemi) && logs_[i].topics.length > 1 && logs_[i].topics[0] == tSkipped) {
-                assertEq(uint256(logs_[i].topics[1]), id_, "F3: DelegationUpdateSkipped names another position");
+                assertEq(uint256(logs_[i].topics[1]), id_, "DelegationUpdateSkipped names another position");
                 ++n;
             }
         }
@@ -622,12 +623,12 @@ contract Q23LawMatrixTest is Test {
         for (uint256 t = from_; t <= to_; t += 60) {
             uint256 escrow = veHemi.balanceOfNFTAt(id_, t);
             uint256 v = del.getPastVotes(alice, t);
-            assertGe(escrow, v, "F3: the delegatee holds more than the escrow");
+            assertGe(escrow, v, "the delegatee holds more than the escrow");
             uint256 gap = escrow - v;
             if (gap > worst) worst = gap;
-            assertLe(gap, bound, "F3: the skipped weight exceeds addedSlope * 3600");
+            assertLe(gap, bound, "the skipped weight exceeds addedSlope * 3600");
             assertLe(del.getPastTotalSupply(t) - v, bound + oneSecond,
-                "F3: the denominator residual exceeds addedSlope * 3600");
+                "the denominator residual exceeds addedSlope * 3600");
         }
     }
 }

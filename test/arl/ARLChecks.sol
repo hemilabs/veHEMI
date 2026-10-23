@@ -83,16 +83,16 @@ contract ARLChecks {
                 handler.shadows(i);
             if (!alive) continue;
             IVeHemi.LockedBalance memory lb = veHemi.getLockedBalance(id);
-            vm.assertEq(int256(lb.amount), int256(amount), "P1: locked.amount != authored");
-            vm.assertEq(uint256(lb.end), uint256(end), "P1: locked.end != authored");
-            vm.assertEq(veHemi.transferableAfter(id), uint256(ta), "P1: transferableAfter != authored");
-            vm.assertEq(veHemi.forfeitable(id), forf, "P1: forfeitable != authored");
-            vm.assertEq(uint256(veHemi.autoRelockRemaining(id)), uint256(rem), "P1: autoRelockRemaining != authored");
+            vm.assertEq(int256(lb.amount), int256(amount), "locked.amount != authored");
+            vm.assertEq(uint256(lb.end), uint256(end), "locked.end != authored");
+            vm.assertEq(veHemi.transferableAfter(id), uint256(ta), "transferableAfter != authored");
+            vm.assertEq(veHemi.forfeitable(id), forf, "forfeitable != authored");
+            vm.assertEq(uint256(veHemi.autoRelockRemaining(id)), uint256(rem), "autoRelockRemaining != authored");
             if (rem != 0) {
-                vm.assertGt(uint256(veHemi.autoRelockRefreshedAt(id)), 0, "P1: refresh stamp unset on a flat position");
-                vm.assertLe(uint256(veHemi.autoRelockRefreshedAt(id)), block.timestamp, "P1: refresh stamp in the future");
+                vm.assertGt(uint256(veHemi.autoRelockRefreshedAt(id)), 0, "refresh stamp unset on a flat position");
+                vm.assertLe(uint256(veHemi.autoRelockRefreshedAt(id)), block.timestamp, "refresh stamp in the future");
             } else {
-                vm.assertEq(uint256(veHemi.autoRelockRefreshedAt(id)), 0, "P1: refresh stamp survived retirement");
+                vm.assertEq(uint256(veHemi.autoRelockRefreshedAt(id)), 0, "refresh stamp survived retirement");
             }
         }
     }

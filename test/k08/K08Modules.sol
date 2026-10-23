@@ -3,7 +3,7 @@ pragma solidity ^0.8.29;
 
 import {IVeHemiVoteDelegation} from "../../src/interfaces/IVeHemiVoteDelegation.sol";
 
-/// @title  K08 module shapes -- broken delegation modules, one behaviour each.
+/// @title  Broken delegation modules, one behaviour each.
 ///
 /// @notice A module that reverts on reads AND writes (`RevertingVoteDelegation`)
 ///         takes the tolerated `catch` branch and never reaches the

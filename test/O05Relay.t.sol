@@ -52,12 +52,12 @@ contract O05RelayTest is LockedCurveTestBase {
                 break;
             }
         }
-        require(E != 0, "C3: no duration with the wanted end offset");
-        emit log_named_uint("C3 lock end E                   ", E);
-        emit log_named_uint("C3 E mod 1 hour                 ", E % 1 hours);
+        require(E != 0, "no duration with the wanted end offset");
+        emit log_named_uint("lock end E                      ", E);
+        emit log_named_uint("E mod 1 hour                    ", E % 1 hours);
 
         uint256 T = E - 3960;                 // the START of the hour whose boundary is E-360
-        assertEq(_b(T), E - 360, "C3: construction");
+        assertEq(_b(T), E - 360, "construction");
         vm.warp(T);
 
         vm.recordLogs();
@@ -75,16 +75,16 @@ contract O05RelayTest is LockedCurveTestBase {
         vm.warp(E - 360);
         uint256 atBoundary = delegation.getVotes(DEL_A);
 
-        emit log_named_uint("C3 delegation made at T         ", T);
-        emit log_named_uint("C3 hour boundary                ", E - 360);
-        emit log_named_uint("C3 FIRST effective instant      ", effective);
-        emit log_named_uint("C3 RELAYED newVotes             ", relayed);
-        emit log_named_uint("C3 ACTUAL votes at that instant ", actual);
-        emit log_named_uint("C3 getVotes at the boundary     ", atBoundary);
-        emit log_named_uint("C3 understatement (wei)         ", actual > relayed ? actual - relayed : 0);
-        emit log_named_uint("C3 relayed as % of actual       ", actual == 0 ? 0 : (relayed * 100) / actual);
+        emit log_named_uint("delegation made at T            ", T);
+        emit log_named_uint("hour boundary                   ", E - 360);
+        emit log_named_uint("FIRST effective instant         ", effective);
+        emit log_named_uint("RELAYED newVotes                ", relayed);
+        emit log_named_uint("ACTUAL votes at that instant    ", actual);
+        emit log_named_uint("getVotes at the boundary        ", atBoundary);
+        emit log_named_uint("understatement (wei)            ", actual > relayed ? actual - relayed : 0);
+        emit log_named_uint("relayed as % of actual          ", actual == 0 ? 0 : (relayed * 100) / actual);
 
         assertEq(relayed, actual,
-            "O05/C3: the relayed newVotes must equal the votes at the instant the change becomes effective");
+            "the relayed newVotes must equal the votes at the instant the change becomes effective");
     }
 }

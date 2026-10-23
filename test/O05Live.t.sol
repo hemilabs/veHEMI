@@ -7,12 +7,12 @@ import "./LockedCurveTestBase.sol";
 /// @notice What `t+1` delegation dating leaves in place, asserted:
 ///         a same-block flash delegation is unreadable (B2); a transfer
 ///         credits the recipient from the next second, so a one-second hold
-///         reaches any snapshot instant (B3, accepted); the emitted
+///         reaches any snapshot instant (B3, by design); the emitted
 ///         `DelegateVotesChanged.newVotes` equals the votes at the instant the
 ///         change takes effect (C1); the `forfeit` phantom lasts at most one
 ///         second (D1); and on an armed non-transferable position
-///         `supplyBreakdown().locked` exceeds `total` by at most the V-MEAN
-///         half-bucket term (F1).
+///         `supplyBreakdown().locked` exceeds `total` by at most the
+///         bucket-mean half-bucket term (F1).
 contract O05LiveTest is LockedCurveTestBase {
     address internal constant MALLORY  = address(0xBAD0);
     address internal constant LENDER   = address(0x1EDE);
@@ -47,11 +47,11 @@ contract O05LiveTest is LockedCurveTestBase {
         emit log_named_uint("B2 getVotes in the SAME block   ", liveSameBlock);
         emit log_named_uint("B2 getPastVotes(T) same block   ", pastSameBlock);
 
-        assertEq(liveSameBlock, 0, "O05/B2: same-block flash delegation is unreadable");
-        assertEq(pastSameBlock, 0, "O05/B2: and unreadable historically at T");
+        assertEq(liveSameBlock, 0, "B2: same-block flash delegation is unreadable");
+        assertEq(pastSameBlock, 0, "B2: and unreadable historically at T");
     }
 
-    // B3. A ONE-SECOND HOLD REACHES EVERY SNAPSHOT INSTANT (ACCEPTED).
+    // B3. A ONE-SECOND HOLD REACHES EVERY SNAPSHOT INSTANT (BY DESIGN).
     //   For 11 snapshot instants spread across one bucket, acquiring the
     //   position one second before the snapshot already credits the new
     //   holder's delegatee at the snapshot: the transfer is booked at t+1.
@@ -82,7 +82,7 @@ contract O05LiveTest is LockedCurveTestBase {
             if (hold > worst) worst = hold;
         }
 
-        assertLe(worst, 1, "O05/B3: some snapshot instant needs more than a one-second hold");
+        assertLe(worst, 1, "B3: some snapshot instant needs more than a one-second hold");
     }
 
     // =====================================================================
@@ -134,7 +134,7 @@ contract O05LiveTest is LockedCurveTestBase {
             emittedNewVotes > actualAtEffective ? emittedNewVotes - actualAtEffective : actualAtEffective - emittedNewVotes);
 
         assertEq(emittedNewVotes, actualAtEffective,
-            "O05/C1: the relayed newVotes must equal the votes at the instant the change becomes effective");
+            "C1: the relayed newVotes must equal the votes at the instant the change becomes effective");
     }
 
     // =====================================================================
@@ -167,13 +167,13 @@ contract O05LiveTest is LockedCurveTestBase {
         emit log_named_uint("D1 phantom seconds (votes > 0,  ", phantom);
         emit log_named_uint("   escrow burned)               ", 0);
 
-        assertLe(phantom, 1, "O05/D1: the forfeit phantom is at most ONE second");
+        assertLe(phantom, 1, "D1: the forfeit phantom is at most ONE second");
     }
 
     // =====================================================================
     // F1. `supplyBreakdown` ON AN ARMED NON-TRANSFERABLE POSITION.
     //     The position sits in the locked subcurve, so the breakdown is not
-    //     vacuous. The global curve carries the flat V-MEAN level
+    //     vacuous. The global curve carries the bucket-mean flat level
     //     `slope * (R - SIX_DAYS/2)` while the locked subcurve decays toward
     //     `transferableAfter`, so in the first half of the arming bucket
     //     `locked` exceeds `total`, by at most `slope * SIX_DAYS / 2`, and
@@ -200,10 +200,10 @@ contract O05LiveTest is LockedCurveTestBase {
             assertEq(forfeitable_, 0, "F1: no forfeitable position exists");
             if (locked_ > total) {
                 ++excessSamples;
-                assertLe(locked_ - total, bound, "O05/F1: locked exceeds total by more than slope * SIX_DAYS / 2");
-                assertEq(transferable, 0, "O05/F1: transferable must saturate when locked > total");
+                assertLe(locked_ - total, bound, "F1: locked exceeds total by more than slope * SIX_DAYS / 2");
+                assertEq(transferable, 0, "F1: transferable must saturate when locked > total");
             } else {
-                assertEq(transferable, total - locked_, "O05/F1: transferable != total - locked");
+                assertEq(transferable, total - locked_, "F1: transferable != total - locked");
             }
         }
         assertGt(excessSamples, 0, "premise: no sample exercised locked > total");

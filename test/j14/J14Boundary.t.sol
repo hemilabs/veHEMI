@@ -3,7 +3,7 @@ pragma solidity ^0.8.29;
 
 import "../LockedCurveTestBase.sol";
 
-/// @title J14 -- past supply is immutable across a bucket-boundary exit.
+/// @title Past supply is immutable across a bucket-boundary exit.
 /// @notice Forces `block.timestamp % SIX_DAYS == 0` AND
 ///         `oldEnd_ == block.timestamp` at `VeHemiCurveLib._adjustSlopeChange`
 ///         (a withdraw or transfer at exactly `lock.end`, on the grid) and

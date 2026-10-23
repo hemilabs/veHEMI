@@ -2,7 +2,7 @@
 pragma solidity ^0.8.29;
 
 // ============================================================================
-// I03 -- the flat (armed) forfeitable position.
+// The flat (armed) forfeitable position.
 // ----------------------------------------------------------------------------
 // Auto-relock is invisible to the subcurves: a flat forfeitable position decays
 // out of the locked and forfeitable subcurves on its manual ramp to
@@ -56,7 +56,7 @@ contract I03ForfeitableTest is TwinOracle {
 
     // ====================================================================== I1
     /// @notice A FLAT FORFEITABLE POSITION IS EXACT IN BOTH SUBCURVES.
-    /// @dev The shipped rule is that auto-relock is INVISIBLE to the
+    /// @dev By design, auto-relock is INVISIBLE to the
     ///      subcurves: a flat position decays out of them at
     ///      `min(lock.end, transferableAfter)` exactly as its manual twin does.
     ///      Both subcurves must therefore read `slope * (ta - now)` to the wei,
@@ -84,7 +84,8 @@ contract I03ForfeitableTest is TwinOracle {
             // ALL FOUR supplyBreakdown SLICES. This position is the ONLY one
             // in the universe, so `total` is its own flat weight, both subcurve
             // slices are `want`, and `transferable` is the saturating
-            // complement (zero for `off < SIX_DAYS/2` under V-MEAN).
+            // complement (zero for `off < SIX_DAYS/2` at the bucket-mean flat
+            // level).
             (uint256 bTot, uint256 bLk, uint256 bFo, uint256 bTr) = X.ve.supplyBreakdown();
             assertEq(bTot, X.ve.balanceOfNFT(id), "I1 slice 1: total != the position's own flat weight");
             assertEq(bLk, want, "I1 slice 2: breakdown.locked_ not exact");
@@ -95,7 +96,7 @@ contract I03ForfeitableTest is TwinOracle {
 
     // ====================================================================== I2
     /// @notice ALL FOUR supplyBreakdown SLICES AGREE WITH THE DEDICATED VIEWS.
-    /// @dev Under V-MEAN `locked_ > total` occurs in ordinary operation (the
+    /// @dev At the bucket-mean level `locked_ > total` occurs routinely (the
     ///      flat member's half-bucket gap). A clamp on `locked_` or
     ///      `forfeitable_` inside `supplyBreakdown` would then make it disagree
     ///      with the dedicated views; this body builds exactly that population.
@@ -103,9 +104,9 @@ contract I03ForfeitableTest is TwinOracle {
         // NLONG: the phase walk consumes one whole bucket per iteration, and
         // `enableAutoRelock` refuses `R < 2 * SIX_DAYS`, so the fixture must
         // outlive 12 buckets.
-        // 4x so the flat member's V-MEAN half-bucket gap (slope*SIX_DAYS/2)
-        // EXCEEDS the transferable member's whole weight; otherwise `total`
-        // stays above `locked_`.
+        // 4x so the flat member's half-bucket gap at the bucket-mean level
+        // (slope*SIX_DAYS/2) EXCEEDS the transferable member's whole weight;
+        // otherwise `total` stays above `locked_`.
         uint256 idF = _mintForf(X, ALICE, 4 * AMT, NLONG);
         _mintLockedOnly(X, BOB, AMT / 2, NLONG + 3);
         X.hemi.mint(CAROL, AMT);

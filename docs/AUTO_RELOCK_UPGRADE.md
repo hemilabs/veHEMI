@@ -179,7 +179,7 @@ for an in-window rollback. A batch that executes at B − 1 (timestamp ≡ 3599 
       HEMI_RPC_URL=<archive RPC> R31_FORK_BLOCK=<signing block> forge test --match-path 'test/r31/*' --threads 1 -vv
       ```
       Write the block as digits only; every forked `test/r31` body (all but the
-      ten `R31Window` bodies, which run without a fork) logs `R31 fork block`,
+      ten `R31Window` bodies, which run without a fork) logs `fork block`,
       which must equal the signing block. Both must pass with no failure, and
       the forge summary of `test/r31` must read 0 skipped: a skip is a fork
       premise that did not hold at that block (another chain, or a block after
@@ -312,7 +312,7 @@ It refuses in these cases:
 
 A separate earlier VeHemi upgrade with no arm, or a later one with no dropped
 update, is a warning. The run then ends `POST-EXECUTION CHECK: PASS WITH
-WARNINGS`: treat that as not the reviewed one-MultiSend shape. After a pass
+WARNINGS`: treat that as not the expected one-MultiSend shape. After a pass
 (with or without warnings) the check refreshes `deployments/hemi/VeHemi.json`
 and `VeHemiVoteDelegation.json` (local files only). Commit the refreshed files.
 
@@ -349,14 +349,15 @@ re-baseline its append assertions
 deployed / 29 current VeHemi entries and 9 / 12 VVD entries; the re-extracted
 deployed fixtures hold 29 and 12). Land it promptly: until it lands no frozen
 fixture covers VeHemi V3 or VVD V4, and only the hard-coded pins
-(`StorageLayoutGolden.t.sol`, the anchor's append test, `G08Zero` Z7) guard
-against deleting or reordering one of their declarations, which would move live
-state (VeHemi slots 64 and 65, VVD slots 100 and 101). Until it lands, CI's
-Hemi-fork step fails at `test_AnchorStillDescribesTheLiveImplementation`, by
-design. In the same pull request retire the nightly deploy rehearsal, or point
-it at a scratch clone of the reviewed commit: once the proposing run's records
-(section 5) reach the default branch it fails every night (section 4); if they
-reach it before this pull request, retire or repoint it then.
+(`StorageLayoutGolden.t.sol`, the anchor's append test, and the slot-65 runtime
+test in `G08Zero.t.sol`) guard against deleting or reordering one of their
+declarations, which would move live state (VeHemi slots 64 and 65, VVD slots 100
+and 101). Until it lands, CI's Hemi-fork step fails at
+`test_AnchorStillDescribesTheLiveImplementation`, by design. In the same pull
+request retire the nightly deploy rehearsal, or point it at a scratch clone of
+the reviewed commit: once the proposing run's records (section 5) reach the
+default branch it fails every night (section 4); if they reach it before this
+pull request, retire or repoint it then.
 
 ## 8. Rollback limits
 

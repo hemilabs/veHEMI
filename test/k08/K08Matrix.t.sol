@@ -7,7 +7,7 @@ import {RevertingVoteDelegation} from "../mocks/RevertingVoteDelegation.sol";
 import {LyingVoteDelegation} from "../mocks/LyingVoteDelegation.sol";
 import "./K08Modules.sol";
 
-/// @title  K08 — a broken delegation module cannot trap principal, over a
+/// @title  A broken delegation module cannot trap principal, over a
 ///         matrix of broken-module shapes.
 ///
 /// @notice `test_F21_C5_brokenDelegationCannotLockFunds` and `test_J17_H5_...`
@@ -138,31 +138,31 @@ contract K08Matrix is J11Base {
         // (A) the disable commits, the REAL module still books the flat term
         //     (the installed module never reached it), and the transaction
         //     says so.
-        assertTrue(committed, string.concat("K08/A ", name_, ": the holder's disable was refused"));
-        assertEq(veHemi.autoRelockRemaining(id), 0, string.concat("K08/A ", name_, ": disable left the flag set"));
+        assertTrue(committed, string.concat("(A) ", name_, ": the holder's disable was refused"));
+        assertEq(veHemi.autoRelockRemaining(id), 0, string.concat("(A) ", name_, ": disable left the flag set"));
         assertEq(delegation.getVotes(dele), booked, string.concat("probe ", name_, ": the real module's booking moved"));
         assertTrue(_announced(logs),
-            string.concat("K08/A ", name_, ": SILENT phantom -- retirement committed unverified with no event"));
+            string.concat("(A) ", name_, ": SILENT phantom -- retirement committed unverified with no event"));
 
         // (B) the principal comes home without the owner.
         uint256 got = _recoverPrincipal(id, attacker);
         emit log_named_uint(string.concat("  ", name_, " recovered"), got);
         emit log_named_uint(string.concat("  ", name_, " residual phantom"), delegation.getVotes(dele));
         assertEq(got, PRINCIPAL,
-            string.concat("K08/B ", name_, ": PRINCIPAL TRAPPED -- no owner-independent exit"));
+            string.concat("(B) ", name_, ": PRINCIPAL TRAPPED -- no owner-independent exit"));
     }
 
     // ==================================================================
     // THE CELLS
     // ==================================================================
 
-    /// B1 — reverts on everything (the `C5` / `H5` shape).
+    /// B1 — reverts on everything (`RevertingVoteDelegation`).
     function test_K08_B1_revertsOnEverything() public {
         _cell("B1 revert-all", address(new RevertingVoteDelegation()), false);
     }
 
     /// B2 — reverts on WRITE, succeeds on READ: the read-back sees a
-    ///      still-flat record, which `C5`'s shape never reaches.
+    ///      still-flat record, which B1 never reaches.
     function test_K08_B2_writeFailsReadSucceeds() public {
         _cell("B2 read-ok/write-revert", address(new K08HalfBroken()), true);
     }

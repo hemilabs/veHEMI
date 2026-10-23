@@ -8,7 +8,7 @@ import {IVeHemiVoteDelegation} from "../../src/interfaces/IVeHemiVoteDelegation.
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import {MockERC20} from "../mocks/MockERC20.sol";
 
-/// @notice Q22. NO DOUBLE SUBTRACTION in a lock's final hour.
+/// @notice NO DOUBLE SUBTRACTION in a lock's final hour.
 ///
 ///   A retirement inside the window `imm < end <= H` (`imm =
 ///   block.timestamp + 1`, `H` the next hour boundary) decrements the

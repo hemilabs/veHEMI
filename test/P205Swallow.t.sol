@@ -9,7 +9,7 @@ import {VeHemiVoteDelegation} from "../src/VeHemiVoteDelegation.sol";
  * @notice A `CheckpointLayoutViolated` revert inside `VeHemi._delegate`'s try/catch is
  *         swallowed by design -- FAIL-CLOSED: the corrupt array is not written through,
  *         the delegatee's represented weight does not move, and the NFT operation still
- *         completes -- and the swallow is ATTRIBUTABLE: next to the anonymous
+ *         completes -- and the swallow is ATTRIBUTABLE: next to the reason-less
  *         `DelegationUpdateFailed`, VeHemi emits `DelegationUpdateFailedReason` with the
  *         selector of the eaten revert. Principal stays recoverable.
  *         The corrupt array is written with `vm.store` (layout clause (2) broken: a
@@ -54,7 +54,8 @@ contract P205SwallowTest is LockedCurveTestBase {
                 vm.load(address(delegation), bytes32(_dataSlot(d) + 2 * from + k)));
         }
     }
-    /// A layout-compliant `[live, pending]` base, then the L2a corruption.
+    /// A layout-compliant `[live, pending]` base, then a second future element
+    /// (clause (2) of the layout invariant on `_applyToCheckpoints` broken).
     function _armL2a() internal returns (uint256 idA) {
         vm.warp(((block.timestamp / SIX_DAYS) + 2) * SIX_DAYS + 1);
         idA = _mk(alice, 500 ether, 7 * SIX_DAYS);
@@ -68,7 +69,7 @@ contract P205SwallowTest is LockedCurveTestBase {
         _copyEl(bob, n - 1, n);
         _setLen(bob, n + 1);
         _setTs(bob, n, B);
-        _setTs(bob, _len(bob) - 2, B - 1);   // L2a: a SECOND future element
+        _setTs(bob, _len(bob) - 2, B - 1);   // clause (2) broken: a SECOND future element
     }
 
     // ======================================================= ATTRIBUTION
@@ -87,9 +88,9 @@ contract P205SwallowTest is LockedCurveTestBase {
         assertEq(veHemi.ownerOf(idA), charlie, "premise: the NFT still moved - this is still a swallow");
     }
 
-    /// The anonymous event is still emitted -- indexers that watch it keep
-    /// working. VeHemi emits it immediately before `DelegationUpdateFailedReason`
-    /// (this body pins the anonymous event, not the order).
+    /// The reason-less `DelegationUpdateFailed` is emitted as well, so indexers
+    /// that watch it see the failure. VeHemi emits it immediately before
+    /// `DelegationUpdateFailedReason`; this body pins that event, not the order.
     function test_P205_SW_theOldEventStillFires() public {
         uint256 idA = _armL2a();
         vm.expectEmit(true, false, false, false, address(veHemi));
@@ -123,11 +124,12 @@ contract P205SwallowTest is LockedCurveTestBase {
         uint256 before_ = hemi.balanceOf(alice);
         vm.warp(veHemi.getLockedBalance(idA).end + 1);
         vm.prank(alice); veHemi.withdraw(idA);
-        assertGt(hemi.balanceOf(alice), before_, "K08 law B: principal must be recoverable with no owner action");
+        assertGt(hemi.balanceOf(alice), before_, "principal must be recoverable with no owner action");
     }
 
-    /// Control: on an UNCORRUPTED array the new event must NOT fire, so the
-    /// bodies above are not merely observing "transferFrom always emits".
+    /// Control: on an UNCORRUPTED array `DelegationUpdateFailedReason` must
+    /// NOT fire, so the bodies above are not merely observing
+    /// "transferFrom always emits".
     function test_P205_SW_control_noEventOnCleanArray() public {
         vm.warp(((block.timestamp / SIX_DAYS) + 2) * SIX_DAYS + 1);
         uint256 idA = _mk(alice, 500 ether, 7 * SIX_DAYS);

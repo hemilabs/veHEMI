@@ -2,11 +2,11 @@
 pragma solidity ^0.8.29;
 
 // ============================================================================
-// F07 — AN ABANDONED ARMED POSITION STAYS FLAT
+// AN ABANDONED ARMED POSITION STAYS FLAT
 // ----------------------------------------------------------------------------
 // A manual twin whose owner walks away decays to zero N buckets after its last
-// extension. An armed (flat) position whose owner walks away keeps its V-MEAN
-// level for ever: nothing in the curve retires it. This is why the
+// extension. An armed (flat) position whose owner walks away keeps its
+// bucket-mean level for ever: nothing in the curve retires it. This is why the
 // permissionless `retireStaleAutoRelock` exists (covered in F07Retire.t.sol).
 // ============================================================================
 
@@ -33,10 +33,10 @@ contract F07DefectTest is TwinOracle {
 
     function _driveCandidate(uint256) internal override {}
 
-    // =================================================================== G1
+    // ===================================================================
     /// @notice Both owners vanish at bucket 3. The twin is dead at bucket 9
-    ///         (3 + N). The flat position still holds its V-MEAN level at
-    ///         bucket 400, and it is the whole supply of its universe.
+    ///         (3 + N). The flat position still holds its bucket-mean level
+    ///         at bucket 400, and it is the whole supply of its universe.
     function test_G1_abandonment_gap() public {
         // 3 buckets of normal life, both extending / flat.
         for (uint256 k = 1; k <= 3; ++k) step(t0 + k * SIX_DAYS);
@@ -59,7 +59,7 @@ contract F07DefectTest is TwinOracle {
         }
         assertEq(firstTwinZero, 9, "twin must die at 3+N");
         assertEq(firstFlatZero, 0, "abandoned flat position decayed to zero");
-        assertEq(X.ve.balanceOfNFT(positions[xi].tokenId), W, "flat not at the V-MEAN level at +400");
+        assertEq(X.ve.balanceOfNFT(positions[xi].tokenId), W, "flat not at the bucket-mean level at +400");
         assertEq(X.ve.totalVeHemiSupply(), W, "supply != the one flat position");
         assertEq(M.ve.totalVeHemiSupply(), 0, "twin universe supply must be 0");
     }

@@ -4,7 +4,7 @@ pragma solidity ^0.8.29;
 import "../j11/J11Base.sol";
 import {IVeHemiVoteDelegation} from "../../src/interfaces/IVeHemiVoteDelegation.sol";
 
-/// @title  K08 — an HONEST `voteDelegation.delegate` stays below the ceiling.
+/// @title  An HONEST `voteDelegation.delegate` stays below the ceiling.
 /// @notice VeHemi calls the delegation module with `DELEGATION_GAS_CEILING`
 ///         (8,000,000) and treats a module that consumes all of it as broken,
 ///         not starved. That is only safe if an honest module never needs the

@@ -39,7 +39,7 @@ contract K08RealPassthrough is IVeHemiVoteDelegation {
     function migrationFinalized() external pure override returns (bool) { return false; }
 }
 
-/// @title  K08K03 -- a readable, write-failing delegation module cannot trap a
+/// @title  A readable, write-failing delegation module cannot trap a
 ///         flat position's principal.
 /// @notice With a module that answers `delegation()` (still flat) but refuses
 ///         `delegate()`, the holder's `disableAutoRelock` commits, `withdraw`
@@ -62,14 +62,14 @@ contract K08K03 is J11Base {
 
         // 1. the holder's own disable COMMITS.
         disable(attacker, id);
-        assertEq(veHemi.autoRelockRemaining(id), 0, "K03 H-2: disable still refused");
+        assertEq(veHemi.autoRelockRemaining(id), 0, "a write-failing module blocked the holder's disable");
 
         // 2. and the principal comes home, with no admin action anywhere.
         vm.warp(uint256(veHemi.getLockedBalance(id).end) + 1);
         uint256 before = hemi.balanceOf(attacker);
         vm.prank(attacker);
         veHemi.withdraw(id);
-        assertEq(hemi.balanceOf(attacker) - before, 100 ether, "K03 H-2: principal still trapped");
+        assertEq(hemi.balanceOf(attacker) - before, 100 ether, "a write-failing module trapped the principal");
     }
 
     /// @dev The PERMISSIONLESS keeper remedy must work too, since it is the
@@ -83,7 +83,7 @@ contract K08K03 is J11Base {
         vm.warp(veHemi.autoRelockStaleAt(id));
         vm.prank(stranger);
         veHemi.retireStaleAutoRelock(id);
-        assertEq(veHemi.autoRelockRemaining(id), 0, "K03 H-2: permissionless retire still refused");
+        assertEq(veHemi.autoRelockRemaining(id), 0, "a write-failing module blocked the permissionless retire");
     }
 
     /// @dev The scenario is not a hostile owner --
@@ -130,14 +130,14 @@ contract K08K03 is J11Base {
 
         // exit 1 -- the holder's own disable
         disable(attacker, id);
-        assertEq(veHemi.autoRelockRemaining(id), 0, "K12: disable still closed");
+        assertEq(veHemi.autoRelockRemaining(id), 0, "the read-passthrough module blocked the holder's disable");
 
         // exit 2 -- withdraw
         vm.warp(uint256(veHemi.getLockedBalance(id).end) + 1);
         uint256 before = hemi.balanceOf(attacker);
         vm.prank(attacker);
         veHemi.withdraw(id);
-        assertEq(hemi.balanceOf(attacker) - before, 1_000 ether, "K12: principal still trapped");
+        assertEq(hemi.balanceOf(attacker) - before, 1_000 ether, "the read-passthrough module trapped the principal");
     }
 
     /// @dev The permissionless leg, on the same passthrough module.
@@ -149,7 +149,8 @@ contract K08K03 is J11Base {
         vm.warp(veHemi.autoRelockStaleAt(id) + 5 * 365 days);
         vm.prank(stranger);
         veHemi.retireStaleAutoRelock(id);
-        assertEq(veHemi.autoRelockRemaining(id), 0, "K12: permissionless retire still closed at +5y");
+        assertEq(veHemi.autoRelockRemaining(id), 0,
+            "the read-passthrough module blocked the permissionless retire at staleAt + 5y");
     }
 
     /// @dev DECAYING control: it must still return the full principal. If this

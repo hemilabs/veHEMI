@@ -2,7 +2,8 @@
 pragma solidity ^0.8.29;
 
 // ============================================================================
-// I01 -- the weight step of `enableAutoRelock` under V-MEAN.
+// The weight step of `enableAutoRelock` onto the bucket-mean flat level
+// `slope * (R - SIX_DAYS/2)`.
 // ----------------------------------------------------------------------------
 // Enabling at phase `off` inside a SIX_DAYS bucket moves the weight by the
 // signed closed form `slope * (off - SIX_DAYS/2)`: a LOSS in the first half of
@@ -43,16 +44,16 @@ contract I01EnableTest is TwinOracle {
 
         // R is the whole-bucket remainder of the floor-snapped creation end.
         assertEq(uint256(X.ve.autoRelockRemaining(id)), n * SIX_DAYS, "E1 R != n buckets");
-        assertEq(after_, meanLevelOf(AMT, n), "E1 level is not V-MEAN");
+        assertEq(after_, meanLevelOf(AMT, n), "E1 level is not the bucket-mean flat level");
 
         uint256 rise = slopeOf(AMT) * off;
         uint256 half = slopeOf(AMT) * (SIX_DAYS / 2);
         if (rise >= half) {
-            assertEq(after_ - before_, rise - half, "E1 V-MEAN enable RISE != slope*off - slope*S/2");
+            assertEq(after_ - before_, rise - half, "E1 enable RISE onto the bucket-mean level != slope*off - slope*S/2");
             return 0;
         }
         loss = before_ - after_;
-        assertEq(loss, half - rise, "E1 V-MEAN enable LOSS != slope*S/2 - slope*off");
+        assertEq(loss, half - rise, "E1 enable LOSS onto the bucket-mean level != slope*S/2 - slope*off");
         assertLe(loss, half, "E1 loss exceeded slope * SIX_DAYS/2");   // THE BOUND
         uint256 bps = (loss * 10_000) / before_;
         // The tightest closed bound on the RELATIVE loss:
@@ -113,8 +114,8 @@ contract I01EnableTest is TwinOracle {
     /// @notice ZERO-SUM OVER A BUCKET -- the reason the loss is acceptable, and
     ///         the reason a compensating mint is not needed.
     ///
-    /// @dev SAMPLED AT MIDPOINTS, and that is not cosmetic. The V-MEAN step is
-    ///      `slope*(off - S/2)`, so a LEFT-ENDPOINT 12-sample sum over
+    /// @dev SAMPLED AT MIDPOINTS, and that is not cosmetic. The bucket-mean
+    ///      step is `slope*(off - S/2)`, so a LEFT-ENDPOINT 12-sample sum over
     ///      off = p*S/12 is `-slope*S/2` exactly -- a sampling artefact of the
     ///      grid. The midpoint grid off = (2p+1)*S/24 has mean exactly S/2
     ///      (S/24 = 21,915 s, an exact integer), so its sum is EXACTLY ZERO.
@@ -137,8 +138,8 @@ contract I01EnableTest is TwinOracle {
             else { net -= int256(before_ - after_); losses += 1; }
             vm.revertToState(snap);
         }
-        assertEq(net, int256(0), "E3 V-MEAN midpoint net step is not EXACTLY zero");
-        assertEq(losses, 6, "E3 V-MEAN must lose in exactly 6 of 12 midpoint phases");
-        assertEq(rises, 6, "E3 V-MEAN must rise in exactly 6 of 12 midpoint phases");
+        assertEq(net, int256(0), "E3 midpoint net step onto the bucket-mean level is not EXACTLY zero");
+        assertEq(losses, 6, "E3 the bucket-mean step must lose in exactly 6 of 12 midpoint phases");
+        assertEq(rises, 6, "E3 the bucket-mean step must rise in exactly 6 of 12 midpoint phases");
     }
 }

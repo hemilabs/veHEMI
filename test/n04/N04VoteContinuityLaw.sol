@@ -6,7 +6,7 @@ import {VeHemi} from "src/VeHemi.sol";
 import {VeHemiVoteDelegation} from "src/VeHemiVoteDelegation.sol";
 
 /**
- * @title N04VoteContinuityLaw — vote-continuity clauses for delegated weight.
+ * @title Vote-continuity clauses for delegated weight.
  *
  * @dev Four clauses. C1-C3 read only the public vote surface (`getVotes`,
  *      `getPastVotes`, `delegations(id)`, `VeHemi.balanceOfNFTAt`), which
@@ -310,7 +310,7 @@ library N04VoteContinuityLaw {
 
         // ---- ARM O RUNS BEFORE ARM S, AND THE ORDER IS LOAD-BEARING.
         // Running arm O first makes the gate assertion UNREACHABLE unless this
-        // entry point demonstrably moves the ledger on THIS tree; a body that
+        // entry point demonstrably moves the ledger; a body that
         // cannot evaluate its own subject is RED, not green.
         uint256[] memory own = _armOwner(d_, target_, call_, owner_, delegatee_, label_);
         vm.revertToState(snap);
@@ -318,19 +318,19 @@ library N04VoteContinuityLaw {
         vm.assertGt(
             _movedInstants(ctl, own), 0,
             string.concat(
-                "N04 C4 [", label_, "] NOT APPLICABLE / VACUOUS. The OWNER made this exact call"
+                "C4 [", label_, "] NOT APPLICABLE / VACUOUS. The OWNER made this exact call"
                 " and ", vm.toString(delegatee_), "'s sealed ledger is IDENTICAL to the"
                 " no-call counterfactual replayed from the same snapshot, at every instant"
-                " sampled. The call does not mutate the delegatee's ledger on this tree, so"
+                " sampled. The call does not mutate the delegatee's ledger, so"
                 " there is nothing here for a gate to close and asserting the stranger's revert"
-                " from here would prove NOTHING - it is the `C5` failure mode, where a"
+                " from here would prove NOTHING - it is the failure mode where a"
                 " permission check turns a body green without touching any defect. This is"
                 " deliberately RED and not a pass. Either point this probe at calldata that"
                 " does mutate the ledger, or delete it on purpose and say so."
             )
         );
 
-        // ---- ARM S. Only now, with the mutation proved on this tree, is the
+        // ---- ARM S. Only now, with the mutation proved, is the
         //      stranger's refusal a statement about anything.
         _armStranger(target_, call_, stranger_, delegatee_, label_);
 
@@ -353,7 +353,7 @@ library N04VoteContinuityLaw {
         vm.assertEq(
             okO, true,
             string.concat(
-                "N04 C4 [", label_, "] OWNER LOCKED OUT. The gate refused the position's own"
+                "C4 [", label_, "] OWNER LOCKED OUT. The gate refused the position's own"
                 " owner. The gate is for STRANGERS, not owners."
             )
         );
@@ -361,7 +361,7 @@ library N04VoteContinuityLaw {
     }
 
     /// @dev ARM S, split out for the same reason. Reached ONLY after arm O has
-    ///      proved, on this tree, that the refused call mutates the ledger.
+    ///      proved that the refused call mutates the ledger.
     function _armStranger(
         address target_,
         bytes memory call_,
@@ -374,7 +374,7 @@ library N04VoteContinuityLaw {
         vm.assertEq(
             okS, false,
             string.concat(
-                "N04 C4 [", label_, "] GATE OPEN. ", vm.toString(stranger_),
+                "C4 [", label_, "] GATE OPEN. ", vm.toString(stranger_),
                 " does not own the position and was allowed to write to it. The owner arm of"
                 " this same body has already demonstrated, against a no-call counterfactual"
                 " replayed from the same snapshot, that this exact call MUTATES ",
@@ -425,8 +425,8 @@ library N04VoteContinuityLaw {
     function _movedInstants(uint256[] memory a_, uint256[] memory b_)
         private returns (uint256 moved)
     {
-        vm.assertEq(a_.length, b_.length, "N04 C4 INTERNAL: the two sweeps have different lengths.");
-        vm.assertGt(a_.length, 0, "N04 C4 INTERNAL: the sweep window is EMPTY - this body proved nothing.");
+        vm.assertEq(a_.length, b_.length, "C4 INTERNAL: the two sweeps have different lengths.");
+        vm.assertGt(a_.length, 0, "C4 INTERNAL: the sweep window is EMPTY - this body proved nothing.");
         for (uint256 i; i < a_.length; ++i) {
             if (a_[i] != b_[i]) { unchecked { ++moved; } }
         }
@@ -438,7 +438,7 @@ library N04VoteContinuityLaw {
     function _requireHistorical(uint256 to_) private view {
         if (block.timestamp <= to_) {
             revert(string.concat(
-                "N04 MISUSE: this is a HISTORICAL law and was called at or before the end of the"
+                "MISUSE: this is a HISTORICAL law and was called at or before the end of the"
                 " window it was asked about (now=", vm.toString(block.timestamp),
                 ", window ends ", vm.toString(to_),
                 "). A live predicate can always be told that what it sees is transient."
@@ -449,7 +449,7 @@ library N04VoteContinuityLaw {
     /// @dev A record that MOVED is not a reference. A law that cannot answer
     ///      goes RED; it does not decline to look.
     function _requireQuiet(VeHemiVoteDelegation d_, Term[] memory ws_) private view {
-        vm.assertGt(ws_.length, 0, "N04 VACUOUS: the witnessed set is EMPTY - this body proved nothing.");
+        vm.assertGt(ws_.length, 0, "VACUOUS: the witnessed set is EMPTY - this body proved nothing.");
         for (uint256 i; i < ws_.length; ++i) {
             Term memory n = readTerm(d_, ws_[i].id);
             bool same = n.delegatee == ws_[i].delegatee
@@ -458,7 +458,7 @@ library N04VoteContinuityLaw {
                 && n.end == ws_[i].end;
             if (!same) {
                 vm.assertTrue(same, string.concat(
-                    "N04 WINDOW NOT QUIET: position #", vm.toString(ws_[i].id),
+                    "WINDOW NOT QUIET: position #", vm.toString(ws_[i].id),
                     "'s delegation record MOVED between the witness and now, so it is not a"
                     " reference for this window and this body proved nothing. Re-witness, or pass"
                     " it as the TOUCHED position to clause 2 instead. (This is deliberately a"
@@ -476,7 +476,7 @@ library N04VoteContinuityLaw {
         private pure returns (string memory)
     {
         return string.concat(
-            "N04 ", clause_, " VACUOUS: the floor for delegatee ", vm.toString(delegatee_),
+            clause_, " VACUOUS: the floor for delegatee ", vm.toString(delegatee_),
             " at t=", vm.toString(t_),
             " is ZERO, so the clause would be satisfied by any reading whatsoever, including a"
             " total blackout. A body that evaluated nothing FAILS here; it does not pass."

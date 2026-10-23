@@ -88,7 +88,7 @@ contract P205GuardTest is LockedCurveTestBase {
         _copyEl(bob, n - 1, n);
         _setLen(bob, n + 1);
         _setTs(bob, n, B);
-        _dumpCps(bob, "base: live + pending (CP-LAYOUT compliant)");
+        _dumpCps(bob, "base: live + pending (layout-compliant)");
     }
 
     // ============================================== CLAUSE (2): FUTURE ELEMENTS ===
@@ -99,8 +99,8 @@ contract P205GuardTest is LockedCurveTestBase {
         assertGe(n, 2, "need live + pending");
         assertEq(uint256(_cps(bob)[n - 1].timestamp), B, "last must be the pending element");
         _setTs(bob, n - 2, B - 1);
-        assertGt(B - 1, block.timestamp + 1, "the mutant element must be future");
-        _dumpCps(bob, "L2a mutant: two future elements");
+        assertGt(B - 1, block.timestamp + 1, "the corrupted element must be future");
+        _dumpCps(bob, "L2a corrupted: two future elements");
 
         vm.expectRevert(CheckpointLayoutViolated.selector);
         vm.prank(alice); delegation.delegate(idA, address(0xC0DE));
@@ -112,7 +112,7 @@ contract P205GuardTest is LockedCurveTestBase {
         (uint256 idA, uint256 B) = _liveAndPending();
         uint256 n = _len(bob);
         _setTs(bob, n - 1, B + 1 hours);
-        _dumpCps(bob, "L2b mutant: pending off-boundary");
+        _dumpCps(bob, "L2b corrupted: pending off-boundary");
 
         vm.expectRevert(CheckpointLayoutViolated.selector);
         vm.prank(alice); delegation.delegate(idA, address(0xC0DE));
@@ -133,13 +133,13 @@ contract P205GuardTest is LockedCurveTestBase {
         assertGe(n, 2, "need two matured elements");
         uint256 t0 = uint256(_cps(bob)[n - 2].timestamp);
         _setTs(bob, n - 1, t0 - 1);
-        _dumpCps(bob, "L1 mutant: unsorted, both past");
+        _dumpCps(bob, "L1 corrupted: unsorted, both past");
 
         // PREMISE FIRST: the corrupted array really is unsorted, and it really has NO
         // future element -- otherwise this body would be re-testing L2a.
         assertGt(
             uint256(_cps(bob)[n - 2].timestamp), uint256(_cps(bob)[n - 1].timestamp),
-            "L1 premise: the mutant array must be unsorted"
+            "L1 premise: the corrupted array must be unsorted"
         );
         assertLe(
             uint256(_cps(bob)[n - 2].timestamp), block.timestamp + 1,
@@ -160,7 +160,7 @@ contract P205GuardTest is LockedCurveTestBase {
         uint256 tPrev = uint256(_cps(bob)[n - 2].timestamp);
         _setTs(bob, n - 2, B);
         _setTs(bob, n - 1, tPrev);
-        _dumpCps(bob, "L2c mutant: future element NOT last");
+        _dumpCps(bob, "L2c corrupted: future element NOT last");
 
         assertGt(uint256(_cps(bob)[n - 2].timestamp), block.timestamp + 1, "L2c premise: it is future");
         assertLe(uint256(_cps(bob)[n - 1].timestamp), block.timestamp + 1, "L2c premise: the tail is past");
@@ -182,9 +182,9 @@ contract P205GuardTest is LockedCurveTestBase {
         _copyEl(bob, n - 1, 0);
         _setLen(bob, 1);
         _setTs(bob, 0, B + 1 hours);
-        _dumpCps(bob, "L3b mutant: sole element, future, off-boundary");
+        _dumpCps(bob, "L3b corrupted: sole element, future, off-boundary");
 
-        assertEq(_len(bob), 1, "L3b premise: len == 1 -- the branch that skipped the guard");
+        assertEq(_len(bob), 1, "L3b premise: len == 1 -- the branch that skips the tail checks");
         assertGt(uint256(_cps(bob)[0].timestamp), block.timestamp + 1, "L3b premise: it is future");
 
         vm.expectRevert(CheckpointLayoutViolated.selector);
@@ -205,12 +205,12 @@ contract P205GuardTest is LockedCurveTestBase {
         vm.store(address(delegation), bytes32(_dataSlot(bob) + 1), a1);
         _setLen(bob, 1);
         assertEq(uint256(_cps(bob)[0].timestamp), B, "premise: the single element is pending, AT B");
-        _dumpCps(bob, "L3 residual: pending-only, len == 1, dated at B");
+        _dumpCps(bob, "L3 pending-only: len == 1, dated at B");
 
         vm.prank(alice); delegation.delegate(idA, address(0xC0DE));
         VeHemiVoteDelegation.DelegateCheckpoint[] memory a = _cps(bob);
-        assertEq(a.length, 1, "L3 residual: the writer must still take the pending-only tail");
-        assertEq(uint256(a[0].timestamp), B, "L3 residual: the element is still dated at B");
+        assertEq(a.length, 1, "L3 pending-only: the writer must still take the pending-only tail");
+        assertEq(uint256(a[0].timestamp), B, "L3 pending-only: the element is still dated at B");
     }
 
     // ========================================================== NO MISFIRE ===

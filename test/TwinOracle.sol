@@ -173,9 +173,10 @@ abstract contract TwinOracle is Test {
 
     // ============================================================ driving
 
-    /// @dev Override in a subclass to advance a design-specific position.
-    ///      Called by `step()` at every boundary AND at every mid-bucket probe,
-    ///      so implementations must be idempotent / no-op when nothing is due.
+    /// @dev Override in a subclass to advance the universe-X (auto-relock)
+    ///      position. Called by `step()` at every boundary AND at every
+    ///      mid-bucket probe, so implementations must be idempotent / no-op
+    ///      when nothing is due.
     function _driveCandidate(uint256 /*ts*/) internal virtual {}
 
     /// @dev Apply the built-in cadence rules to every registered position.

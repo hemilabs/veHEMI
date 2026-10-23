@@ -1086,7 +1086,7 @@ contract VeHemiVoteDelegation is ReentrancyGuardTransientUpgradeable, VeHemiDele
         // path on a fully-expired lock would otherwise revert inside
         // `_getNormalizedLockedInfo` (`CanNotDelegateExpiredLocks`) and
         // leave `delegations[delegator_]` stale forever. That is why
-        // `_getNormalizedLockedInfo` is now invoked ONLY in the
+        // `_getNormalizedLockedInfo` is invoked ONLY in the
         // new-delegatee branch — its normalized values are not needed to
         // delete a record.
         //
@@ -1660,7 +1660,7 @@ contract VeHemiVoteDelegation is ReentrancyGuardTransientUpgradeable, VeHemiDele
                 : accountCheckpointsLength_ - 1;
             DelegateCheckpoint memory _liveCheckpoint = userDelegationCheckpoints_[_liveIndex];
             // Precondition check on the two elements `_liveIndex` arithmetic names (the
-            // tail and its predecessor), nothing more; it does not audit the array's
+            // tail and its predecessor), nothing more; it does not check the array's
             // interior or the content of any write:
             //   * the element treated as LIVE is dated at or before `_immTimestamp`
             //     (clause (2); otherwise writing `_immNew` there would unsort the array

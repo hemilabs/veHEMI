@@ -3,7 +3,7 @@ pragma solidity ^0.8.29;
 
 import "./LockedCurveTestBase.sol";
 
-/// P2-06 -- an owner's top-up never darkens its delegatee.
+/// An owner's top-up never darkens its delegatee.
 ///
 /// After an owner `increaseAmount`, the delegatee's SEALED ledger
 /// (`getPastVotes`) reads strictly HIGHER at every sampled instant of the
@@ -39,8 +39,8 @@ contract P206WitnessTest is LockedCurveTestBase {
         for (uint256 t = T + 1; t <= end; ++t) s[t - T - 1] = delegation.getPastVotes(bob, t);
     }
 
-    /// W4. The owner's top-up moves the delegatee's sealed ledger strictly UP
-    ///     at every sampled instant; no instant reads below the counterfactual.
+    /// The owner's top-up moves the delegatee's sealed ledger strictly UP
+    /// at every sampled instant; no instant reads below the counterfactual.
     function test_P206_W4_theMutationIsUpwardsNotDownwards() public {
         uint256 id = _arm();
         uint256 T = block.timestamp;
@@ -50,13 +50,13 @@ contract P206WitnessTest is LockedCurveTestBase {
         vm.prank(alice);
         veHemi.increaseAmount(id, 10 ether);
         uint256[] memory own = _sweep(T);
-        assertEq(ctl.length, 600, "W4: construction -- the window must be 600 instants");
+        assertEq(ctl.length, 600, "construction -- the window must be 600 instants");
         uint256 up; uint256 down;
         for (uint256 i; i < ctl.length; ++i) {
             if (own[i] > ctl[i]) { unchecked { ++up; } }
             if (own[i] < ctl[i]) { unchecked { ++down; } }
         }
-        assertEq(down, 0,   "W4: the owner's top-up DARKENED the delegatee");
-        assertEq(up,   600, "W4: the owner's top-up did not raise the ledger at every instant");
+        assertEq(down, 0,   "the owner's top-up DARKENED the delegatee");
+        assertEq(up,   600, "the owner's top-up did not raise the ledger at every instant");
     }
 }

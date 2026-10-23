@@ -3,7 +3,7 @@ pragma solidity ^0.8.29;
 
 import "./LockedCurveTestBase.sol";
 
-/// O02 — the exhaustive interaction matrix.
+/// The exhaustive interaction matrix.
 ///
 /// Every cell is (entry point x position kind x phase x delegation shape):
 /// build the subject position of that kind in that delegation shape, warp to
@@ -152,7 +152,7 @@ contract O02Matrix is LockedCurveTestBase {
         if (p == 7) return (1800, 3600);              // quiet control
         if (p == 8) return (1, 525241);               // h=1, far from a six-day edge
         if (p == 9) return (3599, 525239);            // h=3599, far from a six-day edge
-        revert("O02: no such phase");
+        revert("no such phase");
     }
 
     // ===================================================================
@@ -181,7 +181,7 @@ contract O02Matrix is LockedCurveTestBase {
             id = _mkFor(OWNER, 500 ether, 2 * SIX_DAYS, false, false);
             vm.prank(OWNER); veHemi.enableAutoRelock(id);
         }
-        else revert("O02: no such kind");
+        else revert("no such kind");
     }
 
     /// Point the subject at the shape's delegatee and mint companions.
@@ -270,7 +270,7 @@ contract O02Matrix is LockedCurveTestBase {
             vm.prank(FADM); try veHemi.forfeit(id) { return true; } catch { return false; }
         }
         if (ep == EP_NOOP) return true;
-        revert("O02: no such entry point");
+        revert("no such entry point");
     }
 
     function _sigDigest(uint256 id, address dee, uint256 nonce, uint256 expiry)
@@ -382,7 +382,7 @@ contract O02Matrix is LockedCurveTestBase {
             minT = t0 + 3 * SIX_DAYS;           // past the 2*SIX_DAYS lock / original transferableAfter
         }
         uint256 T = _phaseT(minT, h, s);
-        require(T != 0, "O02: phase row violates h == s (mod 360)");
+        require(T != 0, "phase row violates h == s (mod 360)");
         vm.warp(T);
 
         fireT = T;
@@ -398,16 +398,16 @@ contract O02Matrix is LockedCurveTestBase {
 
     function _check(uint256 ep, uint256 k, uint256 p, uint256 sh, Res memory r) internal pure {
         if (r.zeroAfter != 0) {
-            revert(string.concat("O02/LAW1 zero votes after the firing block", _coord(ep, k, p, sh)));
+            revert(string.concat("LAW1 zero votes after the firing block", _coord(ep, k, p, sh)));
         }
         if (r.sealedZeroAfter != 0) {
-            revert(string.concat("O02/LAW2 zero sealed into getPastVotes after the firing block", _coord(ep, k, p, sh)));
+            revert(string.concat("LAW2 zero sealed into getPastVotes after the firing block", _coord(ep, k, p, sh)));
         }
         if (r.immutBad != 0) {
-            revert(string.concat("O02/LAW3 getPastVotes changed between horizons", _coord(ep, k, p, sh)));
+            revert(string.concat("LAW3 getPastVotes changed between horizons", _coord(ep, k, p, sh)));
         }
         if (r.overAfter != 0) {
-            revert(string.concat("O02/LAW4 over-count after the firing block", _coord(ep, k, p, sh)));
+            revert(string.concat("LAW4 over-count after the firing block", _coord(ep, k, p, sh)));
         }
     }
 
@@ -420,7 +420,7 @@ contract O02Matrix is LockedCurveTestBase {
                 vm.revertToState(snap);
                 snap = vm.snapshotState();
                 (bool reached, Res memory r) = _cell(ep, kind, p, sh);
-                if (!reached) revert(string.concat("O02: the entry point reverted", _coord(ep, kind, p, sh)));
+                if (!reached) revert(string.concat("the entry point reverted", _coord(ep, kind, p, sh)));
                 _check(ep, kind, p, sh, r);
             }
         }

@@ -41,7 +41,7 @@ contract S26ReentrantAdapter {
     }
 }
 
-/// @title S26 — `retireStrandedFlatTerm` CARRIES THE GUARD EVERY OTHER
+/// @title `retireStrandedFlatTerm` CARRIES THE GUARD EVERY OTHER
 ///        STATE-WRITING VVD ENTRY POINT CARRIES, AND CURES THE STRANDED TERM.
 ///
 /// @notice `retireStrandedFlatTerm` is permissionless and `nonReentrant`, like
@@ -58,7 +58,7 @@ contract S26Guard is J11Base {
     bytes4  internal constant SEL_NO_EXPIRATION = bytes4(keccak256("NoExpirations()"));
 
     function _rec(string memory k_, uint256 v_) internal {
-        emit log_named_uint(string.concat("S26/OBS ", k_), v_);
+        emit log_named_uint(string.concat("OBS ", k_), v_);
     }
 
     function _selStr(bytes4 s_) internal pure returns (string memory) {
@@ -99,7 +99,7 @@ contract S26Guard is J11Base {
         uint256 id = _flatDelegated(victim, dele);
         bool armed = _arm(id);
         _rec("armed", armed ? 1 : 0);
-        assertTrue(armed, "S26/G1: the fixture did not arm");
+        assertTrue(armed, "G1: the fixture did not arm");
 
         S26ReentrantAdapter adp = new S26ReentrantAdapter(address(delegation), dele);
         vm.prank(veHemi.owner());
@@ -108,8 +108,8 @@ contract S26Guard is J11Base {
         vm.prank(stranger);
         delegation.retireStrandedFlatTerm(id);
 
-        emit log_named_uint  ("S26/G1 relay fired (notifyDelegateChanged)", adp.reenters());
-        emit log_named_string("S26/G1 NESTED call answered", _selStr(adp.lastSelector()));
+        emit log_named_uint  ("G1 relay fired (notifyDelegateChanged)", adp.reenters());
+        emit log_named_string("G1 NESTED call answered", _selStr(adp.lastSelector()));
         _rec("relay-fired", adp.reenters());
         _rec("reentry-refused-by-the-guard", adp.lastSelector() == SEL_REENTRANT ? 1 : 0);
         _rec("reentry-ran", (adp.reenters() > 0 && adp.lastSelector() != SEL_REENTRANT) ? 1 : 0);
@@ -117,9 +117,9 @@ contract S26Guard is J11Base {
         // NON-VACUITY: the re-entry must actually have been ATTEMPTED, or this
         // body proves nothing about the guard either way.
         assertGt(adp.reenters(), 0,
-            "S26/G1 VACUOUS: the relay never fired, so nothing re-entered and the guard was never tested");
+            "G1 VACUOUS: the relay never fired, so nothing re-entered and the guard was never tested");
         assertEq(adp.lastSelector(), SEL_REENTRANT,
-            "S26/G1: `retireStrandedFlatTerm` reached the adapter WITHOUT the transient guard set -- missing `nonReentrant`");
+            "G1: `retireStrandedFlatTerm` reached the adapter WITHOUT the transient guard set -- missing `nonReentrant`");
     }
 
     /// @notice G2. The guard must not change what the entry point DOES in the
@@ -128,7 +128,7 @@ contract S26Guard is J11Base {
     ///         the position's current (decaying) escrow weight.
     function test_S26_G2_theGuardCostsNoFunction() public {
         uint256 id = _flatDelegated(victim, dele);
-        assertTrue(_arm(id), "S26/G2: the fixture did not arm");
+        assertTrue(_arm(id), "G2: the fixture did not arm");
 
         uint256 before_ = delegation.getVotes(dele);
         uint256 g0 = gasleft();
@@ -139,15 +139,15 @@ contract S26Guard is J11Base {
         uint256 after_ = delegation.getVotes(dele);
         IVeHemiVoteDelegation.Delegation memory d = delegation.delegation(id);
 
-        emit log_named_uint("S26/G2 getVotes(dele) BEFORE", before_);
-        emit log_named_uint("S26/G2 getVotes(dele) AFTER ", after_);
+        emit log_named_uint("G2 getVotes(dele) BEFORE", before_);
+        emit log_named_uint("G2 getVotes(dele) AFTER ", after_);
         _rec("cure-gas", used);
 
-        assertFalse(d.slope == 0 && d.bias > 0, "S26/G2: the record is STILL FLAT after the cure");
-        assertEq(d.delegatee, dele, "S26/G2: the cure moved the record off its own delegatee");
-        assertEq(after_, veHemi.balanceOfNFT(id), "S26/G2: dele does not hold exactly the position's escrow weight");
-        assertGt(after_, 0, "S26/G2 VACUOUS: the position has no weight left");
+        assertFalse(d.slope == 0 && d.bias > 0, "G2: the record is STILL FLAT after the cure");
+        assertEq(d.delegatee, dele, "G2: the cure moved the record off its own delegatee");
+        assertEq(after_, veHemi.balanceOfNFT(id), "G2: dele does not hold exactly the position's escrow weight");
+        assertGt(after_, 0, "G2 VACUOUS: the position has no weight left");
         assertGt(uint256(uint128(veHemi.getLockedBalance(id).amount)), 0,
-            "S26/G2: the cure destroyed the position");
+            "G2: the cure destroyed the position");
     }
 }

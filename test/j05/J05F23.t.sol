@@ -3,7 +3,7 @@ pragma solidity ^0.8.29;
 
 import "./J05Base.sol";
 
-/// @title  J05F23 — auto-relock composed with the other entry points.
+/// @title  Auto-relock composed with the other entry points.
 ///
 /// @notice An attacker composes auto-relock with transfer, seeding, forfeit,
 ///         `increaseAmount` or the delegation try/catch and must not get a
@@ -38,8 +38,8 @@ contract J05F23 is J05Base {
     }
 
     // ------------------------------------------------------------------
-    // D2 — GUARD 8: a still-non-transferable position cannot be frozen
-    //      before or during the seeding window.
+    // D2 — THE SEEDING GUARD: a still-non-transferable position cannot be
+    //      frozen before or during the seeding window.
     // ------------------------------------------------------------------
     function test_F23_D2_guard8RefusesMidWindowFreeze() public {
         // fresh deployment: this test needs the seeding latch DOWN.

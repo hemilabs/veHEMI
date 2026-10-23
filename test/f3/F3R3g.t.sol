@@ -5,7 +5,7 @@ import "../j11/J11Base.sol";
 import {LyingVoteDelegation} from "../mocks/LyingVoteDelegation.sol";
 import {IVeHemiVoteDelegation} from "../../src/interfaces/IVeHemiVoteDelegation.sol";
 
-/// @title F3R3g -- `VeHemiVoteDelegation::retireStrandedFlatTerm` exists, is
+/// @title `VeHemiVoteDelegation::retireStrandedFlatTerm` exists, is
 ///        permissionless, and cures a stranded flat term.
 ///
 /// @notice A retirement whose re-delegation VeHemi could not complete leaves the
@@ -30,7 +30,7 @@ contract F3R3g is J11Base {
     bytes4 internal constant SEL_NOT_RETRYABLE = bytes4(keccak256("FlatTermNotRetryable()"));
 
     function _rec(string memory k_, uint256 v_) internal {
-        emit log_named_uint(string.concat("F3/OBS ", k_), v_);
+        emit log_named_uint(string.concat("OBS ", k_), v_);
     }
 
     function _call(address who_, address to_, bytes memory d_) internal returns (bool ok, bytes memory ret) {
@@ -58,7 +58,7 @@ contract F3R3g is J11Base {
 
     // =====================================================================
 
-    /// @notice R1. *** THE ENTRY POINT MUST EXIST, AND IT MUST CURE. ***
+    /// @notice *** THE ENTRY POINT MUST EXIST, AND IT MUST CURE. ***
     ///
     ///         Four requirements, in order, each with its own sentence:
     ///           (a) the fixture really is in the stranded state (non-vacuity);
@@ -85,10 +85,10 @@ contract F3R3g is J11Base {
         _rec("armed-bias", uint256(d0.bias));
         _rec("armed-autoRelockRemaining", remaining);
         _rec("votes-before", before_);
-        assertEq(remaining, 0, "F3/R1 VACUOUS: VeHemi still reports auto-relock time, so nothing is stranded");
-        assertEq(uint256(d0.slope), 0, "F3/R1 VACUOUS: the VVD record is not flat, so there is no phantom to retire");
-        assertGt(uint256(d0.bias), 0, "F3/R1 VACUOUS: the VVD record carries no bias, so there is no phantom to retire");
-        assertGt(before_, 0, "F3/R1 VACUOUS: the delegatee has no votes to lose, so `moved` would be 0 -> 0");
+        assertEq(remaining, 0, "VACUOUS: VeHemi still reports auto-relock time, so nothing is stranded");
+        assertEq(uint256(d0.slope), 0, "VACUOUS: the VVD record is not flat, so there is no phantom to retire");
+        assertGt(uint256(d0.bias), 0, "VACUOUS: the VVD record carries no bias, so there is no phantom to retire");
+        assertGt(before_, 0, "VACUOUS: the delegatee has no votes to lose, so `moved` would be 0 -> 0");
 
         // ---- (b) *** PRESENCE, ASSERTED AND NOT BRANCHED ON. ***
         // Probed on an id that is NOT stranded: a present function refuses
@@ -101,20 +101,20 @@ contract F3R3g is J11Base {
             : bytes4(0);
         _rec("probe-ok", probeOk ? 1 : 0);
         _rec("probe-returndata-len", probeRet.length);
-        _rec("probe-answers-with-R06s-own-error", probeSel == SEL_NOT_RETRYABLE ? 1 : 0);
+        _rec("probe-answers-with-its-own-error", probeSel == SEL_NOT_RETRYABLE ? 1 : 0);
         assertFalse(probeOk,
-            "F3/R1: `retireStrandedFlatTerm` ACCEPTED a position that is not stranded -- its FlatTermNotRetryable guard is gone");
+            "`retireStrandedFlatTerm` ACCEPTED a position that is not stranded -- its FlatTermNotRetryable guard is gone");
         assertGt(probeRet.length, 0,
-            "F3/R1: *** `retireStrandedFlatTerm(uint256)` IS NOT ON THIS CONTRACT. *** The call returned EMPTY revert data, which is what a missing function looks like.");
+            "*** `retireStrandedFlatTerm(uint256)` IS NOT ON THIS CONTRACT. *** The call returned EMPTY revert data, which is what a missing function looks like.");
         assertEq(probeSel, SEL_NOT_RETRYABLE,
-            "F3/R1: something answers at this selector but it is not `FlatTermNotRetryable()` -- the entry point has been replaced, not merely guarded");
+            "something answers at this selector but it is not `FlatTermNotRetryable()` -- the entry point has been replaced, not merely guarded");
 
         // ---- (c) PERMISSIONLESS: a STRANGER, not the owner, not the holder.
         (bool ok, ) = _call(stranger, address(delegation),
             abi.encodeWithSignature("retireStrandedFlatTerm(uint256)", id));
         _rec("stranger-cure-succeeded", ok ? 1 : 0);
         assertTrue(ok,
-            "F3/R1: a stranger could not retire the stranded flat term -- the permissionless remedy does not answer to the public it exists for");
+            "a stranger could not retire the stranded flat term -- the permissionless remedy does not answer to the public it exists for");
 
         // ---- (d) THE PHANTOM IS GONE, AND THE PRINCIPAL IS NOT.
         vm.warp(block.timestamp + 2);
@@ -125,10 +125,10 @@ contract F3R3g is J11Base {
         _rec("record-still-flat", (d1.slope == 0 && d1.bias > 0) ? 1 : 0);
         _rec("principal-still-locked", principal);
         assertFalse(d1.slope == 0 && d1.bias > 0,
-            "F3/R1: the entry point returned success and the VVD record is STILL FLAT -- it answered without doing its job");
+            "the entry point returned success and the VVD record is STILL FLAT -- it answered without doing its job");
         assertTrue(after_ != before_,
-            "F3/R1: the entry point returned success and the delegatee's votes did not move -- the phantom is still voting");
+            "the entry point returned success and the delegatee's votes did not move -- the phantom is still voting");
         assertGt(principal, 0,
-            "F3/R1: the cure destroyed the position it was supposed to repair");
+            "the cure destroyed the position it was supposed to repair");
     }
 }

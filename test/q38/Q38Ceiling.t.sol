@@ -18,11 +18,11 @@ contract Q38FixedEater is K08ModuleBase {
         uint256 g0 = gasleft();
         uint256 x = 1;
         while (g0 - gasleft() < K) { x = uint256(keccak256(abi.encode(x))); }
-        revert("Q38 fixed eater");
+        revert("fixed eater");
     }
 }
 
-/// @title  Q38 — THE DETECTOR FOR THE STARVATION TRIPWIRE'S CEILING CONJUNCT.
+/// @title  THE DETECTOR FOR THE STARVATION TRIPWIRE'S CEILING CONJUNCT.
 ///
 /// @notice `_requireNotStarved` reverts `DelegationCallStarved` only when
 ///         `_left < gasBefore_ / 63 && gasBefore_ - _left < DELEGATION_GAS_CEILING`.
@@ -93,13 +93,15 @@ contract Q38Ceiling is J11Base {
     {
         assertTrue(
             _starved(who_, d_, lo_, o_),
-            "Q38/K08-FIX-7: bracket LOW does not starve -- J11 FIX-1's tripwire never fires. "
-            "Either the bracket is wrong for this tree or the tripwire itself is disarmed."
+            "bracket LOW does not starve -- the starvation tripwire never fires. "
+            "Either the bracket no longer fits the contract's gas costs or the "
+            "tripwire itself is disarmed."
         );
         assertFalse(
             _starved(who_, d_, hi_, o_),
-            "Q38/K08-FIX-7: bracket HIGH still starves -- the tripwire never releases. "
-            "Either the bracket is wrong for this tree or the guard has been widened."
+            "bracket HIGH still starves -- the tripwire never releases. "
+            "Either the bracket no longer fits the contract's gas costs or the "
+            "guard has been widened."
         );
         while (hi_ - lo_ > 1) {
             uint256 mid = lo_ + (hi_ - lo_) / 2;
@@ -129,27 +131,27 @@ contract Q38Ceiling is J11Base {
         _install(address(new K08GasEaterRead()));
         uint256 tFull = _threshold(victim, data, 7_800_000, 9_000_000, o);
 
-        emit log_named_uint("Q38 T_cal  (bounded burn)", tCal);
-        emit log_named_uint("Q38 T_full (ceiling burn)", tFull);
-        emit log_named_uint("Q38 DELTA  (T_full - T_cal)", tFull - tCal);
-        emit log_named_uint("Q38 starved observations", o.starved);
-        emit log_named_uint("Q38 tolerated observations", o.tolerated);
+        emit log_named_uint("T_cal  (bounded burn)", tCal);
+        emit log_named_uint("T_full (ceiling burn)", tFull);
+        emit log_named_uint("DELTA  (T_full - T_cal)", tFull - tCal);
+        emit log_named_uint("starved observations", o.starved);
+        emit log_named_uint("tolerated observations", o.tolerated);
 
         // NON-VACUITY: both outcome classes observed, and both bisections ran.
-        assertGt(o.starved, 4, "Q38 VACUOUS: the STARVED branch was never observed");
-        assertGt(o.tolerated, 4, "Q38 VACUOUS: the TOLERATED branch was never observed");
-        assertGt(tFull, tCal, "Q38: T_full must exceed T_cal -- the two probes are not ordered");
+        assertGt(o.starved, 4, "VACUOUS: the STARVED branch was never observed");
+        assertGt(o.tolerated, 4, "VACUOUS: the TOLERATED branch was never observed");
+        assertGt(tFull, tCal, "T_full must exceed T_cal -- the two probes are not ordered");
 
         assertLe(
             tFull - tCal,
             DELTA_MAX,
-            "Q38/K08-FIX-7: the starvation threshold for a module "
+            "the starvation threshold for a module "
             "that eats the WHOLE DELEGATION_GAS_CEILING has moved UP relative to a module that "
             "eats a BOUNDED amount. `_requireNotStarved`'s `gasBefore_ - _left < "
-            "DELEGATION_GAS_CEILING` conjunct is no longer bounding the starved region -- K08 "
-            "FIX-7's CEILING IS DISARMED. A holder behind an exhausting module is then REFUSED "
-            "in a ~2,548-gas window where the shipped contract lets them through, and FIX-7's "
-            "monotonicity claim ('a holder escapes by sending more gas') is narrowed. "
+            "DELEGATION_GAS_CEILING` conjunct is no longer bounding the starved region -- "
+            "THE CEILING IS DISARMED. A holder behind an exhausting module is then REFUSED "
+            "in a ~2,548-gas window where the shipped contract lets them through, and the "
+            "guarantee that a holder escapes by sending more gas is narrowed. "
             "If DELEGATION_GAS_CEILING or CAL_K changed, RE-PIN DELTA_MAX; do not widen it."
         );
     }
@@ -168,7 +170,7 @@ contract Q38Ceiling is J11Base {
         uint256 t = _threshold(victim, data, 7_800_000, 9_000_000, o);
 
         uint256 cells;
-        assertTrue(_starved(victim, data, t, o), "Q38: the threshold itself is not starved");
+        assertTrue(_starved(victim, data, t, o), "the threshold itself is not starved");
         ++cells;
 
         uint256 g0 = gasleft();
@@ -177,24 +179,24 @@ contract Q38Ceiling is J11Base {
         uint256 used = g0 - gasleft();
         ++cells;
 
-        emit log_named_uint("Q38 threshold", t);
-        emit log_named_uint("Q38 gas used at threshold+1", used);
-        emit log_named_uint("Q38 autoRelockRemaining after", veHemi.autoRelockRemaining(id));
-        emit log_named_uint("Q38 cells", cells);
+        emit log_named_uint("threshold", t);
+        emit log_named_uint("gas used at threshold+1", used);
+        emit log_named_uint("autoRelockRemaining after", veHemi.autoRelockRemaining(id));
+        emit log_named_uint("cells", cells);
 
-        assertEq(cells, 2, "Q38 VACUOUS: neither side of the transition was executed");
-        assertGt(o.starved, 4, "Q38 VACUOUS: the STARVED branch was never observed");
-        assertTrue(ok, "Q38/K08-FIX-7: one gas above the starvation threshold the call still fails");
+        assertEq(cells, 2, "VACUOUS: neither side of the transition was executed");
+        assertGt(o.starved, 4, "VACUOUS: the STARVED branch was never observed");
+        assertTrue(ok, "one gas above the starvation threshold the call still fails");
         assertGt(
             veHemi.autoRelockRemaining(id),
             0,
-            "Q38/K08-FIX-7: the tolerated branch did not COMMIT -- the holder is still trapped "
-            "behind the exhausting module, which is the trap FIX-7 exists to avoid"
+            "the tolerated branch did not COMMIT -- the holder is still trapped "
+            "behind the exhausting module, which is the trap the ceiling conjunct exists to avoid"
         );
         assertGe(
             used,
             CEIL,
-            "Q38/K08-FIX-7: the tolerated transaction did not pay DELEGATION_GAS_CEILING, so it "
+            "the tolerated transaction did not pay DELEGATION_GAS_CEILING, so it "
             "is not the branch under test -- the module did not eat its whole allowance"
         );
     }

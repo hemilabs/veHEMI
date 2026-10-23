@@ -16,7 +16,7 @@ library VeHemiCurveLib {
     ///      MUST be used by BOTH the loop bound and the truncation clamp -- an
     ///      uncoupled literal silently turns the clamp into dead code. It must
     ///      also stay above MAX_TIME in buckets (240); see the clamp.
-    ///      LIVENESS (accepted): every caught-up bucket writes the global point,
+    ///      LIVENESS LIMIT: every caught-up bucket writes the global point,
     ///      and both subcurve points once seeding is finalized. After hundreds
     ///      of buckets with no checkpointing call to VeHemi the catch-up no
     ///      longer fits in a transaction, and as nothing persists a partial
@@ -470,7 +470,7 @@ library VeHemiCurveLib {
 
         // Global slope-changes — every live DECAYING position participates.
         // Out-of-range ends (`end <= block.timestamp`) are skipped by the
-        // helper's internal gates, matching the prior behavior.
+        // helper's internal gates.
         _adjustSlopeChange(
             L().slopeChanges,
             oldLocked_.end, newLocked_.end,

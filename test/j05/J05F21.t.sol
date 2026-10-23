@@ -14,7 +14,7 @@ contract J05Adapter {
     function notifyDelegateChanged(address, address, address) external {}
 }
 
-/// @title  J05F21 — griefing and denial against flat positions.
+/// @title  Griefing and denial against flat positions.
 ///
 /// @notice No one can lock a victim's principal, strand votes permanently or
 ///         brick state: top-ups cannot move R or the exit date, `withdraw`
@@ -28,8 +28,8 @@ contract J05F21 is J05Base {
     // ------------------------------------------------------------------
     // C1 — REPEATED TOP-UPS CANNOT MOVE `R` OR THE EXIT DATE. A top-up
     //      re-materialises the lazily-maintained end; it only heals the
-    //      documented staleness. (`increaseAmount` is owner-gated, so the
-    //      owner sends them; the deposit body is the same for any caller.)
+    //      documented staleness. (`increaseAmount` is owner-only, so the
+    //      owner sends them.)
     // ------------------------------------------------------------------
     function test_F21_C1_topUpsCannotMoveR() public {
         (uint256 id, , ) = createLock(victim, 1_000 ether, 2 * 365 days);

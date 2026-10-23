@@ -2,7 +2,7 @@
 pragma solidity ^0.8.29;
 
 // ============================================================================
-// I02 -- a flat delegation's booked principal (`totalAmount`) is retired
+// A flat delegation's booked principal (`totalAmount`) is retired
 // exactly once.
 // ----------------------------------------------------------------------------
 //   B1  a flat delegation whose stored `end` has gone stale is moved away; the

@@ -107,7 +107,7 @@ jobs:
                   exit $OVERFLOW
               id: size-gate
 
-            # The built bytecode must match the committed, reviewed attestation
+            # The built bytecode must match the committed attestation
             # (test/fixtures/eip170-attestation.json). Writes nothing.
             - name: EIP-170 attestation
               run: |
@@ -176,7 +176,7 @@ jobs:
             # The V1 -> V2 upgrade suites replay history: they need a block at or
             # below 4,458,622 (markSeedingStarted ran at 4,458,623). They run only
             # when the HEMI_FORK_BLOCK repository variable pins such a block. Archival:
-            # known red at such a block (7 recorded failures) and too slow on a cold
+            # known red at such a block (7 failing tests) and too slow on a cold
             # cache.
             - name: Hemi-fork tests, V2 upgrade history (requires HEMI_RPC_URL and HEMI_FORK_BLOCK)
               if: env.HAS_HEMI_RPC == 'true' && vars.HEMI_FORK_BLOCK != ''

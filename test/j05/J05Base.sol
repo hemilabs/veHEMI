@@ -3,7 +3,7 @@ pragma solidity ^0.8.29;
 
 import "../LockedCurveTestBase.sol";
 
-/// @title  J05Base -- shared fixture for the auto-relock attack and liveness suites.
+/// @title  Shared fixture for the auto-relock attack and liveness suites.
 /// @notice A seeded `LockedCurveTestBase` with funded actors (attacker, victim,
 ///         stranger, two delegatees) and small helpers: `grid()`, `slopeOf`,
 ///         `residualLockup` (`effectiveLockEnd - now`), `warpToPhase`, and
@@ -49,7 +49,7 @@ contract J05Base is LockedCurveTestBase {
         return veHemi.effectiveLockEnd(id_) - block.timestamp;
     }
 
-    /// @dev warp to an exact phase inside the CURRENT bucket.
+    /// @dev warp to an exact phase inside the NEXT bucket.
     function warpToPhase(uint256 phase_) internal {
         uint256 target = grid() + SIX_DAYS + phase_;
         vm.warp(target);

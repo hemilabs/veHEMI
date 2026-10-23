@@ -42,7 +42,7 @@ import {VeHemiVoteDelegation} from "src/VeHemiVoteDelegation.sol";
  *
  *      The contribution of a matured record is read from the record the
  *      delegatee's checkpoint was built from — `delegations[id]` — with the
- *      shipped discriminator `(slope == 0 && bias > 0) == FLAT`:
+ *      contract's discriminator `(slope == 0 && bias > 0) == FLAT`:
  *      a flat term contributes its constant `bias` (it rides in `fixedBias`,
  *      untouched by decay, by the SIX_DAYS expiration walk and by the
  *      MAX_LOCK_DURATION wipe); a decaying term contributes
@@ -51,7 +51,7 @@ import {VeHemiVoteDelegation} from "src/VeHemiVoteDelegation.sol";
  */
 library I04VoteHoleLaw {
     /// @dev `private constant` in VeHemiVoteDelegation, restated here and
-    ///      pinned against it in test/I04VoteHole.t.sol.
+    ///      checked for shape in test/I04VoteHole.t.sol.
     uint256 internal constant CHECKPOINT_INTERVAL = 1 hours;
     uint256 internal constant EPOCH_OFFSET = 0;
 

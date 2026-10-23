@@ -13,7 +13,7 @@ import {
     GasEatingAutoDelegate
 } from "../mocks/J17Modules.sol";
 
-/// @title  J17 — starved and unreadable modules.
+/// @title  Starved and unreadable modules.
 ///
 /// @dev    `VeHemi` never commits an outer call whose inner module call was
 ///         GAS-STARVED (H2: the auto-delegate read), a retirement it cannot
@@ -94,9 +94,9 @@ contract J17Gate is J17Base {
     }
 
     // ------------------------------------------------------------------
-    // H3 — THE RESIDUAL IS ACCEPTED, BUT IT IS NOT SILENT. A module `VeHemi`
-    //      cannot read still commits the retirement (refusing would trap the
-    //      holder) — but it MUST announce it.
+    // H3 — AN UNVERIFIABLE RETIREMENT IS ACCEPTED, BUT IT IS NOT SILENT.
+    //      A module `VeHemi` cannot read still commits the retirement
+    //      (refusing would trap the holder) — but it MUST announce it.
     // ------------------------------------------------------------------
     function test_J17_H3_unverifiableRetirementIsAnnounced() public {
         uint256 id = _flat(attacker);
@@ -124,10 +124,12 @@ contract J17Gate is J17Base {
     }
 
     // ------------------------------------------------------------------
-    // H5 — THE COUNTERWEIGHT. `J05F21` C5 uses a position that was ENABLED
-    //      but never DELEGATED. The wider guarantee: a DELEGATED,
-    //      auto-relocked position under a module that reverts on EVERYTHING
-    //      must still return its principal. This is why an unverifiable
+    // H5 — THE COUNTERWEIGHT. The griefing suite's broken-module test uses
+    //      a position that was ENABLED but never delegated away from its
+    //      owner (it keeps its mint-time self-delegation). The wider
+    //      guarantee: a position DELEGATED to another account and
+    //      auto-relocked, under a module that reverts on EVERYTHING, must
+    //      still return its principal. This is why an unverifiable
     //      retirement is announced (H3) rather than refused.
     // ------------------------------------------------------------------
     function test_J17_H5_brokenModuleCannotLockADELEGATEDPosition() public {

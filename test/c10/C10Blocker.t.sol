@@ -32,7 +32,7 @@ contract C10Blocker is LockedCurveTestBase {
 
         assertTrue(veHemi.isTransferable(id), "precondition: position is now transferable");
         assertEq(veHemi.nonTransferableTotalVeHemiSupply(), 0,
-            "P8 HOLE: a transferable flat position is still counted in the non-transferable subcurve");
+            "a transferable flat position is still counted in the non-transferable subcurve");
     }
 
     /// @dev Flat past `transferableAfter`, then disabled and served out: the

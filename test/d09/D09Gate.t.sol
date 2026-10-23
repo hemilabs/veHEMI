@@ -4,7 +4,7 @@ pragma solidity ^0.8.29;
 import "../LockedCurveTestBase.sol";
 import {Vm} from "forge-std/Vm.sol";
 
-/// @title D09Gate -- E-ORDER on the auto-relock event stream.
+/// @title E-ORDER on the auto-relock event stream.
 ///
 /// The event-order rule documented on `IVeHemi::AutoRelockEnabled` (called
 /// E-ORDER here): both flag events (`AutoRelockEnabled`, `AutoRelockDisabled`)
@@ -77,7 +77,8 @@ contract D09StreamIndexer {
     }
 
     /// @dev The branch structure of the curve library's Phase A, and nothing
-    ///      else. The flat level is V-MEAN: `slope * (R - SIX_DAYS/2)`.
+    ///      else. The flat level is the bucket mean:
+    ///      `slope * (R - SIX_DAYS/2)`.
     function _applyPoint(IVeHemi.LockedBalance memory new_, uint64 t_) internal {
         uint64 _r = remaining;
         int128 _slope;

@@ -43,7 +43,7 @@ contract I04VoteHoleTest is LockedCurveTestBase {
         assertEq(r.shortfalls, 0, string.concat(where, ": CLAUSE B shortfall"));
     }
 
-    // -- V1  THE BOOKING STAMP ---------------------------------------------
+    // -- THE BOOKING STAMP -------------------------------------------------
     /// The booking stamp is the next second, `block.timestamp + 1`. Clause B of
     /// `I04VoteHoleLaw` counts a record as matured from that stamp, so this pin
     /// is what makes the law check the weight from the second it is live. The
@@ -62,7 +62,7 @@ contract I04VoteHoleTest is LockedCurveTestBase {
         assertLe(uint256(delegation.delegationBookedAt(id)), nb, "clause A");
     }
 
-    // -- V3  A FLAT (AUTO-RELOCK) POSITION'S TOP-UP -------------------------
+    // -- A FLAT (AUTO-RELOCK) POSITION'S TOP-UP -----------------------------
     function test_I04_V3_flatPositionTopUp_noUnderCount() public {
         uint256 b0 = (block.timestamp / SIX_DAYS) + 2;
         vm.warp(b0 * SIX_DAYS + 1);
@@ -84,11 +84,11 @@ contract I04VoteHoleTest is LockedCurveTestBase {
         assertEq(
             delegation.getVotes(bob),
             I04VoteHoleLaw.contributionAt(sl, bi, e, block.timestamp),
-            "V3: the delegatee does not carry exactly the flat position"
+            "the delegatee does not carry exactly the flat position"
         );
     }
 
-    // -- V4  THE OWNER'S ENABLE AND DISABLE ---------------------------------
+    // -- THE OWNER'S ENABLE AND DISABLE -------------------------------------
     function test_I04_V4_enableAndDisable_noUnderCount() public {
         uint256 b0 = (block.timestamp / SIX_DAYS) + 2;
         vm.warp(b0 * SIX_DAYS + 1);
@@ -113,7 +113,7 @@ contract I04VoteHoleTest is LockedCurveTestBase {
         _assertLaw(ids, bob, "disable, at the boundary");
     }
 
-    // -- V7  A CO-DELEGATOR BOOKING IN THE SAME BLOCK AS A TOP-UP -----------
+    // -- A CO-DELEGATOR BOOKING IN THE SAME BLOCK AS A TOP-UP ---------------
     /// A has matured on bob; C delegates to bob and, in the same block, A's
     /// owner tops A up. Both writes land on bob's checkpoint array in one
     /// block. Afterwards bob must carry exactly A + C, to the wei.
@@ -130,14 +130,14 @@ contract I04VoteHoleTest is LockedCurveTestBase {
         _topUp(alice, idA, 10 ether);                                  // same block
         uint256[] memory ids = _ids(idA, idC);
         vm.warp(block.timestamp + 1);
-        _assertLaw(ids, bob, "V7 next second");
+        _assertLaw(ids, bob, "same-block writes, next second");
 
         vm.warp(boundary + 30);
         (, uint48 eA, uint96 bA, , uint64 sA) = delegation.delegations(idA);
         (, uint48 eC, uint96 bC, , uint64 sC) = delegation.delegations(idC);
         uint256 expected = I04VoteHoleLaw.contributionAt(sA, bA, eA, block.timestamp)
             + I04VoteHoleLaw.contributionAt(sC, bC, eC, block.timestamp);
-        _assertLaw(ids, bob, "V7 past the boundary");
-        assertEq(delegation.getVotes(bob), expected, "V7: a booking was lost across the same-block writes");
+        _assertLaw(ids, bob, "same-block writes, past the boundary");
+        assertEq(delegation.getVotes(bob), expected, "a booking was lost across the same-block writes");
     }
 }

@@ -3,7 +3,7 @@ pragma solidity ^0.8.29;
 
 import "../k08/K08Modules.sol";
 
-/// @title  Q14SlopeOverflowLiar — a module that answers every `delegate` with
+/// @title  A module that answers every `delegate` with
 ///         `DelegationSlopeOverflow()` (`0xf2b4513c`), the one selector VeHemi
 ///         re-raises on the holder's `disableAutoRelock` leg.
 ///
@@ -11,7 +11,7 @@ import "../k08/K08Modules.sol";
 ///         aggregate slope would overflow `uint64`. This mock is the
 ///         ADVERSARIAL shape: a broken module that CHOOSES the selector, so the
 ///         tests can check that the holder still has an owner-independent way
-///         out (`test/q30/Q30A2.t.sol`, `test/td24/TD24TransferDisarm.t.sol`).
+///         out (the strict re-raise and armed-transfer suites).
 ///         `disarm()` makes `delegate` accept again.
 contract Q14SlopeOverflowLiar is K08ModuleBase {
     error DelegationSlopeOverflow();

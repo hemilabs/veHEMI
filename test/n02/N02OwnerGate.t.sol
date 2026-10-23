@@ -4,7 +4,7 @@ pragma solidity ^0.8.29;
 import "../LockedCurveTestBase.sol";
 import {N04VoteContinuityLaw as N04} from "../n04/N04VoteContinuityLaw.sol";
 
-/// N02 -- THE OWNER GATE ON `increaseAmount`.
+/// THE OWNER GATE ON `increaseAmount`.
 ///
 /// `increaseAmount` is owner-only (`ownerOf`, not approvals or operators). The
 /// gate prevents an UNCONSENTED THIRD-PARTY MUTATION: a party with no
@@ -23,8 +23,8 @@ import {N04VoteContinuityLaw as N04} from "../n04/N04VoteContinuityLaw.sol";
 ///   G4, G6      the owner's own top-up and extension open no hole in the
 ///               delegatee's votes (both legs of a re-delegation land at
 ///               `block.timestamp + 1`).
-///   G7, G9-G11  the gate broke nothing else (owner flows, `createLockFor`,
-///               ERC-721 approval semantics).
+///   G7, G9-G11  the gate leaves everything else intact (owner flows,
+///               `createLockFor`, ERC-721 approval semantics).
 contract N02OwnerGateTest is LockedCurveTestBase {
     address internal constant MALLORY = address(0xBAD0);
     address internal constant MARKET = address(0x4A4E7); // a "marketplace"
@@ -111,7 +111,7 @@ contract N02OwnerGateTest is LockedCurveTestBase {
 
         // --- ARM B: the attack, refused. THE REFUSAL IS ASSERTED BY THE
         //     SHARED LAW, not here: `assertOnlyOwnerCanMutate` runs the OWNER
-        //     arm first (proving on this tree that this exact call DOES
+        //     arm first (proving that this exact call DOES
         //     mutate bob's sealed ledger) and only then requires the stranger
         //     to be turned away.
         //     It restores the snapshot itself, so `block.timestamp` and all
@@ -126,7 +126,7 @@ contract N02OwnerGateTest is LockedCurveTestBase {
             alice,
             bob,
             _one(id),
-            "N02/increaseAmount/stranger"
+            "increaseAmount/stranger"
         );
         assertEq(block.timestamp, T, "arm B must start at the same instant");
 
@@ -165,15 +165,17 @@ contract N02OwnerGateTest is LockedCurveTestBase {
 
     /// G2. AN ERC-721 *APPROVED* ADDRESS IS ALSO REFUSED.
     ///
-    ///     DECISION AND JUSTIFICATION. ERC-721 convention treats an approved
-    ///     address as authorised for TRANSFERS. A top-up is not that kind of
-    ///     act: it moves value IN (irreversibly, to the owner's benefit) and
-    ///     it FIRES A RE-DELEGATION that MOVES THE OWNER'S DELEGATEE'S SEALED
-    ///     VOTING RECORD, which an approved address was never granted.
+    ///     WHY APPROVALS ARE NOT HONOURED. ERC-721 convention treats an
+    ///     approved address as authorised for TRANSFERS. A top-up is not
+    ///     that kind of act: it moves value IN (irreversibly, to the owner's
+    ///     benefit) and it FIRES A RE-DELEGATION that MOVES THE OWNER'S
+    ///     DELEGATEE'S SEALED VOTING RECORD, which an approved address was
+    ///     never granted.
     ///     Consent to sell an NFT is
     ///     not consent to move the seller's governance weight. Strict `ownerOf`
-    ///     also matches the contract's two pre-existing owner gates
-    ///     (`increaseUnlockTime`, `withdraw`), neither of which honours
+    ///     also matches the contract's other owner gates
+    ///     (`increaseUnlockTime`, `withdraw`, `enableAutoRelock`,
+    ///     `disableAutoRelock`, `refreshAutoRelock`), none of which honours
     ///     approvals.
     function test_N02_G2_approvedAddressIsRefused() public {
         (uint256 id, ) = _armed(7 * SIX_DAYS);
@@ -191,12 +193,12 @@ contract N02OwnerGateTest is LockedCurveTestBase {
             alice,
             bob,
             _one(id),
-            "N02/increaseAmount/approved"
+            "increaseAmount/approved"
         );
     }
 
     /// G3. AN `isApprovedForAll` OPERATOR IS ALSO REFUSED -- THE LISTED-FOR-
-    ///     SALE CASE, WHICH IS THE WHOLE REASON THE DECISION MATTERS.
+    ///     SALE CASE, THE CASE THE RULE EXISTS FOR.
     ///
     ///     `VeHemi` overrides NEITHER `approve` NOR `setApprovalForAll`, so
     ///     OZ's unrestricted versions apply and blanket operator grants to
@@ -205,7 +207,7 @@ contract N02OwnerGateTest is LockedCurveTestBase {
     ///     grants with exactly the dust mutation trigger this gate removes --
     ///     through the most over-granted and least-revoked approval surface
     ///     in NFT-land. That would make the gate close the front door and
-    ///     leave the side door open, which is worse than not shipping it.
+    ///     leave the side door open, which is worse than having no gate.
     function test_N02_G3_operatorForAllIsRefused_listedForSale() public {
         (uint256 id, uint256 v0) = _armed(7 * SIX_DAYS);
         vm.prank(alice);
@@ -222,7 +224,7 @@ contract N02OwnerGateTest is LockedCurveTestBase {
             alice,
             bob,
             _one(id),
-            "N02/increaseAmount/operatorForAll"
+            "increaseAmount/operatorForAll"
         );
 
         // Same wei-exact evidence as G1, for the operator path.
@@ -234,16 +236,13 @@ contract N02OwnerGateTest is LockedCurveTestBase {
         assertGt(v0, 0, "G3: sanity");
     }
 
-    /// G8. A NONEXISTENT OR BURNED ID NOW REVERTS `NotOwner`, NOT
-    ///     `NoExistingLock`. AN ABI-OBSERVABLE SIDE EFFECT, RECORDED ON
-    ///     PURPOSE.
+    /// G8. A NONEXISTENT OR BURNED ID REVERTS `NotOwner`, NOT
+    ///     `NoExistingLock`.
     ///
-    ///     `_ownerOf` returns `address(0)` for both. The gate runs first, so
-    ///     the revert reason for these ids changes. This is the SAME ordering
-    ///     `increaseUnlockTime` has always had, so the two are now consistent
-    ///     -- but integrators matching on `NoExistingLock()` will see a
-    ///     different selector. Asserted here so the change is a recorded
-    ///     decision and not a surprise.
+    ///     `_ownerOf` returns `address(0)` for both, and the gate runs first,
+    ///     the same ordering as `increaseUnlockTime`. The selector is
+    ///     ABI-observable, so it is pinned here: for these ids an integrator
+    ///     must match `NotOwner`, not `NoExistingLock()`.
     function test_N02_G8_nonexistentAndBurnedIdsRevertNotOwner() public {
         vm.prank(MALLORY);
         vm.expectRevert(VeHemi.NotOwner.selector);
@@ -310,8 +309,8 @@ contract N02OwnerGateTest is LockedCurveTestBase {
         assertEq(delegation.getPastVotes(bob, T + 1), PRISTINE_AT_T1, "G4: the sealed reading at t+1 moved");
     }
 
-    /// G6. The other owner write, `increaseUnlockTime` (owner-only since
-    ///     before this change), re-books the longer lock to bob from `t+1`:
+    /// G6. The other owner write, `increaseUnlockTime` (also owner-only),
+    ///     re-books the longer lock to bob from `t+1`:
     ///     his votes RISE at once, to the escrow's own reading of the position.
     function test_N02_G6_ownerExtensionOpensNoHole() public {
         (uint256 id, uint256 v0) = _armed(7 * SIX_DAYS);
@@ -329,7 +328,7 @@ contract N02OwnerGateTest is LockedCurveTestBase {
     }
 
     // =====================================================================
-    // PART 3 -- NOTHING ELSE BROKE.
+    // PART 3 -- EVERYTHING ELSE IS INTACT.
     // =====================================================================
 
     /// G7. PLACEMENT PROOF: the gate is in `increaseAmount`, NOT in
@@ -341,21 +340,21 @@ contract N02OwnerGateTest is LockedCurveTestBase {
     ///     `_depositFor` the token is owned by `account_`, not by
     ///     `_msgSender()`. A check placed in `_depositFor` would therefore
     ///     revert every third-party mint. `createLockFor` is permissionless
-    ///     BY DESIGN and measured harmless -- it creates a NEW position and
-    ///     cannot touch any existing position's delegation. This body is the
-    ///     regression test for that placement.
+    ///     BY DESIGN and harmless -- it creates a NEW position and cannot
+    ///     touch any existing position's delegation. This body pins that
+    ///     placement.
     function test_N02_G7_createLockForByAStrangerStillWorks() public {
         vm.warp(((block.timestamp / SIX_DAYS) + 2) * SIX_DAYS + 1);
         _fund(MALLORY, 500 ether);
         vm.prank(MALLORY);
         uint256 id = veHemi.createLockFor(500 ether, 7 * SIX_DAYS, bob, true, false);
-        assertEq(veHemi.ownerOf(id), bob, "G7: the stranger-funded mint must still land on bob");
+        assertEq(veHemi.ownerOf(id), bob, "G7: the stranger-funded mint must land on bob");
         // The mint self-delegates to `account_` via `_resolveAutoDelegate`.
         vm.warp(_b(block.timestamp) + 1);
-        assertGt(delegation.getVotes(bob), 0, "G7: and self-delegate at mint as before");
+        assertGt(delegation.getVotes(bob), 0, "G7: and the mint self-delegates to bob");
     }
 
-    /// G9. THE OWNER'S OWN FLOWS THROUGH THE SHARED BODY ALL STILL WORK, and
+    /// G9. THE OWNER'S OWN FLOWS THROUGH THE SHARED BODY ALL WORK, and
     ///     a real top-up REACHES the delegatee (the complement of G4: skipping
     ///     the re-book would also open no hole, while freezing bob's weight).
     function test_N02_G9_ownerFlowsIntact_andBookingStillLands() public {
@@ -377,7 +376,7 @@ contract N02OwnerGateTest is LockedCurveTestBase {
         emit log_named_uint("G9 after ", after_);
         assertGt(after_, before_, "G9: the owner's top-up never reached the delegatee");
 
-        // ...and the other owner-side lifecycle calls still succeed.
+        // ...and the other owner-side lifecycle calls succeed too.
         vm.prank(alice);
         veHemi.disableAutoRelock(id);
         vm.prank(alice);
@@ -417,6 +416,6 @@ contract N02OwnerGateTest is LockedCurveTestBase {
         veHemi.setApprovalForAll(MARKET, true);
         vm.prank(MARKET);
         veHemi.transferFrom(alice, charlie, id);
-        assertEq(veHemi.ownerOf(id), charlie, "G11: operator transfer must still work");
+        assertEq(veHemi.ownerOf(id), charlie, "G11: operator transfer must work");
     }
 }

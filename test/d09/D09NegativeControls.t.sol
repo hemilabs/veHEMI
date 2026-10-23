@@ -4,14 +4,15 @@ pragma solidity ^0.8.29;
 import "../LockedCurveTestBase.sol";
 import {Vm} from "forge-std/Vm.sol";
 
-/// @title D09NegativeControls -- the auto-relock ABI and log surface.
+/// @title The auto-relock ABI and log surface.
 ///
 ///   NC_A  the compiled auto-relock function surface is exactly the expected
 ///         ten (read from the compiled artifact), and rejected alternative
 ///         entry points are unanswerable on the deployed dispatcher.
-///   NC_B  GUARD 8 (`SeedingNotFinalized`) holds on every door for a subcurve
-///         position, is narrowed to `transferableAfter > block.timestamp`, and
-///         only `enableAutoRelock` can create a term on an existing position.
+///   NC_B  the seeding guard (`SeedingNotFinalized`) holds on every door for a
+///         subcurve position, is scoped to
+///         `transferableAfter > block.timestamp`, and only `enableAutoRelock`
+///         can create a term on an existing position.
 ///   NC_C  writers of `autoRelockRemaining` that emit no auto-relock event
 ///         (`increaseUnlockTime`, `forfeit`, `withdraw`) on the log stream.
 ///   NC_P  every auto-relock event payload agrees with storage.
@@ -19,7 +20,7 @@ import {Vm} from "forge-std/Vm.sol";
 /// The negative controls are PERMUTATIONS OR RESTRICTIONS OF THE RECORDED LOG
 /// STREAM (or probes of the compiled artifact), so no modified copy of
 /// `src/VeHemi.sol` is needed -- the same device `test/d09/D09Gate.t.sol` uses.
-/// The flat level is V-MEAN, `slope * (R - SIX_DAYS/2)`.
+/// The flat level is the bucket mean, `slope * (R - SIX_DAYS/2)`.
 ///
 /// Scope: the ABI and log surface -- what an indexer can derive from a
 /// transaction's logs, and what the compiled dispatcher answers. Nothing below
@@ -103,7 +104,7 @@ contract D09WriterStreamIndexer {
     }
 
     /// @dev The branch structure of `src/lib/VeHemiCurveLib.sol::checkpoint`'s
-    ///      Phase A and nothing else. The flat level is V-MEAN.
+    ///      Phase A and nothing else. The flat level is the bucket mean.
     function _applyPoint(IVeHemi.LockedBalance memory new_, uint64 t_) internal {
         if (retired) return;
         if (deriveRFromEnd && flat && new_.amount > 0 && new_.end > _grid(t_)) {
@@ -186,8 +187,8 @@ contract D09NegativeControls is LockedCurveTestBase {
         vm.warp(block.timestamp + 2 * SIX_DAYS + 3333);
     }
 
-    /// @dev A NON-TRANSFERABLE position -- the only shape GUARD 8 is scoped
-    ///      to, because it is the only shape enrolled in a subcurve.
+    /// @dev A NON-TRANSFERABLE position -- the only shape the seeding guard
+    ///      is scoped to, because it is the only shape enrolled in a subcurve.
     function _mintNonTransferable(address owner_, uint256 buckets_) internal returns (uint256 _id) {
         hemi.mint(owner_, AMT);
         vm.startPrank(owner_);
@@ -320,7 +321,7 @@ contract D09NegativeControls is LockedCurveTestBase {
         for (uint256 i; i < 10; ++i) {
             assertTrue(
                 _has(_got, _want[i]),
-                string.concat("D09 ABI: the converged surface is MISSING ", _want[i])
+                string.concat("ABI: the auto-relock function surface is MISSING ", _want[i])
             );
         }
         for (uint256 i; i < _n; ++i) {
@@ -330,10 +331,10 @@ contract D09NegativeControls is LockedCurveTestBase {
             }
             assertTrue(
                 _expected,
-                string.concat("D09 ABI: UNEXPECTED auto-relock entry point ", _got[i])
+                string.concat("ABI: UNEXPECTED auto-relock entry point ", _got[i])
             );
         }
-        assertEq(_n, 10, "D09 ABI: the auto-relock function surface changed size");
+        assertEq(_n, 10, "ABI: the auto-relock function surface changed size");
     }
 
     /// @notice NC_A2. The rejected entry points, probed against the DEPLOYED
@@ -348,15 +349,15 @@ contract D09NegativeControls is LockedCurveTestBase {
                 address(veHemi).call(abi.encodeWithSelector(_sel, _id, uint256(1)));
             assertFalse(
                 _ok,
-                string.concat("D09: a REJECTED auto-relock entry point answered: ", REJECTED[i])
+                string.concat("a REJECTED auto-relock entry point answered: ", REJECTED[i])
             );
             assertEq(
                 _ret.length,
                 0,
-                string.concat("D09: a REJECTED entry point returned data -- it is implemented: ", REJECTED[i])
+                string.concat("a REJECTED entry point returned data -- it is implemented: ", REJECTED[i])
             );
         }
-        // Anti-vacuity: the same probe against a CONVERGED selector must NOT
+        // Anti-vacuity: the same probe against an IMPLEMENTED selector must NOT
         // look like a dispatcher miss, or the instrument proves nothing.
         vm.prank(alice);
         (bool _ok2, ) = address(veHemi).call(
@@ -366,19 +367,19 @@ contract D09NegativeControls is LockedCurveTestBase {
     }
 
     // ==================================================================
-    // NC_B -- WHY ONE ENTRY POINT.  GUARD 8 through every door.
+    // NC_B -- WHY ONE ENTRY POINT.  The seeding guard through every door.
     // ==================================================================
 
-    /// @notice NC_B1. GUARD 8 refuses `enableAutoRelock` on the shape it is
-    ///         scoped to -- a position enrolled in a subcurve -- and NO
-    ///         rejected entry point offers a second way in.
+    /// @notice NC_B1. The seeding guard refuses `enableAutoRelock` on the
+    ///         shape it is scoped to -- a position enrolled in a subcurve --
+    ///         and NO rejected entry point offers a second way in.
     function test_D09_NC_B1_guard8HoldsOnEveryEntryPointForASubcurvePosition() public {
         // NO seeding flow: the latch is open.
         uint256 _id = _mintNonTransferable(alice, 40);
         assertGt(
             veHemi.transferableAfter(_id),
             block.timestamp,
-            "vacuity: this position is not in GUARD 8's scope"
+            "vacuity: this position is not in the seeding guard's scope"
         );
 
         vm.prank(alice);
@@ -391,17 +392,17 @@ contract D09NegativeControls is LockedCurveTestBase {
             (bool _ok, ) = address(veHemi).call(abi.encodeWithSelector(_sel, _id, uint256(1)));
             assertTrue(
                 !_ok || veHemi.autoRelockRemaining(_id) == 0,
-                string.concat("GUARD 8 BYPASSED through a second entry point: ", REJECTED[i])
+                string.concat("the seeding guard was BYPASSED through a second entry point: ", REJECTED[i])
             );
         }
-        assertEq(veHemi.autoRelockRemaining(_id), 0, "GUARD 8: R was set before seeding finalized");
+        assertEq(veHemi.autoRelockRemaining(_id), 0, "the seeding guard failed: R was set before seeding finalized");
     }
 
-    /// @notice NC_B2. GUARD 8 is NARROWED to positions with
+    /// @notice NC_B2. The seeding guard is SCOPED to positions with
     ///         `transferableAfter > block.timestamp`. A transferable-at-mint
     ///         position is never enrolled in a subcurve, so refusing it would
     ///         be feature-denial with nothing to protect, and the shipped
-    ///         build ACCEPTS it. Asserted so that a silent RE-WIDENING is
+    ///         build ACCEPTS it. Asserted so that a silent WIDENING is
     ///         visible.
     function test_D09_NC_B2_guard8IsNarrowedAndTheNarrowingIsTheShippedRule() public {
         uint256 _id;
@@ -414,7 +415,7 @@ contract D09NegativeControls is LockedCurveTestBase {
         assertGt(
             veHemi.autoRelockRemaining(_id),
             0,
-            "GUARD 8 RE-WIDENED: a transferable-at-mint position is now refused before seeding"
+            "the seeding guard WIDENED: a transferable-at-mint position is refused before seeding"
         );
     }
 
@@ -583,8 +584,8 @@ contract D09NegativeControls is LockedCurveTestBase {
         // (a) No auto-relock event.
         (bool _fd, , ) = _payload(_l2, IVeHemi.AutoRelockDisabled.selector, _id);
         (bool _fr, , ) = _payload(_l2, IVeHemi.AutoRelockRetired.selector, _id);
-        assertFalse(_fd, "forfeit now emits AutoRelockDisabled -- the shipped NatSpec says it does not");
-        assertFalse(_fr, "forfeit now emits AutoRelockRetired -- the shipped NatSpec says it does not");
+        assertFalse(_fd, "forfeit emits AutoRelockDisabled -- the shipped NatSpec says it does not");
+        assertFalse(_fr, "forfeit emits AutoRelockRetired -- the shipped NatSpec says it does not");
         assertEq(veHemi.autoRelockRemaining(_id), 0, "vacuity: forfeit did not clear the term");
 
         // (b) BOTH OTHER SIGNALS ARE PRESENT.

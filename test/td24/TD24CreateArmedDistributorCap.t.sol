@@ -23,7 +23,7 @@ contract TD24GasBurnDistributor is IRewardDistributor {
     }
 }
 
-/// @title  TD24 -- `createLockWithAutoRelock` under a reward distributor that
+/// @title  `createLockWithAutoRelock` under a reward distributor that
 ///         spends its whole gas allowance: a DOCUMENTED LIMIT, pinned.
 ///
 /// @notice Arm-at-creation notifies the distributor three times before the
@@ -51,7 +51,7 @@ contract TD24GasBurnDistributor is IRewardDistributor {
 ///         live one does, and the minter has an auto-delegate, so the new
 ///         position is delegated and the floor applies.
 contract TD24CreateArmedDistributorCap is J11Base {
-    /// @dev Hemi's per-transaction gas cap, as in `TD24TransferDisarm`.
+    /// @dev Hemi's per-transaction gas cap.
     uint256 internal constant HEMI_TX_CAP = 29_930_000;
     uint256 internal constant CEILING = 8_000_000;
     uint256 internal constant AMOUNT = 1_000 ether;
@@ -236,10 +236,9 @@ contract TD24CreateArmedDistributorCap is J11Base {
 
     /// @dev Park `d_` half a position's slope below the uint64 aggregate-slope
     ///      ceiling with one decaying whale, then prove from outside VeHemi that
-    ///      a position of AMOUNT no longer fits there (the `TD24TransferDisarm`
-    ///      rig).
+    ///      a position of AMOUNT no longer fits there.
     function _saturate(address d_) internal {
-        address w = address(uint160(uint256(keccak256(abi.encode("td24-whale", d_)))));
+        address w = address(uint160(uint256(keccak256(abi.encode("saturating-whale", d_)))));
         uint256 headroom = (AMOUNT / MAX_TIME) / 2;
         (uint256 whaleId, , ) = createLock(w, (uint256(type(uint64).max) - headroom) * MAX_TIME, 3 * 365 days);
         delegateTo(w, whaleId, d_);
@@ -250,7 +249,7 @@ contract TD24CreateArmedDistributorCap is J11Base {
         );
         require(
             !ok && bytes4(ret) == VeHemiVoteDelegation.DelegationSlopeOverflow.selector,
-            "TD24: saturation premise gone"
+            "saturation premise gone"
         );
     }
 

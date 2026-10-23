@@ -31,9 +31,9 @@ contract DatingProbeModule is MockHemiVoteDelegation {
  *   U2 sentinels (constructor, initialize on ERC1967Proxy / OZ5 TUP, no clobber);
  *   U3 the lazy close happens only in `_delegate`;
  *   U4 the arm on each proxy type;
- *   U5 G1: fail-open on broken/older modules, refusal on a deferring one,
- *      garbage returndata, and gas sweeps that never yield an armed position
- *      (below the removal gas floor, and across it).
+ *   U5 the window probe: fail-open on broken/older modules, refusal on a
+ *      deferring one, garbage returndata, and gas sweeps that never yield an
+ *      armed position (below the removal gas floor, and across it).
  */
 contract R31WindowTest is J11Base {
     uint256 constant HOUR = 3600;
@@ -160,7 +160,7 @@ contract R31WindowTest is J11Base {
         assertTrue(VeHemiVoteDelegation(address(tp)).legacyDatingActive(), "U4: window not active");
     }
 
-    // ---- U5 (G1) -----------------------------------------------------------
+    // ---- U5 (window probe) -------------------------------------------------
 
     function _armable() internal returns (uint256 id) {
         (id, , ) = createLock(victim, 1000 ether, 4 * 365 days);

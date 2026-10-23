@@ -3,7 +3,7 @@ pragma solidity ^0.8.29;
 
 import "./LockedCurveTestBase.sol";
 
-/// O06 -- a delegatee's checkpoint array grown by a stranger.
+/// A delegatee's checkpoint array grown by a stranger.
 ///
 /// Anyone holding a position can deepen another delegatee's checkpoint array
 /// by re-delegating once per block. G1 pins that `getPastVotes` and `getVotes`
@@ -91,13 +91,13 @@ contract O06GrowthTest is LockedCurveTestBase {
 
         assertGt(delegation.getDelegationCheckpointsLength(DEL_A), 4000,
             "G1: construction -- the array must actually be deep");
-        assertLt(gPastAt4096, READ_GAS_BOUND, "O06/G1: getPastVotes must stay cheap at depth (it is O(log n))");
+        assertLt(gPastAt4096, READ_GAS_BOUND, "G1: getPastVotes must stay cheap at depth (it is O(log n))");
         // `getVotes` is the live read: an O(n) walk here would let a stranger
         // raise the cost of every current-vote read of the delegatee without
         // bound, by growing its array.
-        assertLt(gLiveAt4096, READ_GAS_BOUND, "O06/G1: getVotes must stay cheap at depth (it is O(log n))");
+        assertLt(gLiveAt4096, READ_GAS_BOUND, "G1: getVotes must stay cheap at depth (it is O(log n))");
         assertEq(delegation.getDelegationCheckpoints(VICTIM).length, victimLenBefore,
-            "O06/G1: a stranger must not be able to grow an unrelated address's array");
+            "G1: a stranger must not be able to grow an unrelated address's array");
     }
 
     // ── G2 ────────────────────────────────────────────────────────────────
@@ -111,7 +111,7 @@ contract O06GrowthTest is LockedCurveTestBase {
 
         IVeHemiVoteDelegation.DelegateCheckpoint[] memory all =
             delegation.getDelegationCheckpoints(DEL_A);
-        assertEq(len, all.length, "O06/G2: length view disagrees with the array");
+        assertEq(len, all.length, "G2: length view disagrees with the array");
         assertGt(len, 4000, "G2: construction -- the array must actually be deep");
 
         uint256 g = gasleft();
@@ -128,39 +128,39 @@ contract O06GrowthTest is LockedCurveTestBase {
         emit log_named_uint("G2 pages needed at limit 256   ", (len + 255) / 256);
         emit log_named_uint("G2 reduction factor            ", gPage == 0 ? 0 : gAll / gPage);
 
-        assertEq(page.length, 256, "O06/G2: a full page must return exactly `limit` elements");
+        assertEq(page.length, 256, "G2: a full page must return exactly `limit` elements");
         assertLt(gPage, BLOCK_CEILING / 10,
-            "O06/G2: a bounded page must be servable inside a small fraction of a block");
+            "G2: a bounded page must be servable inside a small fraction of a block");
 
         // FAITHFUL: the window is the array, element for element.
         for (uint256 i = 0; i < 256; ++i) {
-            assertEq(page[i].timestamp, all[i].timestamp, "O06/G2: page/array timestamp mismatch");
-            assertEq(page[i].normalizedBias, all[i].normalizedBias, "O06/G2: page/array bias mismatch");
-            assertEq(page[i].normalizedSlope, all[i].normalizedSlope, "O06/G2: page/array slope mismatch");
-            assertEq(page[i].totalAmount, all[i].totalAmount, "O06/G2: page/array amount mismatch");
-            assertEq(page[i].fixedBias, all[i].fixedBias, "O06/G2: page/array fixedBias mismatch");
+            assertEq(page[i].timestamp, all[i].timestamp, "G2: page/array timestamp mismatch");
+            assertEq(page[i].normalizedBias, all[i].normalizedBias, "G2: page/array bias mismatch");
+            assertEq(page[i].normalizedSlope, all[i].normalizedSlope, "G2: page/array slope mismatch");
+            assertEq(page[i].totalAmount, all[i].totalAmount, "G2: page/array amount mismatch");
+            assertEq(page[i].fixedBias, all[i].fixedBias, "G2: page/array fixedBias mismatch");
         }
 
         // TAIL: a page that runs off the end clamps instead of reverting.
         IVeHemiVoteDelegation.DelegateCheckpoint[] memory tail =
             delegation.getDelegationCheckpointsPage(DEL_A, len - 3, 256);
-        assertEq(tail.length, 3, "O06/G2: the last page must clamp to the array end");
-        assertEq(tail[2].timestamp, all[len - 1].timestamp, "O06/G2: the last page must end at the last element");
+        assertEq(tail.length, 3, "G2: the last page must clamp to the array end");
+        assertEq(tail[2].timestamp, all[len - 1].timestamp, "G2: the last page must end at the last element");
 
         // PAST THE END: empty, not a revert -- so a paging loop terminates.
         IVeHemiVoteDelegation.DelegateCheckpoint[] memory past =
             delegation.getDelegationCheckpointsPage(DEL_A, len, 256);
-        assertEq(past.length, 0, "O06/G2: an offset past the end must return empty, not revert");
+        assertEq(past.length, 0, "G2: an offset past the end must return empty, not revert");
 
         // ZERO LIMIT: empty, not a revert.
         assertEq(delegation.getDelegationCheckpointsPage(DEL_A, 0, 0).length, 0,
-            "O06/G2: limit 0 must return empty, not revert");
+            "G2: limit 0 must return empty, not revert");
 
         // WHOLE ARRAY VIA PAGES: every element reachable, none duplicated.
         uint256 seen;
         for (uint256 off = 0; off < len; off += 512) {
             seen += delegation.getDelegationCheckpointsPage(DEL_A, off, 512).length;
         }
-        assertEq(seen, len, "O06/G2: paging must enumerate the array exactly once");
+        assertEq(seen, len, "G2: paging must enumerate the array exactly once");
     }
 }

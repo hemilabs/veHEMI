@@ -2,7 +2,7 @@
 pragma solidity ^0.8.29;
 
 // ===========================================================================
-// F09 -- THE REWARD-DISTRIBUTOR HOOK DURING A FLAT LIFE.
+// THE REWARD-DISTRIBUTOR HOOK DURING A FLAT LIFE.
 //
 // `F09Base` is the harness: two universes (M holds a manually-extended twin,
 // X the auto-relock candidate), distributor doubles, and the analytic truths.
@@ -13,8 +13,8 @@ pragma solidity ^0.8.29;
 //     R = floor((lock.end - grid(now)) / SIX_DAYS) * SIX_DAYS (whole buckets,
 //     `R >= 2*SIX_DAYS`), so every R in this suite is read back from the
 //     contract, not chosen by the test.
-//   * The flat level is V-MEAN, `slope * (R - SIX_DAYS/2)`; the integrals use
-//     the level read back from the contract.
+//   * The flat level is the bucket mean, `slope * (R - SIX_DAYS/2)`; the
+//     integrals use the level read back from the contract.
 //   * `_endAutoRelock` serves both `disableAutoRelock` and the permissionless
 //     `retireStaleAutoRelock`.
 // ===========================================================================
@@ -61,8 +61,8 @@ abstract contract F09Base is TwinOracle {
     uint256 internal derivedR;
 
     /// @dev The flat weight level the contract produced, read in the enable
-    ///      block (V-MEAN: s*(2N-1)*S/2). The truth integral is computed from
-    ///      the OBSERVED level.
+    ///      block (the bucket mean: s*(2N-1)*S/2). The truth integral is
+    ///      computed from the OBSERVED level.
     uint256 internal flatW;
 
     function _install() internal {
@@ -86,7 +86,7 @@ abstract contract F09Base is TwinOracle {
         if (enableAt == 0) return;
         if (!enabled && ts >= enableAt) {
             enabled = true;
-            require(ts == enableAt, "F09: enable did not land on the requested instant");
+            require(ts == enableAt, "enable did not land on the requested instant");
             vm.prank(bob);
             // ONE ARGUMENT. The contract derives R from lock.end and grid(now).
             X.ve.enableAutoRelock(positions[xi].tokenId);
@@ -95,7 +95,7 @@ abstract contract F09Base is TwinOracle {
         }
         if (enabled && !disabled && disableAt != 0 && ts >= disableAt) {
             disabled = true;
-            require(ts == disableAt, "F09: disable did not land on the requested instant");
+            require(ts == disableAt, "disable did not land on the requested instant");
             vm.prank(bob);
             X.ve.disableAutoRelock(positions[xi].tokenId);
         }
@@ -124,7 +124,7 @@ abstract contract F09Base is TwinOracle {
         uint256 acc;
         // phase 1: decay, end0 = N*S
         acc += s * (N * SIX_DAYS * enOff - (enOff * enOff) / 2);
-        // phase 2: flat at the level THIS BUILD produced
+        // phase 2: flat at the level the contract produced (`flatW`)
         acc += flatW * (disOff - enOff);
         // phase 3: decay to the restored end E = grid(disOff) + derivedR
         uint256 E = (disOff / SIX_DAYS) * SIX_DAYS + derivedR;
@@ -142,9 +142,7 @@ abstract contract F09Base is TwinOracle {
 /// @dev The six measurement bodies. ABSTRACT: only F09Gate instantiates them,
 ///      and its overrides of the `_record*` hooks supply the assertions.
 abstract contract F09Reward is F09Base {
-    function _recordF5(uint256 aM, uint256 tM) internal virtual {
-        assertLt(aM, tM, "F5 baseline: notify-BEFORE under-credits a manual extender");
-    }
+    function _recordF5(uint256, uint256) internal virtual {}
 
     // =====================================================================
     // F1 — THE CADENCE MATRIX.
@@ -226,11 +224,6 @@ abstract contract F09Reward is F09Base {
         emit log_named_uint("F1 withdraw              ", cntX.callsFor(id) - before_);
         assertGt(cntX.callsFor(id) - before_, 0, "withdraw must notify");
 
-        emit log_string(
-            enCalls == 0 && disCalls == 0
-                ? "F1 VERDICT: 7 of 9 weight-changing entry points notify; enable/disable do NOT."
-                : "F1 VERDICT: enable/disable DO notify (F09 P2 present)."
-        );
         _recordMatrix(enCalls, disCalls);
         _recordCadence();
     }
@@ -268,7 +261,7 @@ abstract contract F09Reward is F09Base {
         emit log_named_uint("F2 flat  hook calls / 12 epochs", xCalls);
         assertEq(mCalls % 12, 0, "twin notifies a whole number of times per epoch");
         assertGe(mCalls, 12, "twin notifies at least once per epoch");
-        emit log_string("F2 a flat position sends NO TRANSACTION, so no build can notify from one.");
+        emit log_string("F2 a flat position sends NO TRANSACTION, so VeHemi cannot notify on its behalf.");
         _recordGap(xCalls);
     }
 
@@ -283,8 +276,9 @@ abstract contract F09Reward is F09Base {
     }
 
     // =====================================================================
-    // F4 — Shape B: enable MID-BUCKET and disable MID-BUCKET. Under V-MEAN
-    //      BOTH ends are discontinuities (see the gate's note on F3/A).
+    // F4 — Shape B: enable MID-BUCKET and disable MID-BUCKET. At the
+    //      bucket-mean level BOTH ends are discontinuities (see the gate's
+    //      note on F3/A).
     // =====================================================================
     function test_F4_shapeB_midbucket() public {
         _shape(3600, 9 * SIX_DAYS + SIX_DAYS / 2, "F4/B");
@@ -347,8 +341,9 @@ abstract contract F09Reward is F09Base {
     }
 
     // =====================================================================
-    // F6 — INTEGRAL EQUIVALENCE OVER A PURE FLAT WINDOW: the V-MEAN flat
-    //      level accrues exactly the manual twin's integral.
+    // F6 — INTEGRAL EQUIVALENCE OVER A PURE FLAT WINDOW: the
+    //      bucket-mean flat level accrues exactly the manual twin's
+    //      integral.
     // =====================================================================
     function test_F6_flat_window_integral_equivalence() public {
         setUpTwinOracle();
@@ -394,8 +389,8 @@ abstract contract F09Reward is F09Base {
     // =====================================================================
     // F5 — THE MANUAL TWIN ALONE, no auto-relock anywhere: with
     //      `_depositFor` bracketed, a manual extender's accrual is exact (the
-    //      gate asserts equality; the body name describes the unbracketed
-    //      behaviour).
+    //      gate asserts equality; the body is named for the shortfall an
+    //      unbracketed `_depositFor` would produce).
     // =====================================================================
     function test_F5_notify_before_undercredits_the_twin() public {
         setUpTwinOracle();
@@ -412,12 +407,9 @@ abstract contract F09Reward is F09Base {
 
         uint256 aM = segM.accrued(idM);
         uint256 tM = truthManual(14);
-        uint256 vLower = 14 * slope() * (N - 1) * SIX_DAYS * SIX_DAYS;
         emit log_named_uint("F5 twin accrued        ", aM);
         emit log_named_uint("F5 twin TRUTH          ", tM);
-        emit log_named_uint("F5 V-LOWER level       ", vLower);
         emit log_named_int("F5 accrued vs TRUTH bps", bps(aM, tM));
-        emit log_named_int("F5 accrued vs VLOWER bp", bps(aM, vLower));
         _recordF5(aM, tM);
     }
 }

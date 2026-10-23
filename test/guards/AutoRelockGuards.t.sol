@@ -115,7 +115,7 @@ contract AutoRelockGuards is J11Base {
         assertEq(delegation.getVotes(dele2), veHemi.balanceOfNFT(id), "the auto-delegate does not hold the weight");
     }
 
-    /// @notice ACCEPTED RISK (documented on `VeHemi.updateVoteDelegation`): a
+    /// @notice KNOWN LIMITATION (documented on `VeHemi.updateVoteDelegation`): a
     ///         module whose `delegation(uint256)` return data does not decode
     ///         reverts the caller at the `try ... returns` site, so an armed
     ///         position can neither be disarmed, retired nor withdrawn while that

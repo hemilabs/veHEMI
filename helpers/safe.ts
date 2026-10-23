@@ -19,17 +19,17 @@ type MultiSigTx = {
 
 const { log } = console;
 
-// LOW-10 (2026-05-04 audit) — stale-batch defense:
+// Stale-batch defense:
 // Script 99 (`runAtTheEnd: true`) unlinks `MULTI_SIG_TXS_FILE` only after a
 // successful Safe proposal. If a prior `hardhat deploy` invocation crashed,
 // was Ctrl-C'd, or was invoked with a `--tags` filter that excluded 99, the
 // file persists to disk. Subsequent runs would silently append to that stale
 // batch, potentially mixing yesterday's V2 upgrade tx with today's
-// `setTrustedAdapter` — and the LOW-10 pre-flight in `deploy/05_aragon_adapter.ts`
-// (which checks "is the batch file non-empty?") would falsely report
-// bundling-OK.
+// `setTrustedAdapter` — and the bundling pre-flight in
+// `deploy/05_aragon_adapter.ts` (which checks "is the batch file non-empty?")
+// would falsely report bundling-OK.
 //
-// Fix: when this module first loads in a Node process and a non-empty batch
+// Defense: when this module first loads in a Node process and a non-empty batch
 // file from a prior run is on disk, move it to `<file>.stale-<time>` and refuse
 // to run (a zero-byte leftover is removed silently). The file is moved, not
 // deleted: it may be the only record of a queued upgrade, and re-running the
@@ -93,7 +93,7 @@ const armUnproposedBatchGuard = (): void => {
                 `PROPOSE_EXISTING_BATCH=1 npx hardhat --network <net> deploy --tags safe\n` +
                 `Otherwise follow what the next run prints, then run with a tag set that\n` +
                 `includes script 99's tags, in ONE process, e.g.  --tags AutoRelockUpgrade\n` +
-                `(which now selects 99) or --tags <yourtag>,safe.\n` +
+                `(which also selects 99) or --tags <yourtag>,safe.\n` +
                 `${bar}\n`
             )
         );
@@ -119,7 +119,7 @@ if (fs.existsSync(MULTI_SIG_TXS_FILE) && PROPOSE_EXISTING) {
     log(
         chalk.yellow(
             `\n${"=".repeat(78)}\n` +
-            `[LOW-10 safety] PROPOSE_EXISTING_BATCH=1 — the stale-batch defence is OFF for\n` +
+            `[batch safety] PROPOSE_EXISTING_BATCH=1 — the stale-batch defence is OFF for\n` +
             `this process. '${MULTI_SIG_TXS_FILE}' (${n} transaction(s)) is being carried\n` +
             `into this run as-is. USE THIS ONLY FOR A RUN THAT PROPOSES AN ALREADY-QUEUED\n` +
             `BATCH AND QUEUES NOTHING OF ITS OWN. Anything this run queues will be MIXED\n` +
@@ -134,12 +134,12 @@ if (fs.existsSync(MULTI_SIG_TXS_FILE) && PROPOSE_EXISTING) {
         fs.renameSync(MULTI_SIG_TXS_FILE, kept);
         throw new Error(
             `\n${"=".repeat(78)}\n` +
-            `[LOW-10 safety] REFUSING TO RUN: a Safe batch from a previous invocation is\n` +
+            `[batch safety] REFUSING TO RUN: a Safe batch from a previous invocation is\n` +
             `on disk (${size} bytes). It has been MOVED, NOT DELETED, to:\n` +
             `    ${kept}\n\n` +
             `That file is the only record of transactions that were queued to the Safe\n` +
             `and not known to be proposed. This process would otherwise have appended to\n` +
-            `it (cross-run contamination, audit finding LOW-10) or destroyed it.\n\n` +
+            `it (cross-run contamination) or destroyed it.\n\n` +
             `WHAT TO DO\n` +
             `  * Inspect ${kept}. Restore it ONLY if (a) deploy/08 printed ORDER ASSERTED\n` +
             `    for it, it holds BOTH legs, and both proxies are still on their\n` +

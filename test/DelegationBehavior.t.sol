@@ -874,8 +874,8 @@ contract DelegationBehaviorTest is Test {
     ///         withdraw. R1-G11 verified the intended sequence by reading the
     ///         source; this test pins it on-chain so any future refactor that
     ///         re-orders the cleanup steps (e.g., emitting `Withdraw` before
-    ///         the delegation cleanup, or flipping `DelegateVotesChanged`
-    ///         past `DelegateChanged`) fails loudly.
+    ///         the delegation cleanup, or emitting `DelegateVotesChanged`
+    ///         before `DelegateChanged`) fails loudly.
     ///
     ///         Expected order in the recorded log stream:
     ///           1. `DelegateChanged(tokenId, oldDelegate, address(0))`

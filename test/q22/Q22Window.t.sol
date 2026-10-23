@@ -7,7 +7,7 @@ import {VeHemiVoteDelegation} from "../../src/VeHemiVoteDelegation.sol";
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import {MockERC20} from "../mocks/MockERC20.sol";
 
-/// @notice Q22. Votes never exceed supply at an Aragon-reachable snapshot
+/// @notice Votes never exceed supply at an Aragon-reachable snapshot
 ///         after an `increaseUnlockTime` in a lock's final hour.
 ///
 ///   The near-expiry window opens when `H = hourBoundary(tau) >= end`, i.e.
@@ -46,7 +46,7 @@ contract Q22WindowTest is Test {
         vm.stopPrank();
     }
 
-    // ------------------------------------------------------------------ W2
+    // ------------------------------------------------------------------
     /// @notice Aragon's TokenVoting reads veHEMI at `S = block.timestamp - 1`
     ///   (`snapshotTimepoint`), and Hemi blocks are 12 s apart, so after a
     ///   write at block `tau` the reachable snapshots inside `[tau+1, end)`
@@ -74,9 +74,9 @@ contract Q22WindowTest is Test {
                 if (d > worst) worst = d;
             }
         }
-        emit log_named_uint("W2 window (s)", window);
-        emit log_named_uint("W2 Aragon-reachable snapshots with votes>supply", reachable);
-        emit log_named_int("W2 worst over-count at an Aragon snapshot (wei)", worst);
-        assertEq(reachable, 0, "W2: the window is reachable through Aragon at the real cadence");
+        emit log_named_uint("window (s)", window);
+        emit log_named_uint("Aragon-reachable snapshots with votes>supply", reachable);
+        emit log_named_int("worst over-count at an Aragon snapshot (wei)", worst);
+        assertEq(reachable, 0, "the window is reachable through Aragon at the real cadence");
     }
 }

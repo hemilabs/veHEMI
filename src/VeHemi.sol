@@ -757,7 +757,7 @@ contract VeHemi is
         // FLOOR-snap onto the SIX_DAYS grid. `_remaining >= 2 * SIX_DAYS` was
         // enforced at enable time, so `_newEnd > block.timestamp` always.
         //
-        // FLOOR IS MANDATORY and stays: ceil, round-to-nearest and
+        // FLOOR IS MANDATORY: ceil, round-to-nearest and
         // bucket-anchored all admit a strictly increasing end across repeated
         // cycles, i.e. an IMMORTAL position.
         //
@@ -775,9 +775,8 @@ contract VeHemi is
         // every second of end gained is backed by lock-up already served, and
         // the owner-gated `increaseUnlockTime` reaches the same ceiling
         // directly. `retireStaleAutoRelock` and an approved operator's transfer
-        // reach this snap without the owner. Test with sub-bucket offsets: on
-        // whole-bucket warps (phase_enable == phase_disable) the residue is
-        // identically zero.
+        // reach this snap without the owner. The residue is zero when
+        // phase_enable == phase_disable.
         uint256 _newEnd = ((block.timestamp / SIX_DAYS) + uint256(_remaining) / SIX_DAYS) * SIX_DAYS;
 
         // Settle the old segment with the reward distributor before the weight
@@ -1001,10 +1000,7 @@ contract VeHemi is
      *      value of 0 and so this predicate returns true for them too —
      *      `transferFrom` rejects them via its own `_ownerOf == 0` check,
      *      but external callers using this view as a membership test
-     *      should pair it with an `ownerOf` query. Folding an
-     *      `_ownerOf(tokenId_) != address(0)` SLOAD into this predicate is
-     *      deferred until bytecode headroom is reclaimed via library
-     *      extraction.
+     *      should pair it with an `ownerOf` query.
      * @param tokenId_ The token ID.
      * @return True if the token is transferable now.
      */
@@ -1405,7 +1401,7 @@ contract VeHemi is
     ///      `_endAutoRelock` passes `true` (through the 3-argument overload):
     ///      its re-delegation retires the position's flat term, for the owner's
     ///      `disableAutoRelock` and the permissionless `retireStaleAutoRelock`
-    ///      alike, so tests must cover both callers. The armed transfer passes
+    ///      alike. The armed transfer passes
     ///      `force_` to `_delegate` directly (see `_transferFromUnguarded`).
     function _reDelegate(uint256 delegator_, bool force_) internal {
         _reDelegate(delegator_, force_, false);
@@ -1538,7 +1534,7 @@ contract VeHemi is
 
     /// @dev The starvation tripwire. VeHemi wraps every call into the
     ///      vote-delegation module in a try/catch so a broken module cannot
-    ///      lock a user's principal; that swallow is load-bearing and stays.
+    ///      lock a user's principal; that swallow is load-bearing.
     ///      The tripwire tells a BROKEN module from a STARVED one.
     ///
     ///      EIP-150: a CALL is handed `g - g/64` of the gas available at the
@@ -1565,7 +1561,7 @@ contract VeHemi is
     ///      module that eats its whole allowance; the absolute consumption can
     ///      (second condition below, see `DELEGATION_GAS_CEILING`).
     ///
-    ///      It does not close the swallow class: a module that reverts for a
+    ///      It does not end the swallowing: a module that reverts for a
     ///      REAL reason is still swallowed, deliberately, so a version-skewed
     ///      module that refuses every write (where `createLock` succeeds and
     ///      silently stops delegating) stays possible. The retirement read-back
@@ -1610,7 +1606,7 @@ contract VeHemi is
     ///      the tripwire on a directly called module, and behind the
     ///      delegatecall proxy because the gas left cannot finish the call;
     ///      return data that does not decode reverts the caller.
-    ///      (The name is kept; the function requires nothing.)
+    ///      (Despite its name, it does not revert on a flat record.)
     function _requireFlatTermRetired(uint256 tokenId_) internal {
         uint256 _gasBefore = gasleft();
         try voteDelegation.delegation{gas: DELEGATION_GAS_CEILING}(tokenId_) returns (
@@ -1773,8 +1769,8 @@ contract VeHemi is
             // The only vote-delegation catch site that calls
             // `voteDelegation.delegate` (the other three are views), so the
             // only one a `CheckpointLayoutViolated` can reach. That revert is
-            // cheap, so the tripwire stays silent, and it is KEPT (fail-closed:
-            // the corrupt array is not written through). It is swallowed like
+            // cheap, so the tripwire stays silent, and it fails closed (the
+            // corrupt array is not written through). It is swallowed like
             // any other failure -- the NFT transfer stands, the delegatee's
             // record is frozen -- and `DelegationUpdateFailedReason` names the
             // selector, so the freeze is attributable. (On an armed transfer a
@@ -2262,7 +2258,7 @@ contract VeHemi is
      *      in the last `((end - 1) mod 3600) + 1` seconds (360-3600 s) of its lock,
      *      or after its end, where VeHemi skips the update
      *      (`DelegationUpdateSkipped`; see `IVeHemi.sol::DelegationUpdateSkipped`).
-     *      This is accepted behaviour, with a consequence: such a record still
+     *      In both cases the kept record still
      *      names the PREVIOUS owner's delegatee, and a later `increaseUnlockTime`,
      *      `increaseAmount`, `enableAutoRelock` (and a later
      *      `retireStaleAutoRelock`) re-books the position's weight to that

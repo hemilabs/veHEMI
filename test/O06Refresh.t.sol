@@ -3,7 +3,7 @@ pragma solidity ^0.8.29;
 
 import "./LockedCurveTestBase.sol";
 
-/// O06 -- the other emitters of `DelegateVotesChanged`.
+/// The other emitters of `DelegateVotesChanged`.
 ///
 /// `_delegate`'s two legs are not the only writers of the event.
 /// `refreshVotingPower` (permissionless, state-free, exists only to tell
@@ -75,7 +75,7 @@ contract O06RefreshTest is LockedCurveTestBase {
         emit log_named_uint("R1 contradiction (wei)    ", eff > n ? eff - n : n - eff);
         assertTrue(eff != bnd, "R1: construction -- the two instants must differ");
         assertEq(n, eff,
-            "O06/R1: refreshVotingPower reports the boundary, contradicting the delegation event in the same block");
+            "R1: refreshVotingPower reports the boundary, contradicting the delegation event in the same block");
     }
 
     // ── R2 ────────────────────────────────────────────────────────────────
@@ -93,7 +93,7 @@ contract O06RefreshTest is LockedCurveTestBase {
         uint256 eff = _votesAt(DEL_A, T + 1);
         emit log_named_uint("R2 batch emitted   ", n);
         emit log_named_uint("R2 getVotes at t+1 ", eff);
-        assertEq(n, eff, "O06/R2: refreshVotingPowerBatch reports the boundary");
+        assertEq(n, eff, "R2: refreshVotingPowerBatch reports the boundary");
     }
 
     // ── R3 ────────────────────────────────────────────────────────────────
@@ -133,9 +133,9 @@ contract O06RefreshTest is LockedCurveTestBase {
         emit log_named_uint("R3 getVotes(now)         ", beforeNow);
 
         assertGt(beforeEff, 0, "R3: construction -- DEL_A must still carry the long lock");
-        assertEq(afterEff, beforeEff, "O06/R3: the amortiser changed the t+1 reading");
-        assertEq(afterBnd, beforeBnd, "O06/R3: the amortiser changed the boundary reading");
-        assertEq(p, n, "O06/R3: the amortiser reported a non-zero delta it did not make");
-        assertEq(n, afterEff, "O06/R3: the amortiser reports the boundary, not the effective instant");
+        assertEq(afterEff, beforeEff, "R3: the amortiser changed the t+1 reading");
+        assertEq(afterBnd, beforeBnd, "R3: the amortiser changed the boundary reading");
+        assertEq(p, n, "R3: the amortiser reported a non-zero delta it did not make");
+        assertEq(n, afterEff, "R3: the amortiser reports the boundary, not the effective instant");
     }
 }

@@ -302,8 +302,9 @@ contract ARLHandler is Test {
     }
 
     /// @notice Ledger weight of shadow `i` at `block.timestamp`.
-    /// @dev The flat level is the V-MEAN `slope * (R - SIX_DAYS/2)`. R is at
-    ///      least `2 * SIX_DAYS` and SIX_DAYS is even, so this is exact.
+    /// @dev The flat level is the bucket mean, `slope * (R - SIX_DAYS/2)`.
+    ///      R is at least `2 * SIX_DAYS` and SIX_DAYS is even, so this is
+    ///      exact.
     function authoredWeight(uint256 i) public view returns (uint256) {
         Shadow storage s = shadows[i];
         if (!s.alive) return 0;
@@ -685,7 +686,7 @@ contract ARLHandler is Test {
         try veHemi.withdraw(s.tokenId) {
             unchecked { flatWithdrawSuccesses += 1; }
             if (weight > flatWithdrawWeightLeaked) flatWithdrawWeightLeaked = weight;
-            // Keep the ledger true so the other checks report their own findings.
+            // Keep the ledger true so the other checks report their own failures.
             _burn(s);
             s.arlRemaining = 0;
             refreshedAtAuthored[s.tokenId] = 0;

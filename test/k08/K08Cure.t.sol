@@ -5,7 +5,7 @@ import "../j11/J11Base.sol";
 import {IVeHemiVoteDelegation} from "../../src/interfaces/IVeHemiVoteDelegation.sol";
 import {LyingVoteDelegation} from "../mocks/LyingVoteDelegation.sol";
 
-/// @title K08 — the holder's cures for a flat term stranded by an unverified
+/// @title The holder's cures for a flat term stranded by an unverified
 ///        retirement.
 /// @notice A lying module accepts the disable's re-delegation and does
 ///         nothing, so the REAL module keeps the flat term booked at the old

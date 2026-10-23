@@ -71,7 +71,7 @@ contract H03HalfBTest is TwinOracle {
         }
     }
 
-    // ==================================================================== HB2
+    // ====================================================================
     /// @notice A mid-life `forfeit()` takes the escrow to zero; no 5-second
     ///         sample of the next two hours may show votes above it, at twelve
     ///         phases of the hour.
@@ -96,7 +96,7 @@ contract H03HalfBTest is TwinOracle {
         assertEq(worstAll, 0, "PHANTOM: some phase of the hour leaks");
     }
 
-    // ==================================================================== HB3
+    // ====================================================================
     /// @notice A top-up re-books the record in the same hour the token is
     ///         forfeited; the forfeit still leaves no phantom.
     function test_HB3_owner_rebook_then_forfeit() public {
@@ -119,7 +119,7 @@ contract H03HalfBTest is TwinOracle {
         assertEq(_sweepPhantom(7200), 0, "PHANTOM survives a 1-wei re-book");
     }
 
-    // ==================================================================== HB4
+    // ====================================================================
     /// @notice NO VICTIM MAY BE SHAVED. VICTIM delegates to the same delegatee;
     ///         after ALICE's forfeit settles, CAROL carries exactly VICTIM's
     ///         escrow.
@@ -140,7 +140,7 @@ contract H03HalfBTest is TwinOracle {
         assertEq(X.del.getVotes(CAROL), X.ve.balanceOfNFT(vid), "VICTIM SHAVED: an innocent co-delegator lost weight");
     }
 
-    // ==================================================================== HB5
+    // ====================================================================
     /// @notice SEALED HISTORY IS IMMUTABLE. Twelve `getPastVotes` answers are
     ///         read before the forfeit and re-read after it. Not one may change.
     function test_HB5_sealed_history_is_immutable() public {
@@ -164,7 +164,7 @@ contract H03HalfBTest is TwinOracle {
         }
     }
 
-    // ==================================================================== HB6
+    // ====================================================================
     /// @notice NO SWALLOWED FAILURE. `VeHemi._reDelegate` catches a failing
     ///         delegation call and emits `DelegationUpdateFailed` instead of
     ///         reverting, so the forfeit's retirement must never emit it.
@@ -183,7 +183,7 @@ contract H03HalfBTest is TwinOracle {
         }
     }
 
-    // ==================================================================== HB7
+    // ====================================================================
     /// @notice THE OTHER RETIREMENT PATH. `withdraw` burns the position after
     ///         the term ends; no phantom may survive there either.
     function test_HB7_withdraw_burn_leaves_no_phantom() public {
@@ -199,7 +199,7 @@ contract H03HalfBTest is TwinOracle {
         assertEq(_sweepPhantom(7200), 0, "PHANTOM: votes above escrow after a burn");
     }
 
-    // ==================================================================== B3
+    // ====================================================================
     /// @notice `disableAutoRelock` steps the weight from the flat level to the
     ///         decaying curve. Over the next two hours the delegatee's votes
     ///         must never exceed the position's own escrow weight.
@@ -217,7 +217,7 @@ contract H03HalfBTest is TwinOracle {
         assertEq(_sweepExcessOver(id), 0, "votes above escrow after disable");
     }
 
-    // ==================================================================== B4
+    // ====================================================================
     /// @notice A 1-wei top-up in the SAME hour as the disable re-books the
     ///         record ahead of the disable. The disable must neither be
     ///         swallowed nor leave the delegatee above the escrow.
@@ -250,7 +250,7 @@ contract H03HalfBTest is TwinOracle {
         assertEq(_sweepExcessOver(id), 0, "votes above escrow after dust + disable");
     }
 
-    // ==================================================================== B5
+    // ====================================================================
     /// @notice NO THIRD-PARTY DESTRUCTION. A co-delegator runs 50 same-hour
     ///         enable/disable round trips; the delegatee's votes stay between
     ///         the victim's own escrow and the pair's escrow.
@@ -284,7 +284,7 @@ contract H03HalfBTest is TwinOracle {
         assertLe(v, vAlone + aAlone, "INFLATION: votes above the pair's escrow");
     }
 
-    // ==================================================================== B6
+    // ====================================================================
     /// @notice THE CHECKPOINT HISTORY IS ORDERED AND IMMUTABLE.
     ///         (a) `delegateCheckpoints` timestamps stay STRICTLY INCREASING;
     ///         (b) every `getPastVotes(a, t)` sampled after the last write of
@@ -336,7 +336,7 @@ contract H03HalfBTest is TwinOracle {
         }
     }
 
-    // ==================================================================== B8
+    // ====================================================================
     /// @notice `delegationBookedAt` is `block.timestamp + 1` right after a
     ///         delegate, and is cleared on the forfeit path.
     function test_B8_bookedAt_is_maintained() public {
@@ -351,7 +351,7 @@ contract H03HalfBTest is TwinOracle {
         assertEq(uint256(X.del.delegationBookedAt(id)), 0, "bookedAt not cleared on forfeit");
     }
 
-    // ==================================================================== B9
+    // ====================================================================
     /// @notice A MOVE between two delegatees never leaves the pair carrying
     ///         more than the position's escrow, at any 5-second sample of the
     ///         next two hours.
@@ -375,7 +375,7 @@ contract H03HalfBTest is TwinOracle {
         assertEq(worstExcess, 0, "INFLATION: the pair carries more than the escrow");
     }
 
-    // ==================================================================== HB9
+    // ====================================================================
     /// @notice TWO FLAT TERMS ON ONE DELEGATEE, THEN A STEP. Two armed
     ///         positions are delegated to CAROL some time apart; the first one
     ///         then moves to another delegatee, is disabled, or is topped up by

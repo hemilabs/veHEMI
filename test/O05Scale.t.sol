@@ -59,7 +59,7 @@ contract O05ScaleTest is LockedCurveTestBase {
                 ++relays;
             }
         }
-        assertGt(relays, 0, "O05/C2 NON-VACUOUS: the delegate emitted no DelegateVotesChanged for DEL_A");
+        assertGt(relays, 0, "C2 NON-VACUOUS: the delegate emitted no DelegateVotesChanged for DEL_A");
 
         uint256 effective;
         for (uint256 t = T + 1; t <= _b(T); ++t) {
@@ -69,8 +69,8 @@ contract O05ScaleTest is LockedCurveTestBase {
         // Without these the comparison below could run at time 0, where both
         // sides read 0, or after the victim's expiry, where it tests nothing.
         assertGt(effective, 0,
-            "O05/C2 NON-VACUOUS: DEL_A's votes never changed between the trigger and the next hour boundary");
-        assertLt(effective, E, "O05/C2 NON-VACUOUS: the victim is not live at the effective instant");
+            "C2 NON-VACUOUS: DEL_A's votes never changed between the trigger and the next hour boundary");
+        assertLt(effective, E, "C2 NON-VACUOUS: the victim is not live at the effective instant");
         vm.warp(effective);
         uint256 actual = delegation.getVotes(DEL_A);
 
@@ -83,6 +83,6 @@ contract O05ScaleTest is LockedCurveTestBase {
             actual > relayed ? actual - relayed : 0);
 
         assertEq(relayed, actual,
-            "O05/C2: the relayed newVotes omits weight that is live at the effective instant");
+            "C2: the relayed newVotes omits weight that is live at the effective instant");
     }
 }

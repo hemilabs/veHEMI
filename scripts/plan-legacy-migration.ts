@@ -3,12 +3,11 @@
 //
 // The procedure is docs/VOTE_DELEGATION_RECOVERY.md; this script counts the live
 // chain and prints its Safe transactions, and leaves the reconcile after the swap
-// to that document. The import cannot fit in one MultiSend: VeHemi's NatSpec put
-// the import at ~165,000 gas per tokenId and recommended "≤ 150 tokenIds per call"
-// (~25M gas), and Hemi's block gas limit is 30,000,000; after the Safe proxy's
-// DELEGATECALL, the Safe's CALL and the VVD proxy's DELEGATECALL keep 1/64 each,
-// one Safe transaction carries at most ~172 ids at that figure, so the plan uses
-// 150 (IDS_PER_BATCH overrides).
+// to that document. The import cannot fit in one MultiSend: its pre-auto-relock
+// figure is ~165,000 gas per tokenId (150 ids is ~25M gas), and Hemi's block gas
+// limit is 30,000,000; after the Safe proxy's DELEGATECALL, the Safe's CALL and
+// the VVD proxy's DELEGATECALL keep 1/64 each, one Safe transaction carries at
+// most ~172 ids at that figure, so the plan uses 150 (IDS_PER_BATCH overrides).
 // At block 5,305,210 every one of the 15,592 live positions carried a
 // delegation: ~104 Safe transactions of imports at 150 ids each, not one. This
 // script counts them on chain and prints the sequence.
@@ -35,9 +34,9 @@ const VE_HEMI = "0x371d3718D5b7F75EAb050FAe6Da7DF3092031c89";
 const VVD = "0xBF5b2f370370494B8A4575962512dd3ea7c29e2d";
 const MULTICALL3 = "0xcA11bde05977b3631167028862bE2a173976CA11";
 
-// Upstream's import figure plus Hemi's limits, named so the plan's arithmetic
+// The import's gas figure plus Hemi's limits, named so the plan's arithmetic
 // is visible.
-const GAS_PER_ID = 165_000; // upstream's "~165k gas/iter worst-case", from before the per-booking stamp and the autoRelockRemaining reads; size each Safe transaction with eth_estimateGas
+const GAS_PER_ID = 165_000; // ~165k gas/iter worst case, measured before the auto-relock upgrade's per-booking stamp and autoRelockRemaining reads; size each Safe tx with eth_estimateGas
 const BLOCK_GAS_LIMIT = 30_000_000; // Hemi
 const PER_TX_CEILING = 29_930_000; // measured Hemi per-tx ceiling
 const SAFE_BASE_GAS = 21_000 + 9_000; // 21k intrinsic + ~3k per ECDSA check, 3 signatures (today's threshold)
@@ -181,7 +180,7 @@ async function main() {
   addresses with autoDelegate set   ${autoSet}${autoSet === 0 ? "  <-- the auto-delegate import is a NO-OP today" : ""}
 
 === WHY THE IMPORTS CANNOT BE ONE MULTISEND ===
-  upstream import cost              ${GAS_PER_ID.toLocaleString()} gas per imported id
+  assumed import cost               ${GAS_PER_ID.toLocaleString()} gas per imported id
   Hemi block gas limit              ${BLOCK_GAS_LIMIT.toLocaleString()}
   measured per-tx ceiling           ${PER_TX_CEILING.toLocaleString()}
   Safe overhead (3 signatures)      ${SAFE_BASE_GAS.toLocaleString()}

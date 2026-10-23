@@ -3,7 +3,7 @@ pragma solidity ^0.8.29;
 
 import "../LockedCurveTestBase.sol";
 
-/// @notice GUARD 8, the seeding guard. `enableAutoRelock` on a subcurve position
+/// @notice The seeding guard. `enableAutoRelock` on a subcurve position
 ///         is refused (`SeedingNotFinalized`) until
 ///         `lockedSeedingFinalized`: before the latch, `_checkpoint` skips the
 ///         subcurves and `seedBatch` would enrol a flat position as a decaying
@@ -53,7 +53,7 @@ contract C13Guard8 is LockedCurveTestBase {
         uint256 ta = veHemi.transferableAfter(id);
         uint256 w = veHemi.balanceOfNFT(id);
         uint256 r = veHemi.autoRelockRemaining(id);
-        assertEq(w, slope * (r - SIX_DAYS / 2), "flat level is not V-MEAN");
+        assertEq(w, slope * (r - SIX_DAYS / 2), "flat level is not the bucket mean");
         assertEq(veHemi.totalVeHemiSupply(), w, "total != the only position");
         assertEq(veHemi.nonTransferableTotalVeHemiSupply(), slope * (ta - block.timestamp), "subcurve at enable");
         assertEq(veHemi.forfeitableTotalVeHemiSupply(), 0, "non-forfeitable position in the forfeitable subcurve");

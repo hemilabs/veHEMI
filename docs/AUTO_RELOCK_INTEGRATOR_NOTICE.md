@@ -294,7 +294,7 @@ token. Nothing on the Aragon side needs reconfiguring.
 
 ## 4. A late transfer keeps the previous delegatee
 
-This behaviour is unchanged from today, and it is accepted.
+This behaviour is unchanged from today.
 
 - When an **unarmed** position is transferred in the last 360 to 3,600 seconds
   of its lock, VeHemi skips the delegation update (`DelegationUpdateSkipped`).

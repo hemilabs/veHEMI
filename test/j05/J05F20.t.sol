@@ -3,7 +3,7 @@ pragma solidity ^0.8.29;
 
 import "./J05Base.sol";
 
-/// @title  J05F20 — the perpetuity and sell-and-keep-the-vote attacks.
+/// @title  The perpetuity and sell-and-keep-the-vote attacks.
 ///
 /// @notice A flat position must never weigh more than its principal or hold R
 ///         off the grid or above MAX_TIME; one transaction must not buy a
@@ -14,7 +14,7 @@ import "./J05Base.sol";
 ///         one.
 contract J05F20 is J05Base {
     // ------------------------------------------------------------------
-    // B1 — WEIGHT MINTING, refuted: `balanceOfNFT <= amount`
+    // B1 — NO WEIGHT MINTING: `balanceOfNFT <= amount`
     //      is the value ceiling of the whole system.
     // ------------------------------------------------------------------
     function test_F20_B1_weightNeverExceedsPrincipal() public {

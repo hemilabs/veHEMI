@@ -3,18 +3,19 @@ pragma solidity ^0.8.29;
 
 import "./J05Base.sol";
 
-/// @title  J05E21 — the economic attacks on a flat position.
+/// @title  The economic attacks on a flat position.
 ///
 /// @notice An attacker who freezes a position flat must not hold more weight
-///         than the lock-up it is still serving (beyond V-MEAN's half-bucket
-///         slack), must not reach a one-second exit, must not move its end or
-///         its forfeit window, must not out-last a manual twin by cycling, and
-///         cannot keep an abandoned flat position in the denominator for ever.
+///         than the lock-up it is still serving (beyond the bucket mean's
+///         half-bucket slack), must not reach a one-second exit, must not move
+///         its end or its forfeit window, must not out-last a manual twin by
+///         cycling, and cannot keep an abandoned flat position in the
+///         denominator for ever.
 ///         R is derived from `lock.end` (whole buckets, `R >= 2 * SIX_DAYS`)
-///         and the flat level is V-MEAN, `slope * (R - SIX_DAYS/2)`.
+///         and the flat level is the bucket mean, `slope * (R - SIX_DAYS/2)`.
 contract J05E21 is J05Base {
     // ------------------------------------------------------------------
-    // A1 — THE ESCROW LAW. Under V-MEAN the excess of the flat weight over
+    // A1 — THE ESCROW LAW. At the bucket mean the flat weight's excess over
     //      `slope * lockup` can never exceed HALF a bucket of slope.
     // ------------------------------------------------------------------
     function test_E21_A1_escrowLawExcessBoundedByHalfBucket() public {
@@ -29,10 +30,10 @@ contract J05E21 is J05Base {
             warpToPhase(phases[i]);
             uint256 w = veHemi.balanceOfNFT(id);
             uint256 lockup = residualLockup(id);
-            // THE VOTE-ESCROW LAW, with V-MEAN's half-bucket slack.
+            // THE VOTE-ESCROW LAW, with the bucket mean's half-bucket slack.
             assertLe(w, s * lockup + s * HALF_BUCKET, "escrow-law excess exceeds HALF a bucket of slope");
             // and the position is never under-paid by more than half a bucket
-            // either (the other half of V-MEAN's minimax).
+            // either (the other half of the bucket mean's minimax).
             assertGe(w + s * HALF_BUCKET, s * lockup, "flat level below the twin by more than half a bucket");
             if (w > s * lockup && w - s * lockup > worst) worst = w - s * lockup;
         }

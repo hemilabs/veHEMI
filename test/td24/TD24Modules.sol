@@ -5,7 +5,7 @@ import {IVeHemiVoteDelegation} from "../../src/interfaces/IVeHemiVoteDelegation.
 import {IRewardDistributor} from "../../src/interfaces/IRewardDistributor.sol";
 import "../k08/K08Modules.sol";
 
-/// @title  TD24 -- module shapes for the move-or-remove armed-transfer leg.
+/// @title  Module shapes for the move-or-remove armed-transfer leg.
 ///
 /// @notice Each shape isolates one branch of `VeHemi._transferFromUnguarded`'s
 ///         post-transfer retirement: the MOVE to the recipient's delegate, the
@@ -59,8 +59,8 @@ contract TD24RawRevert is TD24Recording {
 }
 
 /// @dev Refuses the move with the real selector and ACCEPTS the removal,
-///      recording the gas it was handed at entry. A1: the removal is always
-///      handed the whole `DELEGATION_GAS_CEILING`.
+///      recording the gas it was handed at entry, so a test can check that
+///      the removal is always handed the whole `DELEGATION_GAS_CEILING`.
 contract TD24RemovalGasProbe is TD24Recording {
     error DelegationSlopeOverflow();
     uint256 public removalGasAtEntry;
@@ -75,7 +75,7 @@ contract TD24RemovalGasProbe is TD24Recording {
     }
 }
 
-/// @dev THE RESIDUAL SHAPE: refuses the move and ACCEPTS the
+/// @dev THE LIMITATION SHAPE: refuses the move and ACCEPTS the
 ///      removal as a silent no-op, so its own record stays flat. VeHemi cannot
 ///      see this from `committed_`; the test pins that it stays silent.
 contract TD24RejectMoveNoopRemoval is TD24Recording {
@@ -96,12 +96,12 @@ contract TD24WriteOkReadReverts is K08ModuleBase {
     function delegation(uint256) external pure override returns (Delegation memory) { revert Unreadable(); }
 }
 
-/// @dev A RETURNDATA BOMB on `delegate`: reverts with `size` bytes. H: VeHemi's
+/// @dev A RETURNDATA BOMB on `delegate`: reverts with `size` bytes. VeHemi's
 ///      catch copies at most the 4-byte selector, where a `catch (bytes memory)`
-///      would copy all of it into memory. The TD24 tests use 2,000,000 bytes:
-///      the module's own revert still fits its 8M ceiling, but two full copies
-///      in VeHemi (move + removal) do not fit a 29.93M transaction, so the size
-///      tells the bounded copy apart from a full one.
+///      would copy all of it into memory. The armed-transfer tests use
+///      2,000,000 bytes: the module's own revert still fits its 8M ceiling, but
+///      two full copies in VeHemi (move + removal) do not fit a 29.93M
+///      transaction, so the size tells the bounded copy apart from a full one.
 contract TD24RevertBomb is TD24Recording {
     uint256 public size;
 
@@ -114,7 +114,7 @@ contract TD24RevertBomb is TD24Recording {
 }
 
 /// @dev Burns its whole allowance on `delegate` and then REVERTS (the
-///      burn-and-return shape is `test/k11/OogVoteDelegation.sol`).
+///      burn-and-return shape is `OogVoteDelegation`).
 contract TD24BurnAndRevert is TD24Recording {
     function delegate(uint256, address) external view override {
         uint256 x = 1;

@@ -4,7 +4,7 @@ pragma solidity ^0.8.29;
 import "../LockedCurveTestBase.sol";
 
 /**
- * @title  S02VMean -- the V-MEAN flat level.
+ * @title  The V-MEAN flat level.
  *
  * @notice A flat (auto-relocking) position's weight is `slope * (R - SIX_DAYS/2)`,
  *         `R = N * SIX_DAYS`, `N >= 2`, measured from `grid(enable)`. At any
@@ -416,9 +416,9 @@ contract S02VMean is LockedCurveTestBase {
     //
     //      For each candidate level L, maxErr(L) = max over the swept phases of
     //      |L - slope*(R - off)|.  The midpoint is the unique minimiser, so
-    //      maxErr(shipped) < maxErr(rival) for all four.  On ANY of the four
-    //      rival builds the shipped level IS that rival and the strict `<`
-    //      fails on it.
+    //      maxErr(shipped) < maxErr(rival) for all four.  Were the contract to
+    //      ship a rival level instead, `cand[0]` would BE that rival and the
+    //      strict `<` would fail on it.
     // =====================================================================
     function test_S02_L5_shipped_level_strictly_minimises_the_worst_case_error() public {
         _warpToNextGrid();

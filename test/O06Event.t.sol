@@ -16,7 +16,7 @@ contract O06MockAdapter {
     function notifyDelegateChanged(address, address, address) external {}
 }
 
-/// O06 -- `DelegateVotesChanged` reports the instant the checkpoint takes
+/// `DelegateVotesChanged` reports the instant the checkpoint takes
 /// effect.
 ///
 /// Both `_delegate` legs are dated `block.timestamp + 1`, so the event (and
@@ -133,20 +133,21 @@ contract O06EventTest is LockedCurveTestBase {
             sEffB > sBndB ? sEffB - sBndB : sBndB - sEffB);
 
         // The construction must actually separate the two instants, or this
-        // body could pass in the broken world; and the retirement leg must
-        // land on a NON-ZERO value or its assertion is vacuous.
+        // body could pass against an implementation that reports the
+        // boundary reading; and the retirement leg must land on a NON-ZERO
+        // value or its assertion is vacuous.
         assertTrue(sEffB != sBndB, "E1: construction -- boundary and t+1 must differ");
         assertGt(sEffA, 0, "E1: construction -- the RETIREMENT leg must leave weight behind");
         assertTrue(sEffA != _votesAt(DEL_A, _boundary(sT)),
             "E1: construction -- the RETIREMENT leg's two instants must differ");
 
-        assertEq(nA, sEffA, "O06/E1: RETIREMENT leg newVotes != getVotes at the effective instant");
-        assertEq(nB, sEffB, "O06/E1: ADDITION leg newVotes != getVotes at the effective instant");
-        assertEq(pA, sCfA,  "O06/E1: RETIREMENT leg previousVotes != counterfactual at the effective instant");
-        assertEq(pB, sCfB,  "O06/E1: ADDITION leg previousVotes != counterfactual at the effective instant");
+        assertEq(nA, sEffA, "E1: RETIREMENT leg newVotes != getVotes at the effective instant");
+        assertEq(nB, sEffB, "E1: ADDITION leg newVotes != getVotes at the effective instant");
+        assertEq(pA, sCfA,  "E1: RETIREMENT leg previousVotes != counterfactual at the effective instant");
+        assertEq(pB, sCfB,  "E1: ADDITION leg previousVotes != counterfactual at the effective instant");
         // The pair must describe the SAME instant: the reported delta is the
         // delta actually booked.
-        assertEq(sCfA - sEffA, nB - pB, "O06/E1: the two legs do not conserve weight at t+1");
+        assertEq(sCfA - sEffA, nB - pB, "E1: the two legs do not conserve weight at t+1");
     }
 
     // ── E2 ────────────────────────────────────────────────────────────────
@@ -178,7 +179,7 @@ contract O06EventTest is LockedCurveTestBase {
         emit log_named_uint("E2 getVotes at t+1         ", eff);
         emit log_named_uint("E2 getVotes at boundary    ", bnd);
         assertTrue(eff != bnd, "E2: construction -- boundary and t+1 must differ");
-        assertEq(nA, eff, "O06/E2: FLAT-path newVotes != getVotes at the effective instant");
+        assertEq(nA, eff, "E2: FLAT-path newVotes != getVotes at the effective instant");
     }
 
     // ── E3 ────────────────────────────────────────────────────────────────
@@ -203,8 +204,8 @@ contract O06EventTest is LockedCurveTestBase {
         uint256 eff = _votesAt(DEL_A, T + 1);
         uint256 bnd = _votesAt(DEL_A, _boundary(T));
         assertTrue(eff != bnd, "E3: construction -- boundary and t+1 must differ");
-        assertEq(ad.lastNew(DEL_A), nA, "O06/E3: relayed newVotes != in-contract newVotes");
-        assertEq(ad.lastNew(DEL_A), eff, "O06/E3: RELAYED newVotes != getVotes at the effective instant");
+        assertEq(ad.lastNew(DEL_A), nA, "E3: relayed newVotes != in-contract newVotes");
+        assertEq(ad.lastNew(DEL_A), eff, "E3: RELAYED newVotes != getVotes at the effective instant");
     }
 
     // ── E4 ────────────────────────────────────────────────────────────────
@@ -244,7 +245,7 @@ contract O06EventTest is LockedCurveTestBase {
         // 19 of 20 phases must be discriminating (phase 3599 collapses the two
         // instants by construction), so a green here is not vacuous.
         assertGe(nonZeroBoundaryGaps, 19, "E4: construction -- the sweep is not discriminating");
-        assertEq(worst, 0, "O06/E4: emitted newVotes deviates from the vote surface at the effective instant");
+        assertEq(worst, 0, "E4: emitted newVotes deviates from the vote surface at the effective instant");
     }
 
     // ── E5 ────────────────────────────────────────────────────────────────
@@ -286,7 +287,7 @@ contract O06EventTest is LockedCurveTestBase {
         emit log_named_uint("E5 emitted as % of true  ", eff == 0 ? 0 : (nA * 100) / eff);
         assertGt(eff, 0, "E5: construction -- the true value must be non-zero");
         assertGt(eff, bnd * 3, "E5: construction -- the boundary value must be a small fraction");
-        assertEq(nA, eff, "O06/E5: emitted newVotes != the true weight at the effective instant");
-        assertGt(nA, bnd, "O06/E5: emitted newVotes is still the boundary reading");
+        assertEq(nA, eff, "E5: emitted newVotes != the true weight at the effective instant");
+        assertGt(nA, bnd, "E5: emitted newVotes is not above the boundary reading");
     }
 }

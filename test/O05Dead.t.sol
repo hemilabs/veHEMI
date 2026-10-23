@@ -81,10 +81,10 @@ contract O05DeadTest is LockedCurveTestBase {
         emit log_named_uint("R1 SEALED getPastVotes at bnd-1 ", sealedVotes);
         emit log_named_uint("R1 escrow balanceOfNFTAt bnd-1  ", escrowAtS);
 
-        assertEq(zeroSeconds, 0, "O05/R1: there is no second at which DEL_A reads zero");
-        assertGt(sealedVotes, 0, "O05/R1: boundary-1 seals REAL weight, not zero");
-        assertGt(escrowAtS, 0, "O05/R1: escrow exists at the sealed instant");
-        assertGe(sealedVotes, full, "O05/R1: a top-up may only RAISE the sealed weight");
+        assertEq(zeroSeconds, 0, "R1: there is no second at which DEL_A reads zero");
+        assertGt(sealedVotes, 0, "R1: boundary-1 seals REAL weight, not zero");
+        assertGt(escrowAtS, 0, "R1: escrow exists at the sealed instant");
+        assertGe(sealedVotes, full, "R1: a top-up may only RAISE the sealed weight");
     }
 
     // =====================================================================
@@ -127,9 +127,9 @@ contract O05DeadTest is LockedCurveTestBase {
         emit log_named_uint("R2 DEL_C full                   ", fC);
         emit log_named_uint("   DEL_C sealed at boundary-1   ", pC);
 
-        assertGt(pA, 0, "O05/R2: DEL_A not erased");
-        assertGt(pB, 0, "O05/R2: DEL_B not erased");
-        assertGt(pC, 0, "O05/R2: DEL_C not erased");
+        assertGt(pA, 0, "R2: DEL_A not erased");
+        assertGt(pB, 0, "R2: DEL_B not erased");
+        assertGt(pC, 0, "R2: DEL_C not erased");
     }
 
     // =====================================================================
@@ -167,9 +167,9 @@ contract O05DeadTest is LockedCurveTestBase {
         emit log_named_uint("R3 SEALED getPastVotes at S     ", sealedVotes);
         emit log_named_uint("R3 escrow balanceOfNFTAt at S   ", escrowAtS);
 
-        assertEq(zeroSeconds, 0, "O05/R3: the permissionless retire opens no zero-second");
-        assertGt(sealedVotes, 0, "O05/R3 PIN: boundary-1 seals REAL weight");
-        assertGt(escrowAtS, 0, "O05/R3 PIN: escrow exists at that instant");
+        assertEq(zeroSeconds, 0, "R3: the permissionless retire opens no zero-second");
+        assertGt(sealedVotes, 0, "R3 PIN: boundary-1 seals REAL weight");
+        assertGt(escrowAtS, 0, "R3 PIN: escrow exists at that instant");
     }
 
     // =====================================================================
@@ -213,9 +213,9 @@ contract O05DeadTest is LockedCurveTestBase {
         emit log_named_uint("R4 DEL_C before                 ", fC);
         emit log_named_uint("   DEL_C sealed                 ", pC);
 
-        assertGt(pA, 0, "O05/R4: DEL_A not erased");
-        assertGt(pB, 0, "O05/R4: DEL_B not erased");
-        assertGt(pC, 0, "O05/R4: DEL_C not erased");
+        assertGt(pA, 0, "R4: DEL_A not erased");
+        assertGt(pB, 0, "R4: DEL_B not erased");
+        assertGt(pC, 0, "R4: DEL_C not erased");
     }
 
     // =====================================================================
@@ -292,7 +292,7 @@ contract O05DeadTest is LockedCurveTestBase {
         vm.warp(s_);
         uint256 v = delegation.getVotes(DEL_A);
         vm.revertToState(snap);
-        assertGe(v, untouched_, string.concat("O05/R6: a top-up at offset ", vm.toString(offset_), " lowered DEL_A at boundary-1"));
+        assertGe(v, untouched_, string.concat("R6: a top-up at offset ", vm.toString(offset_), " lowered DEL_A at boundary-1"));
     }
 
     // =====================================================================
@@ -328,7 +328,7 @@ contract O05DeadTest is LockedCurveTestBase {
         uint256 escrowAtS    = veHemi.balanceOfNFTAt(idA, S);
 
         assertGt(escrowAtS, 0, "precondition: the victim holds escrow at S");
-        assertEq(sealedVictim, escrowAtS, "O05/R7: the victim's delegatee does not seal the victim's escrow at S");
+        assertEq(sealedVictim, escrowAtS, "R7: the victim's delegatee does not seal the victim's escrow at S");
         assertGt(delegation.getPastVotes(MALLORY, S), 0, "precondition: the attacker's flat position counts at S");
     }
 
@@ -353,7 +353,7 @@ contract O05DeadTest is LockedCurveTestBase {
         _topUpSelf(MALLORY, idM, 1);
 
         (uint256 zeroSeconds, ) = _sweep(DEL_A, T + 1, _b(T));
-        assertEq(zeroSeconds, 0, "O05/R8: an attacker's own dust position zeroed the victim's delegatee");
+        assertEq(zeroSeconds, 0, "R8: an attacker's own dust position zeroed the victim's delegatee");
     }
 
     // =====================================================================
@@ -388,7 +388,7 @@ contract O05DeadTest is LockedCurveTestBase {
         vm.prank(MALLORY); veHemi.transferFrom(MALLORY, alice, idM);
         (uint256 zeros2, ) = _sweep(DEL_A, T3 + 1, _b(T3));
 
-        assertEq(zeros1, 0, "O05/R9: permissionless createLockFor zeroed a third party's delegatee");
-        assertEq(zeros2, 0, "O05/R9: an unsolicited NFT gift zeroed the recipient's delegatee");
+        assertEq(zeros1, 0, "R9: permissionless createLockFor zeroed a third party's delegatee");
+        assertEq(zeros2, 0, "R9: an unsolicited NFT gift zeroed the recipient's delegatee");
     }
 }

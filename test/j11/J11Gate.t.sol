@@ -330,7 +330,7 @@ contract J11Gate is J11Base {
         vm.recordLogs();
         vm.prank(attacker);
         (bool ok, ) = address(veHemi).call(abi.encodeWithSignature("disableAutoRelock(uint256)", id));
-        assertTrue(ok, "K08: the exit must not be closed by a module the contract cannot trust");
+        assertTrue(ok, "the exit must not be closed by a module the contract cannot trust");
         assertEq(veHemi.autoRelockRemaining(id), 0, "the flag survived a committed retirement");
         // VACUITY: the lie really did leave the flat term standing.
         assertEq(delegation.getVotes(dele), wFlat, "probe: the lying module did not actually lie");
@@ -353,13 +353,13 @@ contract J11Gate is J11Base {
         uint256 idA = _flat(attacker);
         veHemi.updateVoteDelegation(IVeHemiVoteDelegation(address(new LyingVoteDelegation(delegation))));
         disable(attacker, idA);
-        assertEq(veHemi.autoRelockRemaining(idA), 0, "K08: the exit is still closed");
+        assertEq(veHemi.autoRelockRemaining(idA), 0, "the exit is still closed");
         vm.warp(veHemi.getLockedBalance(idA).end + 1);
         uint256 beforeA = hemi.balanceOf(attacker);
         vm.prank(attacker);
         veHemi.withdraw(idA);
         assertEq(hemi.balanceOf(attacker) - beforeA, 1_000 ether,
-            "K08: principal trapped behind a lying module with no owner-independent exit");
+            "principal trapped behind a lying module with no owner-independent exit");
 
         // (b) THE MODULE IS REPLACED INSIDE THE WINDOW. `dele2`, not `dele`,
         //     because leg (a) deliberately left a permanent phantom on `dele`.

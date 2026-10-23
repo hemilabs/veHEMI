@@ -2,7 +2,7 @@
 pragma solidity ^0.8.29;
 
 // ===========================================================================
-// F09 GATE -- the reward-distributor bracket, asserted.
+// The reward-distributor bracket, asserted.
 //
 // Every weight-changing entry point notifies the distributor BEFORE the weight
 // moves (observing w-) and AFTER it has settled (observing w+), except
@@ -11,7 +11,7 @@ pragma solidity ^0.8.29;
 // through `_endAutoRelock`) and the flat `increaseAmount` / `increaseUnlockTime`
 // paths are all bracketed; a reverting distributor is swallowed on every site;
 // a re-entrant one cannot re-enter. Accruals are checked against analytic
-// integrals (V-MEAN flat level `slope * (R - SIX_DAYS/2)`).
+// integrals (bucket-mean flat level `slope * (R - SIX_DAYS/2)`).
 // ===========================================================================
 
 import "./F09Reward.t.sol";
@@ -41,11 +41,11 @@ contract F09Gate is F09Reward {
     // Exact counts, not `> 0`: with a notify-AFTER present, deleting
     // `_depositFor`'s HEAD notify still leaves one call.
     function _recordCadence() internal override {
-        assertEq(cadence[0], 2, "GATE F1: createLock must notify TWICE (bracketed, P3)");
-        assertEq(cadence[1], 2, "GATE F1: increaseAmount must notify TWICE (bracketed, P3)");
-        assertEq(cadence[2], 2, "GATE F1: increaseUnlockTime must notify TWICE (bracketed, P3)");
+        assertEq(cadence[0], 2, "GATE F1: createLock must notify TWICE (bracketed)");
+        assertEq(cadence[1], 2, "GATE F1: increaseAmount must notify TWICE (bracketed)");
+        assertEq(cadence[2], 2, "GATE F1: increaseUnlockTime must notify TWICE (bracketed)");
         assertEq(cadence[3], 2, "GATE F1: enableAutoRelock must notify TWICE (bracketed)");
-        assertEq(cadence[4], 2, "GATE F1: increaseUnlockTime@FLAT must notify TWICE (U2, J12)");
+        assertEq(cadence[4], 2, "GATE F1: increaseUnlockTime@FLAT must notify TWICE (bracketed)");
         assertEq(cadence[5], 1, "GATE F1: transferFrom notifies ONCE (it moves no weight)");
         assertEq(cadence[6], 2, "GATE F1: disableAutoRelock must notify TWICE (bracketed)");
         assertEq(cadence[7], 1, "GATE F1: withdraw notifies ONCE (there is no w+ to re-anchor on)");
@@ -59,31 +59,31 @@ contract F09Gate is F09Reward {
     }
 
     function _recordShape(string memory, uint256, uint256 aX, uint256 tX) internal override {
-        // Under V-MEAN the flat level `s*(N - 1/2)*S` coincides with the
+        // The bucket-mean flat level `s*(N - 1/2)*S` coincides with the
         // decaying weight only at the MIDPOINT of a bucket. A boundary-aligned
         // enable therefore steps DOWN by `s*S/2` and a boundary-aligned disable
         // steps UP by the same amount: both shapes are two-sided
         // discontinuities, so exactness needs the notify-AFTER sites too.
-        assertEq(aX, tX, "GATE F3/F4: shipped accrual == the true integral");
+        assertEq(aX, tX, "GATE F3/F4: the flat position's accrual == the true integral");
     }
 
     // F5: with `_depositFor` bracketed, a manual extender is credited EXACTLY
     // (an equality convicts both under- and over-crediting).
     function _recordF5(uint256 aM, uint256 tM) internal override {
-        assertEq(aM, tM, "GATE F5: a manual extender is credited EXACTLY (F09 P3, U1 closed)");
+        assertEq(aM, tM, "GATE F5: a manual extender is credited EXACTLY (bracketed _depositFor)");
     }
 
     function _recordF6(uint256 aM, uint256 tM, uint256 aX, uint256 tX) internal override {
-        assertEq(aX, tX, "GATE F6: candidate accrual exact over a pure flat window");
-        // V-MEAN: a flat position's reward accrual is identical to the manual
-        // twin's TRUE integral, to the wei.
-        assertEq(bps(tX, tM), int256(0), "GATE F6: V-MEAN is integral-exact vs the twin");
-        assertEq(tX, tM, "GATE F6: V-MEAN flat integral == twin integral, to the wei");
+        assertEq(aX, tX, "GATE F6: the flat position's accrual is exact over a pure flat window");
+        // At the bucket-mean level a flat position's reward accrual is
+        // identical to the manual twin's TRUE integral, to the wei.
+        assertEq(bps(tX, tM), int256(0), "GATE F6: the bucket-mean flat level is integral-exact vs the twin");
+        assertEq(tX, tM, "GATE F6: bucket-mean flat integral == twin integral, to the wei");
         // With `_depositFor` bracketed the twin's ACCRUAL and the twin's TRUTH
         // coincide, so the flat candidate and the manual twin accrue
         // IDENTICALLY, and both accrue EXACTLY.
-        assertEq(aM, tM, "GATE F6: the twin's ACCRUAL is now exact too (F09 P3, U1 closed)");
-        assertEq(aM, aX, "GATE F6: flat and manual accrue IDENTICALLY under V-MEAN + P3");
+        assertEq(aM, tM, "GATE F6: the twin's ACCRUAL is exact too (bracketed _depositFor)");
+        assertEq(aM, aX, "GATE F6: flat and manual accrue IDENTICALLY (bucket-mean level, bracketed _depositFor)");
     }
 
     // ==================================================================== J1
@@ -102,8 +102,8 @@ contract F09Gate is F09Reward {
         uint256 xa = spawn(true, bob, AMT, N, Cadence.NEVER, false, false);
         uint256 id = positions[xa].tokenId;
 
-        // Move off the boundary so w- is unambiguous and so the V-MEAN step is
-        // not the degenerate half-bucket case.
+        // Move off the boundary so w- is unambiguous and so the step to the
+        // bucket-mean level is not the degenerate half-bucket case.
         vm.warp(t0 + 3600);
         vm.roll(block.number + 300);
 
@@ -131,7 +131,7 @@ contract F09Gate is F09Reward {
         assertEq(w0, wBefore, "J1: notify-BEFORE must observe w- (the pre-enable weight)");
         // AFTER must see the NEW, flat weight — i.e. it must sit after
         // _checkpoint, because balanceOfNFT reads the user-point history.
-        assertEq(w1, meanLevelOf(AMT, N), "J1: notify-AFTER must observe the V-MEAN flat level");
+        assertEq(w1, meanLevelOf(AMT, N), "J1: notify-AFTER must observe the bucket-mean flat level");
         assertEq(w1, X.ve.balanceOfNFT(id), "J1: notify-AFTER's sample is the settled weight");
         // ...and the two must actually differ, or the bracket buys nothing.
         assertTrue(w0 != w1, "J1: the bracket must straddle a real discontinuity");
@@ -296,7 +296,7 @@ contract F09Gate is F09Reward {
 
         emit log_named_uint("J5 flat increaseUnlockTime step (wei)", w1 - w0);
         assertGt(w1, w0, "J5: flat increaseUnlockTime really does step the weight UP");
-        assertEq(w1 - w0, 12_499_999_999_999_625_160, "J5: the U2 increaseUnlockTime step, to the wei");
+        assertEq(w1 - w0, 12_499_999_999_999_625_160, "J5: the flat increaseUnlockTime step, to the wei");
         assertEq(cntX.nSeenFor(id) - k0, 2, "J5: flat increaseUnlockTime must notify TWICE (bracketed)");
         assertEq(cntX.weightAt(id, k0), w0, "J5: notify-BEFORE must observe w- (the pre-step flat level)");
         assertEq(cntX.weightAt(id, k0 + 1), w1, "J5: notify-AFTER must observe w+ (the raised flat level)");
@@ -314,12 +314,11 @@ contract F09Gate is F09Reward {
 
         emit log_named_uint("J5 flat increaseAmount step (wei)", w3 - w2);
         assertGt(w3, w2, "J5: flat increaseAmount really does step the weight UP");
-        assertEq(w3 - w2, 35_416_666_666_665_604_620, "J5: the U2 increaseAmount step, to the wei");
+        assertEq(w3 - w2, 35_416_666_666_665_604_620, "J5: the flat increaseAmount step, to the wei");
         assertEq(cntX.nSeenFor(id) - k1, 2, "J5: flat increaseAmount must notify TWICE (bracketed)");
         assertEq(cntX.weightAt(id, k1), w2, "J5: notify-BEFORE must observe w- (the pre-step flat level)");
         assertEq(cntX.weightAt(id, k1 + 1), w3, "J5: notify-AFTER must observe w+ (the raised flat level)");
         assertEq(cntX.timeAt(id, k1), cntX.timeAt(id, k1 + 1), "J5: both calls in the same block");
-        emit log_string("J5 U2 CLOSED: both feature-reachable deposit steps are bracketed (F09 P3 hunk 5).");
     }
 
     // ==================================================================== J6

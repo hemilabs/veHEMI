@@ -12,7 +12,7 @@ import "../LockedCurveTestBase.sol";
 ///         flow first, as on a live deployment.
 contract C10Flat is LockedCurveTestBase {
     // ---------------------------------------------------------------------
-    // G1 — TRULY FLAT, NO DROOP. The whole point of the feature.
+    // TRULY FLAT, NO DROOP. The whole point of the feature.
     // ---------------------------------------------------------------------
     function test_G1_flatIsFlat_noDroop_position() public {
         runSeedingFlow();
@@ -63,7 +63,7 @@ contract C10Flat is LockedCurveTestBase {
     }
 
     // ---------------------------------------------------------------------
-    // G2 — NO SENTINEL. lock.end keeps its true value.
+    // NO SENTINEL. lock.end keeps its true value.
     // ---------------------------------------------------------------------
     function test_G2_noSentinel_endIsUnchangedByEnable() public {
         runSeedingFlow();
@@ -75,7 +75,7 @@ contract C10Flat is LockedCurveTestBase {
     }
 
     // ---------------------------------------------------------------------
-    // G3 — the restored slope IS retired after disable.
+    // The restored slope IS retired after disable.
     // ---------------------------------------------------------------------
     function test_G3_disableRestoresDecayAndRetiresSlope() public {
         runSeedingFlow();
@@ -134,7 +134,7 @@ contract C10Flat is LockedCurveTestBase {
 
         int128 expected = -int128(int256(100 ether / MAX_TIME));
         assertEq(veHemi.slopeChanges(newEnd), expected,
-            "L1: restored slope NOT scheduled at the colliding endpoint");
+            "restored slope NOT scheduled at the colliding endpoint");
 
         // And the consequence, end-to-end: once alice's lock retires, the
         // global supply must equal bob's position exactly. A never-retired
@@ -142,7 +142,7 @@ contract C10Flat is LockedCurveTestBase {
         vm.warp(uint256(newEnd) + 180 days);
         veHemi.checkpoint();
         assertEq(veHemi.totalVeHemiSupply(), veHemi.balanceOfNFT(victim),
-            "global supply != the only surviving position -- L1 slope leak");
+            "global supply != the only surviving position -- slope leak");
     }
 
     /// @dev Same collision, reached the other way: ENABLE must not leave a
@@ -182,8 +182,8 @@ contract C10Flat is LockedCurveTestBase {
     }
 
     // ---------------------------------------------------------------------
-    // G5 — the flat discriminator (slope == 0 && bias > 0). A DECAYING
-    //      position must NEVER be mistaken for a flat one.
+    // The flat discriminator (slope == 0 && bias > 0). A DECAYING
+    // position must NEVER be mistaken for a flat one.
     // ---------------------------------------------------------------------
     function test_G5_decayingPositionIsNeverFlat() public {
         // Minimum legal amount, maximum legal duration -- the smallest slope
@@ -200,13 +200,14 @@ contract C10Flat is LockedCurveTestBase {
     }
 
     // ---------------------------------------------------------------------
-    // G6 — the flat aggregate is in Point.amount on GLOBAL points, a field
-    //      that is 0 on global points while no position is armed.
+    // The flat aggregate is in Point.amount on GLOBAL points, a field
+    // that is 0 on global points while no position is armed.
     // ---------------------------------------------------------------------
     function test_G6_globalPointAmountCarriesTheFlatAggregate() public {
         runSeedingFlow();
         (uint256 id, , ) = createLock(alice, 100 ether, 2 * 365 days);
-        assertEq(veHemi.getGlobalPoint(veHemi.epoch()).amount, 0, "amount not dead pre-feature");
+        assertEq(veHemi.getGlobalPoint(veHemi.epoch()).amount, 0,
+            "Point.amount is non-zero while no position is armed");
         vm.prank(alice);
         veHemi.enableAutoRelock(id);
         uint256 w = veHemi.balanceOfNFT(id);
@@ -222,7 +223,7 @@ contract C10Flat is LockedCurveTestBase {
     }
 
     // ---------------------------------------------------------------------
-    // G7 — the withdraw path removes the flat aggregate.
+    // The withdraw path removes the flat aggregate.
     // ---------------------------------------------------------------------
     function test_G7_disableThenWithdrawZeroesEverything() public {
         runSeedingFlow();
@@ -240,8 +241,8 @@ contract C10Flat is LockedCurveTestBase {
     }
 
     // ---------------------------------------------------------------------
-    // G8 — the liveness checks. A flat position with a PAST end must still
-    //      be delegatable and must still carry voting power.
+    // The liveness checks. A flat position with a PAST end must still
+    // be delegatable and must still carry voting power.
     // ---------------------------------------------------------------------
     function test_G8_flatPositionWithPastEndStillHasVotes() public {
         runSeedingFlow();
@@ -284,7 +285,7 @@ contract C10Flat is LockedCurveTestBase {
     }
 
     // ---------------------------------------------------------------------
-    // G9 — authorization. enable/disable are strict _ownerOf.
+    // Authorization. enable/disable are strict _ownerOf.
     // ---------------------------------------------------------------------
     function test_G9_onlyOwnerMayEnableOrDisable() public {
         runSeedingFlow();

@@ -142,12 +142,12 @@ contract EIP170GateTest is Test {
             att = s;
         } catch {
             revert(
-                "D12: no test/fixtures/eip170-attestation.json. The EIP-170 gate has not "
+                "no test/fixtures/eip170-attestation.json. The EIP-170 gate has not "
                 "passed on this build. Run ./scripts/check-eip170.sh -- it writes the "
                 "attestation ONLY when every src/ contract fits."
             );
         }
-        require(bytes(att).length > 0, "D12: empty attestation");
+        require(bytes(att).length > 0, "empty attestation");
 
         assertEq(att.readUint(".limit"), EIP170_LIMIT, "attestation limit is not EIP-170");
         assertEq(att.readUint(".contractCount"), _ids().length, "gated-set size drifted from this test");
@@ -174,7 +174,7 @@ contract EIP170GateTest is Test {
         assertEq(
             recomputed,
             att.readBytes32(".digest"),
-            "D12: the artifacts in out/ are NOT the ones the EIP-170 gate measured. "
+            "the artifacts in out/ are NOT the ones the EIP-170 gate measured. "
             "Re-run ./scripts/check-eip170.sh; if it fails, this build is not deployable."
         );
     }

@@ -3,14 +3,14 @@ pragma solidity ^0.8.29;
 
 import "../LockedCurveTestBase.sol";
 
-/// @title  J17Base -- shared fixture for the auto-relock attack and liveness suites.
+/// @title  Shared fixture for the auto-relock attack and liveness suites.
 /// @notice A seeded `LockedCurveTestBase` with funded actors (attacker, victim,
 ///         stranger, two delegatees) and small helpers: `grid()`, `slopeOf`,
 ///         `residualLockup` (`effectiveLockEnd - now`), `warpToPhase`, and
 ///         enable / disable / delegate wrappers. Green means "this attack did
 ///         not succeed on this tree"; it never means the attack is impossible.
 contract J17Base is LockedCurveTestBase {
-    /// @dev V-MEAN: the flat level is `slope * (R - SIX_DAYS/2)`.
+    /// @dev The bucket-mean flat level is `slope * (R - SIX_DAYS/2)`.
     uint256 internal constant HALF_BUCKET = 262_980; // SIX_DAYS / 2
 
     address internal attacker = address(0xA11CE0);
@@ -49,7 +49,7 @@ contract J17Base is LockedCurveTestBase {
         return veHemi.effectiveLockEnd(id_) - block.timestamp;
     }
 
-    /// @dev warp to an exact phase inside the CURRENT bucket.
+    /// @dev warp to an exact phase inside the NEXT bucket.
     function warpToPhase(uint256 phase_) internal {
         uint256 target = grid() + SIX_DAYS + phase_;
         vm.warp(target);

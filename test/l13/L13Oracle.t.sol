@@ -3,7 +3,7 @@ pragma solidity ^0.8.29;
 
 import "../LockedCurveTestBase.sol";
 
-/// L13 -- vote continuity across an owner's own 1-wei top-up, checked by
+/// Vote continuity across an owner's own 1-wei top-up, checked by
 /// oracles that read only `getVotes` / `getPastVotes` and compute no weight.
 ///
 ///   O1  FLAT CONSTANCY       oracle = the contract's own earlier reading: a
@@ -76,8 +76,8 @@ contract L13OracleTest is LockedCurveTestBase {
         emit log_named_uint("O1 worst drop (wei)        ", worstDrop);
         emit log_named_uint("O1 SEALED samples below    ", sealedBelow);
 
-        assertEq(belowSamples, 0, "L13/O1: a constant flat term FELL after the OWNER's own 1-wei touch");
-        assertEq(sealedBelow, 0, "L13/O1: and the fall is sealed in getPastVotes for ever");
+        assertEq(belowSamples, 0, "O1: a constant flat term FELL after the OWNER's own 1-wei touch");
+        assertEq(sealedBelow, 0, "O1: and the fall is sealed in getPastVotes for ever");
     }
 
     // =================================================================
@@ -115,7 +115,7 @@ contract L13OracleTest is LockedCurveTestBase {
         }
         emit log_named_uint("O2 samples below control   ", below);
         emit log_named_uint("O2 worst deficit (wei)     ", worst);
-        assertEq(below, 0, "L13/O2: the OWNER's own 1 wei made her delegatee POORER than doing nothing");
+        assertEq(below, 0, "O2: the OWNER's own 1 wei made her delegatee POORER than doing nothing");
     }
 
     // =================================================================
@@ -137,12 +137,12 @@ contract L13OracleTest is LockedCurveTestBase {
 
         // (1) THE STATED PROPERTY: the MOVE is not visible in its own block.
         assertEq(delegation.getVotes(charlie), 0,
-            "L13/O3: a MOVE became visible IN ITS OWN BLOCK -- same-block flash-delegation");
+            "O3: a MOVE became visible IN ITS OWN BLOCK -- same-block flash-delegation");
 
         // (2) Visible from the very next second.
         vm.warp(T + 1);
         uint256 atNextBlock = delegation.getVotes(charlie);
-        assertGt(atNextBlock, 0, "L13/O3: the move never landed at all");
+        assertGt(atNextBlock, 0, "O3: the move never landed at all");
 
         // (3) Live for the whole run from T+1 to the boundary, so the body
         //     fails loudly if the dating changes in either direction.
@@ -150,10 +150,10 @@ contract L13OracleTest is LockedCurveTestBase {
         for (uint256 t = T + 1; t < bnd; ++t) { vm.warp(t); if (delegation.getVotes(charlie) != 0) ++live; }
         emit log_named_uint("O3 seconds between T+1 and the boundary that are LIVE", live);
         assertEq(live, bnd - T - 1,
-            "L13/O3: the move is live at T+1 but NOT for the whole run to the boundary -- the dating is neither t+1 nor the grid");
+            "O3: the move is live at T+1 but NOT for the whole run to the boundary -- the dating is neither t+1 nor the grid");
 
         // (4) And it is still live at the boundary.
         vm.warp(bnd);
-        assertGt(delegation.getVotes(charlie), 0, "L13/O3: the move did not survive to the boundary");
+        assertGt(delegation.getVotes(charlie), 0, "O3: the move did not survive to the boundary");
     }
 }

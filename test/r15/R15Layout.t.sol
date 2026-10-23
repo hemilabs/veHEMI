@@ -2,8 +2,8 @@
 pragma solidity ^0.8.29;
 
 // ============================================================================
-// R15 -- A ZERO-WEIGHT (bias == 0) MOVE THROUGH `_applyToCheckpoints`'
-//        TWO-LEG (pending + live) PATH.
+// A ZERO-WEIGHT (bias == 0) MOVE THROUGH `_applyToCheckpoints`'
+// TWO-LEG (pending + live) PATH.
 //
 // A stranded flat term whose restored end has passed takes the expired-lock
 // tolerance in `VeHemiVoteDelegation::_getNormalizedLockedInfo`
@@ -13,15 +13,15 @@ pragma solidity ^0.8.29;
 // `CheckpointLayoutViolated()` -- a HARD revert for a direct `vvd.delegate()`
 // caller.
 //
-// K: drive the bias == 0 move onto a delegatee that carries a PENDING element
-//    (created honestly, by the permissionless amortiser), against an identical
-//    control delegatee that receives no move. The move must succeed, leave
-//    the checkpoint array layout-valid (L1 strictly ascending; L2 at most one
-//    element dated after `block.timestamp + 1`, and it is the last), leave the
-//    weight equal to the control's, and not change whether a later honest
-//    retirement works. The stranded term is armed first and the delegatees'
-//    positions after it, so they are still live at the move (non-zero weight)
-//    and at the later retirement (which must succeed on the control).
+// The test drives the bias == 0 move onto a delegatee that carries a PENDING
+// element (created honestly, by the permissionless amortiser), against an
+// identical control delegatee that receives no move. The move must succeed,
+// leave the checkpoint array layout-valid (L1 strictly ascending; L2 at most
+// one element dated after `block.timestamp + 1`, and it is the last), leave
+// the weight equal to the control's, and not change whether a later honest
+// retirement works. The stranded term is armed first and the delegatees'
+// positions after it, so they are still live at the move (non-zero weight)
+// and at the later retirement (which must succeed on the control).
 // ============================================================================
 
 import "../j11/J11Base.sol";
@@ -82,9 +82,9 @@ contract R15Layout is J11Base {
     }
 
     // =====================================================================
-    // R15/K -- the bias == 0 move onto a delegatee that carries a PENDING
-    //          element.  Control: an identical delegatee with a pending
-    //          element that receives NO move.
+    // The bias == 0 move onto a delegatee that carries a PENDING element.
+    // Control: an identical delegatee with a pending element that receives
+    // NO move.
     // =====================================================================
     uint256 internal a1; uint256 internal a2; uint256 internal b1; uint256 internal b2;
 
@@ -121,41 +121,41 @@ contract R15Layout is J11Base {
 
         // The amortiser materialises a1/a2's expiry as an element dated at the
         // next hour boundary: the PENDING element the move must meet.
-        assertTrue(_amortise(Z1), "R15/K setup: the amortiser reverted on Z1");
-        assertTrue(_amortise(Z2), "R15/K setup: the amortiser reverted on Z2");
-        assertTrue(_hasPending(Z1), "R15/K NON-VACUOUS: Z1 carries no PENDING element at the move");
-        assertTrue(_hasPending(Z2), "R15/K NON-VACUOUS: the control Z2 carries no PENDING element");
+        assertTrue(_amortise(Z1), "setup: the amortiser reverted on Z1");
+        assertTrue(_amortise(Z2), "setup: the amortiser reverted on Z2");
+        assertTrue(_hasPending(Z1), "NON-VACUOUS: Z1 carries no PENDING element at the move");
+        assertTrue(_hasPending(Z2), "NON-VACUOUS: the control Z2 carries no PENDING element");
 
         assertEq(delegation.getVotes(Z1), delegation.getVotes(Z2),
-                 "R15/K HARNESS BROKEN: Z1 and Z2 differ before the move");
-        assertGt(delegation.getVotes(Z1), 0, "R15/K VACUOUS: no weight on the delegatees");
+                 "HARNESS BROKEN: Z1 and Z2 differ before the move");
+        assertGt(delegation.getVotes(Z1), 0, "VACUOUS: no weight on the delegatees");
 
         // The move takes the tolerated-expiry branch (bias == 0): the record it
         // retires is flat and the lock has passed its end.
         IVeHemiVoteDelegation.Delegation memory prev = delegation.delegation(id);
-        assertEq(prev.slope, 0, "R15/K NON-VACUOUS: the record is not flat (slope != 0)");
-        assertGt(prev.bias, 0, "R15/K NON-VACUOUS: the record is not flat (bias == 0)");
+        assertEq(prev.slope, 0, "NON-VACUOUS: the record is not flat (slope != 0)");
+        assertGt(prev.bias, 0, "NON-VACUOUS: the record is not flat (bias == 0)");
         assertLe(uint256(veHemi.getLockedBalance(id).end), block.timestamp,
-                 "R15/K NON-VACUOUS: the lock has not passed its end");
+                 "NON-VACUOUS: the lock has not passed its end");
 
         vm.prank(attacker);
         (bool okM, bytes memory rM) = address(delegation).call(
             abi.encodeWithSignature("delegate(uint256,address)", id, Z1)
         );
         emit log_string(
-            string.concat("R15/K the bias==0 move onto a PENDING delegatee: ",
+            string.concat("the bias==0 move onto a PENDING delegatee: ",
                           okM ? "SUCCEEDED" : string.concat("revert sel=", _sel(rM)))
         );
-        assertTrue(okM, "R15/K: the bias==0 move onto a PENDING delegatee reverted");
-        assertEq(delegation.delegation(id).delegatee, Z1, "R15/K: the move was not recorded");
+        assertTrue(okM, "the bias==0 move onto a PENDING delegatee reverted");
+        assertEq(delegation.delegation(id).delegatee, Z1, "the move was not recorded");
 
-        emit log_named_uint("R15/K getVotes(Z1) after", delegation.getVotes(Z1));
-        emit log_named_uint("R15/K getVotes(Z2) ctrl ", delegation.getVotes(Z2));
-        uint256 viol = _auditLayout(Z1, "R15/K Z1") + _auditLayout(Z2, "R15/K Z2");
-        emit log_string(string.concat("R15/OBS layout-violations: ", vm.toString(viol)));
-        assertEq(viol, 0, "R15/K REFUTED: the bias==0 move left a CP-LAYOUT-violating array");
+        emit log_named_uint("getVotes(Z1) after", delegation.getVotes(Z1));
+        emit log_named_uint("getVotes(Z2) ctrl ", delegation.getVotes(Z2));
+        uint256 viol = _auditLayout(Z1, "Z1") + _auditLayout(Z2, "Z2");
+        emit log_string(string.concat("layout-violations: ", vm.toString(viol)));
+        assertEq(viol, 0, "the bias==0 move left an array that violates the checkpoint layout");
         assertEq(delegation.getVotes(Z1), delegation.getVotes(Z2),
-                 "R15/K REFUTED: the bias==0 move onto a PENDING delegatee changed its weight");
+                 "the bias==0 move onto a PENDING delegatee changed its weight");
 
         _lateRetirement();
     }
@@ -171,13 +171,13 @@ contract R15Layout is J11Base {
             abi.encodeWithSignature("delegate(uint256,address)", b2, dele2)
         );
         emit log_string(
-            string.concat("R15/K later retirement from Z1: ",
+            string.concat("later retirement from Z1: ",
                           okL ? "SUCCEEDED" : string.concat("revert ", _sel(rL)),
                           " | from Z2: ", okL2 ? "SUCCEEDED" : "revert")
         );
-        assertTrue(okL2, "R15/K NON-VACUOUS: the control's later honest retirement did not succeed");
-        assertEq(okL, okL2, "R15/K REFUTED: the bias==0 move changed whether a LATER honest retirement works");
+        assertTrue(okL2, "NON-VACUOUS: the control's later honest retirement did not succeed");
+        assertEq(okL, okL2, "the bias==0 move changed whether a LATER honest retirement works");
         assertEq(delegation.getVotes(Z1), delegation.getVotes(Z2),
-                 "R15/K REFUTED: divergence after the later retirement");
+                 "divergence after the later retirement");
     }
 }

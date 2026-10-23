@@ -161,7 +161,7 @@ contract O01LayoutTest is LockedCurveTestBase {
     /// A co-delegator's booking made in the same block as a top-up on the same
     /// delegatee must survive: past the boundary the delegatee must read BOTH
     /// positions.
-    /// `I04VoteHole.t.sol` V7 asserts the same property against a recomputed
+    /// A separate vote-hole test asserts the same property against a recomputed
     /// per-record sum; this body asserts it against the layout.
     function test_O01_L5_coDelegatorBookingSurvivesSameBlockTopUp() public {
         vm.warp(((block.timestamp / SIX_DAYS) + 2) * SIX_DAYS + 1);
@@ -216,9 +216,9 @@ contract O01LayoutTest is LockedCurveTestBase {
         emit log_named_uint("S after two same-block writes", afterPair);
         // `increaseAmount` only ADDS weight, so the pair can never leave bob
         // poorer than doing nothing.
-        assertGe(afterPair, doNothing, "O01/S: a same-block pair made the delegatee POORER than doing nothing");
+        assertGe(afterPair, doNothing, "S: a same-block pair made the delegatee POORER than doing nothing");
         // and the other direction: no phantom.
-        assertLe(afterPair, veHemi.totalVeHemiSupply(), "O01/S: votes exceed the escrow after a same-block pair");
+        assertLe(afterPair, veHemi.totalVeHemiSupply(), "S: votes exceed the escrow after a same-block pair");
         _assertLayout(bob, "S");
     }
 
@@ -255,14 +255,14 @@ contract O01LayoutTest is LockedCurveTestBase {
         emit log_named_uint("M window width (s)      ", boundary - (t + 1));
         emit log_named_uint("M UNION zero seconds    ", unionZeros);
         emit log_named_uint("M weight before the move", before_);
-        assertEq(unionZeros, 0, "O01/M: a delegatee MOVE leaves the escrowed weight represented by NOBODY");
+        assertEq(unionZeros, 0, "M: a delegatee MOVE leaves the escrowed weight represented by NOBODY");
 
         // and the union gap is sealed into history, not merely live state.
         vm.warp(boundary + 365 days);
         assertGt(
             delegation.getPastVotes(bob, t + 1) + delegation.getPastVotes(charlie, t + 1),
             0,
-            "O01/M: the union gap is SEALED into getPastVotes"
+            "M: the union gap is SEALED into getPastVotes"
         );
     }
 
@@ -287,10 +287,10 @@ contract O01LayoutTest is LockedCurveTestBase {
         }
         emit log_named_uint("R window width (s)", boundary - (t + 1));
         emit log_named_uint("R zero seconds    ", zeros);
-        assertEq(zeros, 0, "O01: the 1-wei blackout is still open");
+        assertEq(zeros, 0, "R: a 1-wei top-up opened a zero-vote second in the hour");
 
         // and it is not merely live-state: the history agrees a year later.
         vm.warp(boundary + 365 days);
-        assertGt(delegation.getPastVotes(bob, t + 1), 0, "O01: the zero is sealed into getPastVotes");
+        assertGt(delegation.getPastVotes(bob, t + 1), 0, "R: the zero is sealed into getPastVotes");
     }
 }

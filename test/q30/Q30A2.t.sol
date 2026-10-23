@@ -5,7 +5,7 @@ import "../j11/J11Base.sol";
 import {IVeHemiVoteDelegation} from "../../src/interfaces/IVeHemiVoteDelegation.sol";
 import "../q14/Q14Modules.sol";
 
-/// @title  Q30A2 — the strict re-raise of `DelegationSlopeOverflow()`.
+/// @title  The strict re-raise of `DelegationSlopeOverflow()`.
 ///
 /// @notice When the delegation module refuses the retirement leg with
 ///         `DelegationSlopeOverflow()` (`0xf2b4513c`), the HOLDER's
@@ -72,7 +72,7 @@ contract Q30A2 is J11Base {
         (bool ok, bytes memory ret) = address(delegation).call(
             abi.encodeWithSignature("delegate(uint256,address)", probeId, dele)
         );
-        require(!ok && bytes4(ret) == SEL_SLOPE_OVERFLOW, "Q30: saturation premise GONE");
+        require(!ok && bytes4(ret) == SEL_SLOPE_OVERFLOW, "saturation premise GONE");
     }
 
     /// @dev The ADVERSARIAL shape: a module that answers `0xf2b4513c` to the
@@ -85,7 +85,7 @@ contract Q30A2 is J11Base {
         (bool ok, bytes memory ret) = address(m).call(
             abi.encodeWithSignature("delegate(uint256,address)", id_, dele)
         );
-        require(!ok && bytes4(ret) == SEL_SLOPE_OVERFLOW, "Q30: liar does not raise the selector");
+        require(!ok && bytes4(ret) == SEL_SLOPE_OVERFLOW, "liar does not raise the selector");
     }
 
     /// @dev EVERY OWNER-INDEPENDENT ROUTE, IN ORDER, WITH THE ROUTE REPORTED.
@@ -139,20 +139,20 @@ contract Q30A2 is J11Base {
 
     /// @notice The selector literal `VeHemi` hard-codes, recomputed here.
     function test_Q30_V1_selectorPin() public pure {
-        assertEq(SEL_SLOPE_OVERFLOW, bytes4(0xf2b4513c), "Q30/V1: selector literal is stale");
+        assertEq(SEL_SLOPE_OVERFLOW, bytes4(0xf2b4513c), "V1: selector literal is stale");
     }
 
-    /// @notice The three facts the trap and its cure rest on, read from this
-    ///         tree's own state.
+    /// @notice The three facts the trap and its cure rest on, read from the
+    ///         contract's own state.
     function test_Q30_V2_theThreeShippedLinesThatComposeTheTrap() public {
         uint256 id = _flatDelegated(victim, dele);
 
         // (1) `withdraw` is FLAG-GATED.
         uint256 target = uint256(veHemi.getLockedBalance(id).end) + 1;
         vm.warp(target);
-        assertGt(veHemi.autoRelockRemaining(id), 0, "Q30/V2: flag not set");
+        assertGt(veHemi.autoRelockRemaining(id), 0, "V2: flag not set");
         (bool w, ) = _call(victim, abi.encodeWithSignature("withdraw(uint256)", id));
-        assertFalse(w, "Q30/V2: withdraw is NOT flag-gated -- the trap cannot exist");
+        assertFalse(w, "V2: withdraw is NOT flag-gated -- the trap cannot exist");
 
         // (2) the stale window is `STALE_FLAT_BUCKETS * SIX_DAYS` from the last
         //     refresh.
@@ -160,15 +160,15 @@ contract Q30A2 is J11Base {
         assertEq(
             staleAt - uint256(veHemi.autoRelockRefreshedAt(id)),
             veHemi.STALE_FLAT_BUCKETS() * SIX_DAYS,
-            "Q30/V2: stale window is not 60 buckets"
+            "V2: stale window is not 60 buckets"
         );
-        emit log_named_uint("Q30/V2 stale window (s)", staleAt - uint256(veHemi.autoRelockRefreshedAt(id)));
+        emit log_named_uint("V2 stale window (s)", staleAt - uint256(veHemi.autoRelockRefreshedAt(id)));
 
         // (3) the permissionless leg really is permissionless.
         vm.warp(staleAt);
         (bool r, ) = _retire(stranger, id);
-        assertTrue(r, "Q30/V2: a STRANGER could not retire a stale position");
-        assertEq(veHemi.autoRelockRemaining(id), 0, "Q30/V2: flag survived the retirement");
+        assertTrue(r, "V2: a STRANGER could not retire a stale position");
+        assertEq(veHemi.autoRelockRemaining(id), 0, "V2: flag survived the retirement");
     }
 
     // =====================================================================
@@ -188,12 +188,12 @@ contract Q30A2 is J11Base {
         bool flagCleared = veHemi.autoRelockRemaining(id) == 0;
         bool stillFlat = (d.slope == 0 && d.bias > 0);
 
-        emit log_named_uint("Q30/R1 disable committed", committed ? 1 : 0);
-        emit log_named_uint("Q30/R1 flag cleared", flagCleared ? 1 : 0);
-        emit log_named_uint("Q30/R1 record still FLAT", stillFlat ? 1 : 0);
-        emit log_named_uint("Q30/R1 record.bias", d.bias);
-        emit log_named_uint("Q30/R1 swallowed", _has(logs, TOPIC_SWALLOWED) ? 1 : 0);
-        assertFalse(flagCleared && stillFlat, "Q30/R1: COMMITTED with the flat term STILL STANDING");
+        emit log_named_uint("R1 disable committed", committed ? 1 : 0);
+        emit log_named_uint("R1 flag cleared", flagCleared ? 1 : 0);
+        emit log_named_uint("R1 record still FLAT", stillFlat ? 1 : 0);
+        emit log_named_uint("R1 record.bias", d.bias);
+        emit log_named_uint("R1 swallowed", _has(logs, TOPIC_SWALLOWED) ? 1 : 0);
+        assertFalse(flagCleared && stillFlat, "R1: COMMITTED with the flat term STILL STANDING");
     }
 
     /// @notice And the refusal carries the module's OWN selector.
@@ -201,9 +201,9 @@ contract Q30A2 is J11Base {
         uint256 id = _saturate(uint256(PRINCIPAL / MAX_TIME) / 2);
         vm.warp(block.timestamp + 40 * SIX_DAYS);
         (bool ok, bytes memory ret) = _disable(victim, id);
-        emit log_named_uint("Q30/R2 disable ok", ok ? 1 : 0);
-        assertFalse(ok, "Q30/R2: disable did not re-revert");
-        assertEq(bytes4(ret), SEL_SLOPE_OVERFLOW, "Q30/R2: wrong revert data bubbled");
+        emit log_named_uint("R2 disable ok", ok ? 1 : 0);
+        assertFalse(ok, "R2: disable did not re-revert");
+        assertEq(bytes4(ret), SEL_SLOPE_OVERFLOW, "R2: wrong revert data bubbled");
     }
 
     /// @notice Law (B) under the REAL module: the escape hatch (moving the flat
@@ -215,11 +215,11 @@ contract Q30A2 is J11Base {
         uint256 t0 = block.timestamp;
         uint256 route = _clearFlagWithoutOwner(id, victim);
         uint256 waited = block.timestamp - t0;
-        emit log_named_uint("Q30/R3 route", route);
-        emit log_named_uint("Q30/R3 seconds waited to clear the flag", waited);
-        assertGt(route, 0, "Q30/R3: NO owner-independent route cleared the flag");
-        assertLt(waited, 3600, "Q30/R3: the holder had to WAIT -- the escape hatch did not work");
-        assertEq(_withdrawAll(id, victim), PRINCIPAL, "Q30/R3: principal did not come home");
+        emit log_named_uint("R3 route", route);
+        emit log_named_uint("R3 seconds waited to clear the flag", waited);
+        assertGt(route, 0, "R3: NO owner-independent route cleared the flag");
+        assertLt(waited, 3600, "R3: the holder had to WAIT -- the escape hatch did not work");
+        assertEq(_withdrawAll(id, victim), PRINCIPAL, "R3: principal did not come home");
     }
 
     // =====================================================================
@@ -236,12 +236,12 @@ contract Q30A2 is J11Base {
 
         uint256 t0 = block.timestamp;
         uint256 route = _clearFlagWithoutOwner(id, victim);
-        emit log_named_uint("Q30/T1 route", route);
-        emit log_named_uint("Q30/T1 seconds waited", block.timestamp - t0);
-        emit log_named_uint("Q30/T1 flag after", veHemi.autoRelockRemaining(id));
+        emit log_named_uint("T1 route", route);
+        emit log_named_uint("T1 seconds waited", block.timestamp - t0);
+        emit log_named_uint("T1 flag after", veHemi.autoRelockRemaining(id));
         uint256 got = route == 0 ? 0 : _withdrawAll(id, victim);
-        emit log_named_uint("Q30/T1 recovered", got);
-        assertEq(got, PRINCIPAL, "Q30/T1: PRINCIPAL TRAPPED -- no owner-independent route exists");
+        emit log_named_uint("T1 recovered", got);
+        assertEq(got, PRINCIPAL, "T1: PRINCIPAL TRAPPED -- no owner-independent route exists");
     }
 
     /// @notice ONE owner transaction — `updateVoteDelegation` to ANY module
@@ -254,26 +254,26 @@ contract Q30A2 is J11Base {
 
         // the holder alone, FIRST.
         (bool d0, ) = _disable(victim, id);
-        emit log_named_uint("Q30/T2 holder disable BEFORE the swap", d0 ? 1 : 0);
-        emit log_named_uint("Q30/T2 trapped before the swap", veHemi.autoRelockRemaining(id) != 0 ? 1 : 0);
+        emit log_named_uint("T2 holder disable BEFORE the swap", d0 ? 1 : 0);
+        emit log_named_uint("T2 trapped before the swap", veHemi.autoRelockRemaining(id) != 0 ? 1 : 0);
 
         // ONE owner transaction. `K08SilentFreeze` is the MINIMUM shape: it
         // answers every read with a ZERO record, so `_reDelegate` skips the
         // write entirely. It HAS CODE, so `updateVoteDelegation` admits it.
         K08SilentFreeze fresh = new K08SilentFreeze();
-        assertGt(address(fresh).code.length, 0, "Q30/T2: replacement is codeless (A1 would refuse)");
+        assertGt(address(fresh).code.length, 0, "T2: replacement is codeless (updateVoteDelegation would refuse it)");
         veHemi.updateVoteDelegation(IVeHemiVoteDelegation(address(fresh)));
 
         if (veHemi.autoRelockRemaining(id) != 0) {
             (bool d1, ) = _disable(victim, id);
-            emit log_named_uint("Q30/T2 holder disable AFTER the swap", d1 ? 1 : 0);
-            emit log_named_uint("Q30/T2 owner txs needed", 1);
-            assertTrue(d1, "Q30/T2: the module swap did NOT restore disableAutoRelock");
+            emit log_named_uint("T2 holder disable AFTER the swap", d1 ? 1 : 0);
+            emit log_named_uint("T2 owner txs needed", 1);
+            assertTrue(d1, "T2: the module swap did NOT restore disableAutoRelock");
         } else {
-            emit log_named_uint("Q30/T2 owner txs needed", 0);
+            emit log_named_uint("T2 owner txs needed", 0);
         }
-        assertEq(veHemi.autoRelockRemaining(id), 0, "Q30/T2: flag survived the swap");
-        assertEq(_withdrawAll(id, victim), PRINCIPAL, "Q30/T2: principal still trapped after the swap");
+        assertEq(veHemi.autoRelockRemaining(id), 0, "T2: flag survived the swap");
+        assertEq(_withdrawAll(id, victim), PRINCIPAL, "T2: principal still trapped after the swap");
     }
 
     /// @notice Re-installing the OLD, REAL `VeHemiVoteDelegation` also works,
@@ -284,16 +284,16 @@ contract Q30A2 is J11Base {
         _installLiar(id);
         vm.warp(block.timestamp + 40 * SIX_DAYS);
         (bool d0, ) = _disable(victim, id);
-        emit log_named_uint("Q30/T3 disable under the liar", d0 ? 1 : 0);
+        emit log_named_uint("T3 disable under the liar", d0 ? 1 : 0);
 
         veHemi.updateVoteDelegation(IVeHemiVoteDelegation(original));
         if (veHemi.autoRelockRemaining(id) != 0) {
             (bool d1, ) = _disable(victim, id);
-            emit log_named_uint("Q30/T3 disable after re-install", d1 ? 1 : 0);
-            assertTrue(d1, "Q30/T3: re-installing the original module did not restore the path");
+            emit log_named_uint("T3 disable after re-install", d1 ? 1 : 0);
+            assertTrue(d1, "T3: re-installing the original module did not restore the path");
         }
-        assertEq(veHemi.autoRelockRemaining(id), 0, "Q30/T3: flag survived the re-install");
-        assertEq(_withdrawAll(id, victim), PRINCIPAL, "Q30/T3: principal not recovered");
+        assertEq(veHemi.autoRelockRemaining(id), 0, "T3: flag survived the re-install");
+        assertEq(_withdrawAll(id, victim), PRINCIPAL, "T3: principal not recovered");
     }
 
     /// @notice The permissionless leg still clears the flag under the
@@ -303,10 +303,10 @@ contract Q30A2 is J11Base {
         _installLiar(id);
         vm.warp(veHemi.autoRelockStaleAt(id));
         (bool r, ) = _retire(stranger, id);
-        emit log_named_uint("Q30/T4 retire ok", r ? 1 : 0);
-        emit log_named_uint("Q30/T4 flag after", veHemi.autoRelockRemaining(id));
-        assertTrue(r, "Q30/T4: the PERMISSIONLESS remedy is closed by the re-revert");
-        assertEq(veHemi.autoRelockRemaining(id), 0, "Q30/T4: flag survived");
+        emit log_named_uint("T4 retire ok", r ? 1 : 0);
+        emit log_named_uint("T4 flag after", veHemi.autoRelockRemaining(id));
+        assertTrue(r, "T4: the PERMISSIONLESS remedy is closed by the re-revert");
+        assertEq(veHemi.autoRelockRemaining(id), 0, "T4: flag survived");
     }
 
     /// @notice BOUNDED-TIME LAW (B): for EVERY module shape the flag clears
@@ -319,11 +319,11 @@ contract Q30A2 is J11Base {
         vm.warp(deadline);
         (bool r, ) = _retire(stranger, id);
         if (!r) { (r, ) = _disable(victim, id); }
-        emit log_named_uint("Q30/T5 cleared by deadline", veHemi.autoRelockRemaining(id) == 0 ? 1 : 0);
+        emit log_named_uint("T5 cleared by deadline", veHemi.autoRelockRemaining(id) == 0 ? 1 : 0);
         assertEq(
             veHemi.autoRelockRemaining(id),
             0,
-            "Q30/T5: law (B) is NOT bounded in time -- the owner is the only cure"
+            "T5: law (B) is NOT bounded in time -- the owner is the only cure"
         );
     }
 
@@ -335,14 +335,14 @@ contract Q30A2 is J11Base {
         uint256 id = _saturate(uint256(PRINCIPAL / MAX_TIME) / 2);
         uint256 frozenEnd = veHemi.getLockedBalance(id).end;
         vm.warp(frozenEnd + 30 * SIX_DAYS);
-        assertGt(block.timestamp, veHemi.getLockedBalance(id).end, "Q30/T6: end is not past");
+        assertGt(block.timestamp, veHemi.getLockedBalance(id).end, "T6: end is not past");
         vm.prank(victim);
         (bool ok, bytes memory ret) = address(delegation).call(
             abi.encodeWithSignature("delegate(uint256,address)", id, dele)
         );
-        emit log_named_uint("Q30/T6 move to the SATURATED delegatee ok", ok ? 1 : 0);
-        if (!ok && ret.length >= 4) emit log_named_bytes32("Q30/T6 revert", bytes32(bytes4(ret)));
-        assertTrue(ok, "Q30/T6: the escape hatch is NOT ceiling-immune");
+        emit log_named_uint("T6 move to the SATURATED delegatee ok", ok ? 1 : 0);
+        if (!ok && ret.length >= 4) emit log_named_bytes32("T6 revert", bytes32(bytes4(ret)));
+        assertTrue(ok, "T6: the escape hatch is NOT ceiling-immune");
     }
 
     /// @notice `retireStaleAutoRelock` is permissionless but UNPAID, so nobody
@@ -357,9 +357,9 @@ contract Q30A2 is J11Base {
         (bool r, ) = address(veHemi).call{gas: BIG_GAS}(
             abi.encodeWithSignature("retireStaleAutoRelock(uint256)", id)
         );
-        emit log_named_uint("Q30/T7 holder self-retire ok", r ? 1 : 0);
-        emit log_named_uint("Q30/T7 gas", g0 - gasleft());
-        assertTrue(r, "Q30/T7: the holder cannot self-serve the permissionless remedy");
-        assertEq(_withdrawAll(id, victim), PRINCIPAL, "Q30/T7: principal not recovered");
+        emit log_named_uint("T7 holder self-retire ok", r ? 1 : 0);
+        emit log_named_uint("T7 gas", g0 - gasleft());
+        assertTrue(r, "T7: the holder cannot self-serve the permissionless remedy");
+        assertEq(_withdrawAll(id, victim), PRINCIPAL, "T7: principal not recovered");
     }
 }

@@ -36,12 +36,13 @@ contract R31UpgradeWindowTest is R31Base {
 
     /// @dev The D2 sequence: the deployed implementation retires the
     ///      record to `fresh` in-hour, the batch lands IN THE SAME BLOCK, and
-    ///      the candidate re-adds the record to A (12 s later, or in the same
-    ///      block when `sameBlock_`, or at B+11 when the batch landed at B-1).
+    ///      the new implementation re-adds the record to A (12 s later, or
+    ///      in the same block when `sameBlock_`, or at B+11 when the batch
+    ///      landed at B-1).
     function _d2(uint256 offset_, bool preWrite_, bool sameBlock_) internal returns (Run memory r) {
         address owner;
         (r.id, owner, r.a) = _pick();
-        r.fresh = address(uint160(uint256(keccak256("R31-fresh"))));
+        r.fresh = address(uint160(uint256(keccak256("upgrade-hour-fresh"))));
         uint256 h = _nb(block.timestamp);
         _to(h + offset_);
         r.boundary = h + HOUR;
@@ -65,7 +66,7 @@ contract R31UpgradeWindowTest is R31Base {
         r.tUp = block.timestamp;
         if (!sameBlock_) _to(block.timestamp + 12);
         vm.prank(owner);
-        vvd.delegate(r.id, r.a); // candidate
+        vvd.delegate(r.id, r.a); // new implementation
         _to(block.timestamp + 2);
         r.votesA = vvd.getVotes(r.a);
         r.pastA = vvd.getPastVotes(r.a, block.timestamp - 1);
@@ -104,8 +105,8 @@ contract R31UpgradeWindowTest is R31Base {
     }
 
     /// D5 (a live write earlier in the SAME block as the batch): clean,
-    /// including with the candidate re-add in that same block (the
-    /// live-write / execTransaction / candidate-write sandwich).
+    /// including with the new implementation's re-add in that same block
+    /// (the live-write / execTransaction / re-add sandwich).
     function test_R31_D5_sameBlockSandwich_noDoubleCount() public {
         if (!live) return;
         uint256 snap = vm.snapshotState();
@@ -133,7 +134,7 @@ contract R31UpgradeWindowTest is R31Base {
     /// A whole.
     function _d1(uint256 offset_, bool doWrites_) internal returns (uint256 aIn, uint256 aPastAfterB, uint256 aAfterB, uint256 bIn, uint256 bAfterB, uint256 tProbe) {
         (uint256 id, address owner, address a) = _pick();
-        address b = address(uint160(uint256(keccak256("R31-B"))));
+        address b = address(uint160(uint256(keccak256("upgrade-hour-B"))));
         uint256 h = _nb(block.timestamp);
         _to(h + 60);
         vm.prank(owner);
@@ -223,7 +224,7 @@ contract R31UpgradeWindowTest is R31Base {
         (k.x, k.xOwner, k.a) = _pick();
         k.w = veHemi.balanceOfNFT(k.x);
         (k.y, k.yOwner, ) = _pickFrom(k.x + 1, 3 * k.w);
-        k.b2 = address(uint160(uint256(keccak256("R31-B2"))));
+        k.b2 = address(uint160(uint256(keccak256("upgrade-hour-B2"))));
         uint256 h = _nb(block.timestamp);
         _to(h + 60);
         vm.prank(k.yOwner);
@@ -275,7 +276,7 @@ contract R31UpgradeWindowTest is R31Base {
                 (uint256 id, address owner, ) = _pick();
                 _to(h + HOUR + 11);
                 vm.prank(owner);
-                vvd.delegate(id, address(uint160(uint256(keccak256("R31-k299")))));
+                vvd.delegate(id, address(uint160(uint256(keccak256("upgrade-hour-k299")))));
                 assertEq(uint256(vvd.delegationBookedAt(id)), block.timestamp + 1, "post-B write not immediate");
             }
             vm.revertToState(snap);
@@ -320,7 +321,7 @@ contract R31UpgradeWindowTest is R31Base {
         PB memory p;
         (p.id1, p.o1, p.a1) = _pick();
         (p.id2, p.o2, p.a2) = _pickFrom(p.id1 + 1, 1e18);
-        p.g = address(uint160(uint256(keccak256("R31-postB-g"))));
+        p.g = address(uint160(uint256(keccak256("upgrade-hour-postB-g"))));
         address[] memory ds = new address[](3);
         ds[0] = p.a1; ds[1] = p.a2; ds[2] = p.g;
         uint256[] memory ids = new uint256[](2);
@@ -342,13 +343,14 @@ contract R31UpgradeWindowTest is R31Base {
 
     /// Batch fidelity: the EXACT MultiSendCallOnly payload through
     /// Safe.execTransaction (owners' approveHash, v = 1), mid-hour, with a
-    /// live write EARLIER in the same block and a candidate write LATER in it.
+    /// live write EARLIER in the same block and a new-implementation write
+    /// LATER in it.
     function test_R31_batchFidelity_execTransaction() public {
         if (!live) return;
         assertGt(MULTISEND_CALL_ONLY.code.length, 0, "MultiSendCallOnly 1.4.1 absent at the fork block");
         _impls();
         (uint256 id, address owner, address a) = _pick();
-        address fresh = address(uint160(uint256(keccak256("R31-fid-fresh"))));
+        address fresh = address(uint160(uint256(keccak256("upgrade-hour-fid-fresh"))));
         uint256 h = _nb(block.timestamp);
         _to(h + 1799);
         uint256 w = veHemi.balanceOfNFT(id);
@@ -377,7 +379,7 @@ contract R31UpgradeWindowTest is R31Base {
         assertEq(address(uint160(uint256(vm.load(VVD_PROXY, IMPL_SLOT)))), newVvdImpl, "fidelity: VVD impl");
         assertEq(address(uint160(uint256(vm.load(VEHEMI_PROXY, IMPL_SLOT)))), newVeHemiImpl, "fidelity: VeHemi impl");
         vm.prank(owner);
-        vvd.delegate(id, a); // candidate write, same block, after the batch
+        vvd.delegate(id, a); // new-implementation write, same block, after the batch
         _to(block.timestamp + 2);
         uint256 tol = w / 1e6 + 1e15;
         assertApproxEqAbs(vvd.getVotes(a), cfA, tol, "fidelity: A in the window");

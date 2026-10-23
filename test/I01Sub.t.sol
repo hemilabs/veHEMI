@@ -2,7 +2,7 @@
 pragma solidity ^0.8.29;
 
 // ============================================================================
-// I01 -- the subcurve-ordering law for a flat (armed) non-transferable position.
+// The subcurve-ordering law for a flat (armed) non-transferable position.
 // ----------------------------------------------------------------------------
 //   S    = SIX_DAYS = 525,960     H = S/2 = 262,980 (exact; S is even)
 //   g    = grid(now),  off = now - g in [0, S)
@@ -11,8 +11,8 @@ pragma solidity ^0.8.29;
 //   ta   = transferableAfter[id], set once at mint to the rounded unlockTime.
 //          For a position minted non-transferable, ta == lock.end at mint.
 //
-//   GLOBAL book of a flat position (V-MEAN):   V   = slope * (R - H)
-//   SUBCURVE book of the SAME position:        sub = slope * (ta - now)
+//   GLOBAL book of a flat position (bucket mean):  V   = slope * (R - H)
+//   SUBCURVE book of the SAME position:            sub = slope * (ta - now)
 //   (auto-relock is invisible to the subcurves: they keep the manual ramp).
 //
 //   With ta == g + R:   sub - V = slope * (H - off),  > 0 FOR off < H.
@@ -42,9 +42,9 @@ contract I01SubTest is TwinOracle {
     function _off() internal view returns (uint256) { return block.timestamp - _grid(block.timestamp); }
 
     /// @dev The flat level right after an enable at a bucket-aligned lock end
-    ///      must be V-MEAN, `slope * (R - SIX_DAYS/2)`.
+    ///      must be the bucket-mean flat level, `slope * (R - SIX_DAYS/2)`.
     function _assertMean(uint256 id, uint256 amount, uint256 n) internal view {
-        assertEq(X.ve.balanceOfNFT(id), meanLevelOf(amount, n), "flat level is not V-MEAN");
+        assertEq(X.ve.balanceOfNFT(id), meanLevelOf(amount, n), "flat level is not the bucket-mean level");
     }
 
     /// @dev The excess the design predicts, from the test's own clock and the

@@ -52,8 +52,8 @@ contract StorageLayoutGoldenTest is Test {
     function test_ArtifactLayoutsAreNotVacuous() public {
         assertTrue(
             vm.keyExistsJson(veHemiArtifact, ".storageLayout"),
-            "out/VeHemi.sol/VeHemi.json has no .storageLayout - this suite would be a "
-            "tautology again. Set extra_output = [\"storageLayout\"] in foundry.toml and rebuild."
+            "out/VeHemi.sol/VeHemi.json has no .storageLayout - the compiled-layout checks in this suite cannot run. "
+            "Set extra_output = [\"storageLayout\"] in foundry.toml and rebuild."
         );
         assertTrue(
             vm.keyExistsJson(delegationArtifact, ".storageLayout"),

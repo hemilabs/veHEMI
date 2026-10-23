@@ -4,7 +4,7 @@ pragma solidity ^0.8.29;
 import "../LockedCurveTestBase.sol";
 import {N04VoteContinuityLaw as N04} from "./N04VoteContinuityLaw.sol";
 
-/// N04 — THE CONTINUITY CLAUSES (C1, C2, C3) of `N04VoteContinuityLaw`.
+/// THE CONTINUITY CLAUSES (C1, C2, C3) of `N04VoteContinuityLaw`.
 ///
 /// Each body reads only the public surface (`getVotes`, `getPastVotes`,
 /// `delegations(id)`, `balanceOfNFTAt`) and asks a historical question about

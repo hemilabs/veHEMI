@@ -38,7 +38,7 @@ ATTEMPTS="${S47_RETRY_ATTEMPTS:-4}"
 BACKOFF="${S47_RETRY_BACKOFF:-5}"
 
 # ---- SIGNATURES -------------------------------------------------------------
-# Transport failures as forge and cast print them (the s14 gate's own
+# Transport failures as forge and cast print them (the Aragon gate's own
 # "does not answer eth_chainId" included). Add to this only from a captured log.
 TRANSPORT_RE='HTTP error (40[0-9]|41[0-9]|42[0-9]|43[0-9]|5[0-9][0-9])|Request timeout on the free plan|Max retries exceeded|could not instantiate forked environment|does not answer eth_chainId|error sending request|operation timed out|connection closed before message completed|Connection refused|dns error|tcp connect error|request timed out|502 Bad Gateway|503 Service|504 Gateway'
 

@@ -150,14 +150,14 @@ describeOrSkip("Hardhat fork: deploy/08 auto-relock upgrade → Safe MultiSend",
         const leg0 = PROXY_ADMIN_IFACE.parseTransaction({ data: batch[0].data })!;
         const leg1 = PROXY_ADMIN_IFACE.parseTransaction({ data: batch[1].data })!;
         expect(leg0.name).to.equal("upgrade", "leg 0 is the plain VeHemi upgrade");
-        expect(leg1.name).to.equal("upgradeAndCall", "leg 1 arms the r31 D-1 window");
+        expect(leg1.name).to.equal("upgradeAndCall", "leg 1 arms the upgrade-hour window");
         expect((leg1.args[2] as string).toLowerCase()).to.equal(ARM_DATA, "leg 1 data is exactly armLegacyDatingWindow()");
         expect(BigInt(batch[1].value ?? "0")).to.equal(0n, "leg 1 carries no value");
 
         const veHemiImpl = (await deployments.get("VeHemi_Implementation")).address;
         const vvdImpl = (await deployments.get("VeHemiVoteDelegation_Implementation")).address;
 
-        // The implementation really is the audited size, with no placeholder left.
+        // The implementation really is the attested size, with no placeholder left.
         const implCode = await ethers.provider.getCode(veHemiImpl);
         expect((implCode.length - 2) / 2).to.equal(
             VEHEMI_RUNTIME_SIZE,
@@ -282,7 +282,7 @@ describeOrSkip("Hardhat fork: deploy/08 auto-relock upgrade → Safe MultiSend",
         console.log("        ✓ VeHemi-first: delegate() still works against the old VoteDelegation");
     });
 
-    it("r33 C3: ONE Safe MultiSend (execTransaction -> MultiSendCallOnly) binds both legs to the arming tx; post-check refusals", async () => {
+    it("ONE Safe MultiSend (execTransaction -> MultiSendCallOnly) binds both legs to the arming tx; post-check refusals", async () => {
         const batch = await runUpgradeDeploy();
         const veHemiImpl = (await deployments.get("VeHemi_Implementation")).address;
         const vvdImpl = (await deployments.get("VeHemiVoteDelegation_Implementation")).address;
@@ -382,7 +382,7 @@ describeOrSkip("Hardhat fork: deploy/08 auto-relock upgrade → Safe MultiSend",
         expect(slotToAddress(await ethers.provider.getStorage(VVD_PROXY, IMPL_SLOT))).to.equal(nextAddr.toLowerCase());
     });
 
-    it("r33 C3 (i): a PLAIN VVD leg is caught by the post-check (NEVER ARMED)", async () => {
+    it("a PLAIN VVD leg is caught by the post-check (NEVER ARMED)", async () => {
         // This body pins the virgin-window path; at a pin after an in-window
         // rollback slot 101 holds the old boundary.
         const batch = await runUpgradeDeploy({ before: () => setWindowWord(0n) });
@@ -396,7 +396,7 @@ describeOrSkip("Hardhat fork: deploy/08 auto-relock upgrade → Safe MultiSend",
         expect(pc.error?.message ?? "").to.match(/NEVER ARMED/);
     });
 
-    it("r33 C3 (ii) + C1b: a window word left by an earlier armed forward is admitted, overwritten by the arm, and deploy/99 re-checks and executes the batch", async () => {
+    it("a window word left by an earlier armed forward is admitted, overwritten by the arm, and deploy/99 re-checks and executes the batch", async () => {
         // An hour boundary two hours back, as an earlier armed forward would leave it.
         const batch = await runUpgradeDeploy({
             before: async () => setWindowWord(nb(BigInt((await ethers.provider.getBlock("latest"))!.timestamp)) - 7200n),
@@ -423,7 +423,7 @@ describeOrSkip("Hardhat fork: deploy/08 auto-relock upgrade → Safe MultiSend",
         expect(pc.out).to.contain("POST-EXECUTION CHECK: PASS WITH WARNINGS (1)");
     });
 
-    it("r33 C3 (iii): an unknown window word is refused before anything is deployed", async () => {
+    it("an unknown window word is refused before anything is deployed", async () => {
         await setupFork();
         await setWindowWord(7201n);
         const before = listRefused();
@@ -435,7 +435,7 @@ describeOrSkip("Hardhat fork: deploy/08 auto-relock upgrade → Safe MultiSend",
         expect(listRefused()).to.deep.equal(before, "nothing was queued, so nothing is quarantined");
     });
 
-    it("r33 C3 (iv): a VVD proxy on an unknown implementation is refused before anything is deployed", async () => {
+    it("a VVD proxy on an unknown implementation is refused before anything is deployed", async () => {
         await setupFork();
         const f = await ethers.getContractFactory("VeHemiVoteDelegation");
         const stray = await f.deploy(VEHEMI_PROXY);
@@ -481,7 +481,7 @@ describeOrSkip("Hardhat fork: deploy/08 auto-relock upgrade → Safe MultiSend",
         expect(listRefused()).to.deep.equal(before, "nothing was queued, so nothing is quarantined");
     });
 
-    it("r33 C3 (v): the matcher refuses every off-shape leg; the post-check refuses an unrun forward", async () => {
+    it("the matcher refuses every off-shape leg; the post-check refuses an unrun forward", async () => {
         await setupFork();
         const pre = await postCheck();
         expect(pre.error?.message ?? "").to.match(/steps 3-4 never deployed this build's implementations/);
@@ -545,8 +545,9 @@ describeOrSkip("Hardhat fork: deploy/08 auto-relock upgrade → Safe MultiSend",
         expect(from.error?.message ?? "").to.match(/which is not a boundary-dating implementation/);
 
         // Re-check scope: a ProxyAdmin batch that upgrades neither proxy is not
-        // deploy/08's and is proposed as before. (Re-checked, this pre-forward
-        // state would fail "NEVER ARMED".) ProxyAdmin.owner() is a harmless leg.
+        // deploy/08's and is proposed without its re-check. (Re-checked, this
+        // pre-forward state would fail "NEVER ARMED".) ProxyAdmin.owner() is a
+        // harmless leg.
         await ethers.provider.send("hardhat_setStorageAt", [VVD_PROXY, IMPL_SLOT, ethers.zeroPadValue(LIVE_VVD_IMPL.toLowerCase(), 32)]);
         fs.writeFileSync(MULTI_SIG_TXS_FILE, JSON.stringify([{ to: PROXY_ADMIN, data: "0x8da5cb5b", value: "0" }]));
         const other = await capture(() => deploy99(hre));
@@ -555,7 +556,7 @@ describeOrSkip("Hardhat fork: deploy/08 auto-relock upgrade → Safe MultiSend",
         expect(fs.existsSync(MULTI_SIG_TXS_FILE)).to.equal(false, "deploy/99 proposed (executed) it");
     });
 
-    it("r33 C1a + C1b: a refused one-leg VVD batch is quarantined, and deploy/99 refuses it again when restored", async () => {
+    it("a refused one-leg VVD batch is quarantined, and deploy/99 refuses it again when restored", async () => {
         await runUpgradeDeploy();
         await deployments.delete("VeHemiVoteDelegation_Implementation");
         const before = listRefused();
@@ -576,13 +577,13 @@ describeOrSkip("Hardhat fork: deploy/08 auto-relock upgrade → Safe MultiSend",
         for (const f of listRefused().filter((x) => !before.includes(x))) fs.unlinkSync(f);
     });
 
-    it("r33 C1c + C1d: a split forward is named, its gap audited, and a position armed in the gap fails the post-check", async () => {
+    it("a split forward is named, its gap audited, and a position armed in the gap fails the post-check", async () => {
         const batch = await runUpgradeDeploy();
         const veHemiImpl = (await deployments.get("VeHemi_Implementation")).address;
         const vvdImpl = (await deployments.get("VeHemiVoteDelegation_Implementation")).address;
         await executeBatch([batch[0]]); // VeHemi only: new VeHemi over the live VVD
         const armedId = await armSomePosition(); // the window probe fails OPEN against the live VVD
-        console.log(`        ✓ armed token ${armedId} in the split gap (G1 fails open against the live VVD)`);
+        console.log(`        ✓ armed token ${armedId} in the split gap (the window probe fails open against the live VVD)`);
 
         fs.writeFileSync(MULTI_SIG_TXS_FILE, JSON.stringify([batch[1]]));
         const r = await capture(() =>
@@ -608,7 +609,7 @@ describeOrSkip("Hardhat fork: deploy/08 auto-relock upgrade → Safe MultiSend",
         expect(pc.error?.message ?? "").to.contain(`token ids ${armedId}.`);
     });
 
-    it("r34 L1: a split forward completed by a TWO-leg batch is refused before proposal and, executed anyway, fails the post-check", async () => {
+    it("a split forward completed by a TWO-leg batch is refused before proposal and, executed anyway, fails the post-check", async () => {
         // This body pins the virgin-window path; at a pin after an in-window
         // rollback slot 101 holds the old boundary.
         const batch = await runUpgradeDeploy({ before: () => setWindowWord(0n) });
@@ -634,7 +635,7 @@ describeOrSkip("Hardhat fork: deploy/08 auto-relock upgrade → Safe MultiSend",
         expect(pc.out).to.not.contain("POST-EXECUTION CHECK: PASS");
     });
 
-    it("r34 L3: VVD-first in separate transactions: an update the live VeHemi dropped in the gap fails the post-check", async () => {
+    it("VVD-first in separate transactions: an update the live VeHemi dropped in the gap fails the post-check", async () => {
         const batch = await runUpgradeDeploy();
         await executeBatch([batch[1]]); // VVD only: the new VVD under the live VeHemi
         const { tokenId, rc } = await transferSomePositionDroppingTheUpdate();
@@ -649,7 +650,7 @@ describeOrSkip("Hardhat fork: deploy/08 auto-relock upgrade → Safe MultiSend",
         ).to.equal(true);
     });
 
-    it("r34 L2 + L5: deploy/99 refuses a VeHemi-only batch while the VVD record is live; a provider error is not a verdict", async () => {
+    it("deploy/99 refuses a VeHemi-only batch while the VVD record is live; a provider error is not a verdict", async () => {
         const batch = await runUpgradeDeploy();
         const before = listRefused();
 
@@ -1164,7 +1165,7 @@ function failStorageRead(addr: string, slot: string, nth: number): () => void {
     let n = 0;
     p.getStorage = async function (this: unknown, ...a: unknown[]) {
         if (eqAddr(String(a[0]), addr) && String(a[1]).toLowerCase() === slot.toLowerCase() && ++n === nth) {
-            throw new Error("injected provider failure (r34 L5 test)");
+            throw new Error("injected provider failure");
         }
         return orig.apply(this, a);
     };

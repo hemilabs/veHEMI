@@ -189,15 +189,15 @@ contract InvariantTest is Test {
         uint256 forfeitable_ = veHemi.forfeitableTotalVeHemiSupply();
 
         assertLe(forfeitable_, locked, "forfeitable > locked");
-        // A flat (auto-relock) position books its V-MEAN level
+        // A flat (auto-relock) position books its bucket-mean level
         // `slope * (R - SIX_DAYS/2)` into the global curve but its plain ramp
         // to `transferableAfter` into the subcurves, so `locked` may exceed
         // `total` by that position's excess (`_vmeanSlack`), which is at most
         // `slope * SIX_DAYS/2`. With no flat position the slack is zero and
-        // this is the original `locked <= total`.
+        // this reduces to `locked <= total`.
         (uint256 slack, uint256 cap) = _vmeanSlack();
-        assertLe(slack, cap, "V-MEAN subcurve slack exceeds slope * SIX_DAYS/2 per flat in-window position");
-        assertLe(locked, total + slack, "locked > total + V-MEAN half-bucket slack");
+        assertLe(slack, cap, "bucket-mean subcurve slack exceeds slope * SIX_DAYS/2 per flat in-window position");
+        assertLe(locked, total + slack, "locked > total + bucket-mean half-bucket slack");
     }
 
     /// @dev The exact per-position excess of the subcurve over the global
@@ -268,13 +268,13 @@ contract InvariantTest is Test {
 
         (uint256 total, uint256 locked_, uint256 forfeitable_, uint256 transferable) = veHemi.supplyBreakdown();
 
-        // Internal consistency. The ordering carries the same V-MEAN slack as
+        // Internal consistency. The ordering carries the same slack as
         // `invariant_subcurveOrdering`, and `transferable` is the saturating
         // difference the view computes (`locked_ > total` is a legal state).
         assertLe(forfeitable_, locked_, "breakdown: forfeitable > locked");
         (uint256 slack, uint256 cap) = _vmeanSlack();
-        assertLe(slack, cap, "breakdown: V-MEAN slack exceeds slope * SIX_DAYS/2 per flat in-window position");
-        assertLe(locked_, total + slack, "breakdown: locked > total + V-MEAN half-bucket slack");
+        assertLe(slack, cap, "breakdown: bucket-mean slack exceeds slope * SIX_DAYS/2 per flat in-window position");
+        assertLe(locked_, total + slack, "breakdown: locked > total + bucket-mean half-bucket slack");
         assertEq(
             transferable,
             total > locked_ ? total - locked_ : 0,

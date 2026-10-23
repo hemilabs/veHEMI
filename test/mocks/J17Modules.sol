@@ -22,7 +22,7 @@ contract J17MuteModule {
 ///         term stands. `_reDelegate` therefore SUCCEEDS (no
 ///         `DelegationUpdateFailed`) and `_requireFlatTermRetired` cannot
 ///         read the record: the phantom stands, and its only signal is
-///         `AutoRelockRetirementUnverified` (`J17Gate` H4).
+///         `AutoRelockRetirementUnverified`.
 contract LyingUnreadableVoteDelegation is IVeHemiVoteDelegation {
     IVeHemiVoteDelegation public immutable REAL;
     uint256 private immutable ID;

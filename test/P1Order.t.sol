@@ -29,7 +29,7 @@ contract P1OrderAdapter {
     function clear() external { delete order; probed = false; seenDelegateeAtCallback = address(0); }
 }
 
-/// P1 -- event ordering. On every `_delegate`-reachable path VVD emits
+/// Event ordering. On every `_delegate`-reachable path VVD emits
 /// `DelegateChanged` before `DelegateVotesChanged` (the OpenZeppelin
 /// `Votes._delegate` / ERC-5805 order), and the adapter relay fires after the
 /// delegation record has been written.
@@ -67,20 +67,20 @@ contract P1OrderTest is LockedCurveTestBase {
             if (iDC  == -1 && logs[i].topics[0] == DC)  iDC  = int256(i);
             if (iDVC == -1 && logs[i].topics[0] == DVC) iDVC = int256(i);
         }
-        emit log_named_string("P1 path", label);
+        emit log_named_string("path", label);
         emit log_named_int("   first DelegateChanged      log index", iDC);
         emit log_named_int("   first DelegateVotesChanged  log index", iDVC);
-        assertGt(iDC,  -1, string.concat("P1/", label, ": NO DelegateChanged -- the body cannot pin an order"));
-        assertGt(iDVC, -1, string.concat("P1/", label, ": NO DelegateVotesChanged -- the body cannot pin an order"));
+        assertGt(iDC,  -1, string.concat(label, ": NO DelegateChanged -- the body cannot pin an order"));
+        assertGt(iDVC, -1, string.concat(label, ": NO DelegateVotesChanged -- the body cannot pin an order"));
         assertLt(iDC, iDVC, string.concat(
-            "P1/", label, ": DelegateVotesChanged precedes DelegateChanged. OpenZeppelin's "
+            label, ": DelegateVotesChanged precedes DelegateChanged. OpenZeppelin's "
             "Votes._delegate -- the ERC-5805 reference the Aragon tooling reads -- emits "
             "DelegateChanged FIRST."
         ));
         covered += 1;
     }
 
-    // ── P1  EVERY `_delegate`-REACHABLE PATH ─────────────────────────────────
+    // ── EVERY `_delegate`-REACHABLE PATH ─────────────────────────────────────
 
     function test_P1_O1_plainReDelegation() public {
         uint256 id = _mk(alice, 500 ether, 7 * SIX_DAYS);
@@ -88,7 +88,7 @@ contract P1OrderTest is LockedCurveTestBase {
         vm.recordLogs();
         vm.prank(alice); delegation.delegate(id, charlie);
         _assertOrder("plain re-delegation");
-        assertEq(covered, 1, "P1/O1: the assertion did not run");
+        assertEq(covered, 1, "the assertion did not run");
     }
 
     function test_P1_O2_sameDelegateeReDelegation() public {
@@ -97,7 +97,7 @@ contract P1OrderTest is LockedCurveTestBase {
         vm.recordLogs();
         vm.prank(alice); delegation.delegate(id, bob);      // SAME delegatee
         _assertOrder("same-delegatee re-delegation");
-        assertEq(covered, 1, "P1/O2: the assertion did not run");
+        assertEq(covered, 1, "the assertion did not run");
     }
 
     function test_P1_O3_enableAutoRelock() public {
@@ -106,7 +106,7 @@ contract P1OrderTest is LockedCurveTestBase {
         vm.recordLogs();
         vm.prank(alice); veHemi.enableAutoRelock(id);
         _assertOrder("enableAutoRelock");
-        assertEq(covered, 1, "P1/O3: the assertion did not run");
+        assertEq(covered, 1, "the assertion did not run");
     }
 
     function test_P1_O4_disableAutoRelock() public {
@@ -117,7 +117,7 @@ contract P1OrderTest is LockedCurveTestBase {
         vm.recordLogs();
         vm.prank(alice); veHemi.disableAutoRelock(id);
         _assertOrder("disableAutoRelock");
-        assertEq(covered, 1, "P1/O4: the assertion did not run");
+        assertEq(covered, 1, "the assertion did not run");
     }
 
     function test_P1_O5_retireStaleAutoRelock() public {
@@ -128,7 +128,7 @@ contract P1OrderTest is LockedCurveTestBase {
         vm.recordLogs();
         veHemi.retireStaleAutoRelock(id);                   // permissionless, by design
         _assertOrder("retireStaleAutoRelock");
-        assertEq(covered, 1, "P1/O5: the assertion did not run");
+        assertEq(covered, 1, "the assertion did not run");
     }
 
     function test_P1_O6_zeroDelegateeCleanupOnWithdraw() public {
@@ -138,7 +138,7 @@ contract P1OrderTest is LockedCurveTestBase {
         vm.recordLogs();
         vm.prank(alice); veHemi.withdraw(id);               // _delegate(id, address(0))
         _assertOrder("delegatee == address(0) cleanup (withdraw)");
-        assertEq(covered, 1, "P1/O6: the assertion did not run");
+        assertEq(covered, 1, "the assertion did not run");
     }
 
     function test_P1_O7_zeroDelegateeCleanupOnForfeit() public {
@@ -153,17 +153,17 @@ contract P1OrderTest is LockedCurveTestBase {
         vm.recordLogs();
         veHemi.forfeit(id);
         _assertOrder("delegatee == address(0) cleanup (forfeit)");
-        assertEq(covered, 1, "P1/O7: the assertion did not run");
+        assertEq(covered, 1, "the assertion did not run");
     }
 
     // ── THE ADAPTER RELAY ────────────────────────────────────────────────────
 
-    /// The relay is a separate call site from the log and is deliberately NOT
-    /// reordered: `VeHemiAragonAdapter.notifyDelegateChanged` reads the
+    /// The relay is a separate call site from the log and keeps its own order:
+    /// `VeHemiAragonAdapter.notifyDelegateChanged` reads the
     /// delegation record back to resolve the account-wide delegatee, so it
     /// must fire after `delegations[delegator_] = ...`, or it would read the
     /// pre-change state. This body pins both halves:
-    ///   (1) the callback still arrives `votes` first -- deliberate, not drift;
+    ///   (1) the callback arrives `votes` first, by design;
     ///   (2) at the instant `notifyDelegateChanged` fires, the delegation
     ///       record ALREADY carries the NEW delegatee (the load-bearing one).
     /// Consequence: the adapter's own re-emitted logs (the ones Aragon's
@@ -181,21 +181,21 @@ contract P1OrderTest is LockedCurveTestBase {
         vm.prank(alice); delegation.delegate(id, charlie);
 
         uint256 n = adapter.len();
-        assertGt(n, 1, "P1/O8: the relay never fired both callbacks -- nothing to order");
+        assertGt(n, 1, "the relay never fired both callbacks -- nothing to order");
         for (uint256 i = 0; i < n; ++i) {
-            emit log_named_uint("P1 relay callback (1=delegate 2=votes)", adapter.order(i));
+            emit log_named_uint("relay callback (1=delegate 2=votes)", adapter.order(i));
         }
-        assertTrue(adapter.probed(), "P1/O8: the callback never read the record back");
-        emit log_named_address("P1 delegatee seen INSIDE notifyDelegateChanged", adapter.seenDelegateeAtCallback());
+        assertTrue(adapter.probed(), "the callback never read the record back");
+        emit log_named_address("delegatee seen INSIDE notifyDelegateChanged", adapter.seenDelegateeAtCallback());
         assertEq(
             adapter.seenDelegateeAtCallback(), charlie,
-            "P1/O8: notifyDelegateChanged fired BEFORE the delegation record was written. "
+            "notifyDelegateChanged fired BEFORE the delegation record was written. "
             "VeHemiAragonAdapter resolves the account-wide delegatee by reading this record, "
             "so it would advertise the OLD delegatee. The relay must stay after the state write."
         );
         assertEq(
             uint256(adapter.order(0)), 2,
-            "P1/O8: the relay order changed. It is deliberately `votes, delegate` -- see this body's doc."
+            "the relay order changed. It is deliberately `votes, delegate` -- see this body's doc."
         );
         // and the LOG stream, in the same call, leads with DelegateChanged
         _assertOrder("adapter-relay call (log stream)");
@@ -217,16 +217,16 @@ contract P1OrderTest is LockedCurveTestBase {
         adapter.arm(delegation, id);
         vm.recordLogs();
         vm.prank(alice); veHemi.withdraw(id);               // burns the NFT
-        assertGt(adapter.len(), 1, "P1/O9: the relay did not fire on the cleanup leg");
-        assertTrue(adapter.probed(), "P1/O9: the callback never read the record back");
+        assertGt(adapter.len(), 1, "the relay did not fire on the cleanup leg");
+        assertTrue(adapter.probed(), "the callback never read the record back");
         // On the cleanup leg the record is DELETED before the relay fires, for
         // the same reason: the adapter must see the settled post-state.
         assertEq(
             adapter.seenDelegateeAtCallback(), address(0),
-            "P1/O9: notifyDelegateChanged fired BEFORE the cleanup delete -- the adapter would "
+            "notifyDelegateChanged fired BEFORE the cleanup delete -- the adapter would "
             "miss the forfeit/withdraw close-out (test_relay_onForfeit_nearExpiry)."
         );
-        assertEq(uint256(adapter.order(0)), 2, "P1/O9: relay order changed on the cleanup leg");
+        assertEq(uint256(adapter.order(0)), 2, "relay order changed on the cleanup leg");
         _assertOrder("burn cleanup with adapter installed");
     }
 }

@@ -70,7 +70,7 @@ abstract contract R31Base is Test {
         // logged so a rehearsal can check it ran at the signing block.
         string memory pin = vm.envOr("R31_FORK_BLOCK", string(""));
         vm.createSelectFork("hemi", bytes(pin).length == 0 ? 5_524_738 : vm.parseUint(pin));
-        emit log_named_uint("R31 fork block", block.number);
+        emit log_named_uint("fork block", block.number);
         if (block.chainid != 43111) {
             vm.skip(true);
             return;
@@ -170,7 +170,7 @@ abstract contract R31Base is Test {
             if (veHemi.balanceOfNFT(i) < minWeight_) continue;
             return (i, veHemi.ownerOf(i), d);
         }
-        revert("R31: no live delegated position in scan range");
+        revert("no live delegated position in scan range");
     }
 
     function _pick() internal view returns (uint256, address, address) {

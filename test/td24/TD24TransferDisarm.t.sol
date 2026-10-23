@@ -12,14 +12,14 @@ import "../q14/Q14Modules.sol";
 import "./TD24Modules.sol";
 import {VeHemiAragonAdapter} from "../../src/adapter/VeHemiAragonAdapter.sol";
 
-/// @title  TD24 -- the armed-transfer leg ("move or remove").
+/// @title  The armed-transfer leg ("move or remove").
 ///
 /// @notice An ARMED position transferred to another account is disarmed by
 ///         `_disarmAutoRelock` BEFORE the ownership change (no module call),
 ///         and its flat term is retired AFTER it by one post-transfer
 ///         re-delegation:
 ///           1. MOVE to the recipient's resolved delegate; if accepted, read back;
-///           2. if refused, REMOVE the record (the removal gas floor first, A1);
+///           2. if refused, REMOVE the record (removal gas floor checked first);
 ///           3. if that is refused too, announce `AutoRelockRetirementUnverified`.
 ///         THE LAW (behind an honest module, e.g. the real VVD): after any
 ///         committed armed transfer the position is never flat while its flag
@@ -31,10 +31,10 @@ import {VeHemiAragonAdapter} from "../../src/adapter/VeHemiAragonAdapter.sol";
 ///         Sections:
 ///           T0  vacuity          T1  outcome matrix (real VVD, saturation)
 ///           T2  fuzz law         T3  whale        T4  broken / hostile modules
-///           T5  29.93M frame     T6  proxied-VVD starvation sweep (A1)
+///           T5  29.93M frame     T6  proxied-VVD starvation sweep
 ///           T7  call counts      T8  event stream   T9 edges   T10 unchanged paths
-///           H   bounded selector copy and strict re-raise
-///           A1  the removal is always handed the whole ceiling
+///           T11 the removal is always handed the whole ceiling
+///           T12 bounded selector copy and strict re-raise
 contract TD24TransferDisarm is J11Base {
     uint256 internal constant PRINCIPAL = 1_000 ether;
     uint256 internal constant HEADROOM = (PRINCIPAL / MAX_TIME) / 2;
@@ -71,12 +71,12 @@ contract TD24TransferDisarm is J11Base {
     // ------------------------------------------------------------------ rig --
 
     function _whaleOwner(address d_) internal pure returns (address) {
-        return address(uint160(uint256(keccak256(abi.encode("td24-whale", d_)))));
+        return address(uint160(uint256(keccak256(abi.encode("saturating-whale", d_)))));
     }
 
     /// @dev Park `d_` HEADROOM below the uint64 aggregate-slope ceiling with an
     ///      ordinary decaying whale, then PROVE from outside VeHemi that the
-    ///      victim's slope no longer fits (the `Q30A2.t.sol` rig).
+    ///      victim's slope no longer fits.
     function _saturate(address d_) internal {
         address w = _whaleOwner(d_);
         (uint256 whaleId, , ) = createLock(w, (uint256(type(uint64).max) - HEADROOM) * MAX_TIME, 3 * 365 days);
@@ -86,7 +86,7 @@ contract TD24TransferDisarm is J11Base {
         (bool ok, bytes memory ret) = address(delegation).call(
             abi.encodeWithSignature("delegate(uint256,address)", probeId, d_)
         );
-        require(!ok && bytes4(ret) == SEL_DSO, "TD24: saturation premise gone");
+        require(!ok && bytes4(ret) == SEL_DSO, "saturation premise gone");
         ++saturations;
     }
 
@@ -219,7 +219,7 @@ contract TD24TransferDisarm is J11Base {
         c.t0 = block.timestamp;
         c.r0 = veHemi.autoRelockRemaining(c.id);
         IVeHemiVoteDelegation.Delegation memory pre = delegation.delegation(c.id);
-        require(_isFlat(pre) && pre.delegatee == c.dOld, "TD24: victim is not flat at D_old");
+        require(_isFlat(pre) && pre.delegatee == c.dOld, "victim is not flat at D_old");
         c.flatW = pre.bias;
 
         // Votes at t0+1 in the world WITHOUT the transfer.
@@ -471,9 +471,9 @@ contract TD24TransferDisarm is J11Base {
         assertEq(_count(logs, address(veHemi), T_UNVERIFIED), 0, "T4: decaying read-back falsely announced");
     }
 
-    /// @dev A known residual, PINNED: a module that refuses the move and accepts
-    ///      the removal as a silent no-op leaves ITS OWN record flat, and
-    ///      VeHemi cannot see it (the removal "committed"). Expected-silent.
+    /// @dev A known limitation, PINNED: a module that refuses the move and
+    ///      accepts the removal as a silent no-op leaves ITS OWN record flat,
+    ///      and VeHemi cannot see it (the removal "committed"). Expected-silent.
     function test_TD24_T4_residual_rejectMoveNoopRemoval_isSilent() public {
         uint256 id = _armedFlat();
         TD24RejectMoveNoopRemoval m = new TD24RejectMoveNoopRemoval();
@@ -483,9 +483,9 @@ contract TD24TransferDisarm is J11Base {
         (bool ok, ) = _transfer(id, victim, recipient, false, HEMI_TX_CAP);
         Vm.Log[] memory logs = vm.getRecordedLogs();
         assertTrue(ok);
-        assertEq(_count(logs, address(veHemi), T_DUF), 1, "T4/residual: move refusal not reported");
-        assertEq(_count(logs, address(veHemi), T_UNVERIFIED), 0, "T4/residual: (pinned) silent");
-        assertTrue(_isFlat(m.delegation(id)), "T4/residual: premise -- module record flat");
+        assertEq(_count(logs, address(veHemi), T_DUF), 1, "T4/known limitation: move refusal not reported");
+        assertEq(_count(logs, address(veHemi), T_UNVERIFIED), 0, "T4/known limitation: (pinned) silent");
+        assertTrue(_isFlat(m.delegation(id)), "T4/known limitation: premise -- module record flat");
     }
 
     /// @dev Conservative announcement: an EMPTY record behind a module that
@@ -508,7 +508,7 @@ contract TD24TransferDisarm is J11Base {
         assertEq(_count(logs, address(veHemi), T_UNVERIFIED), 1, "T4: conservative announcement missing");
     }
 
-    /// @dev PINNED (B8): a module whose `delegation()` returns undecodable
+    /// @dev PINNED: a module whose `delegation()` returns undecodable
     ///      data (`K08Garbage`, whose `delegate()` returns) makes the read-back
     ///      revert (an ABI decode failure is not caught by try/catch), so an
     ///      ARMED transfer is refused while an UNARMED one -- which never
@@ -519,8 +519,8 @@ contract TD24TransferDisarm is J11Base {
         veHemi.updateVoteDelegation(new K08Garbage());
         (bool okArmed, ) = _transfer(id, victim, recipient, false, HEMI_TX_CAP);
         (bool okPlain, ) = _transfer(plain, victim, recipient, false, HEMI_TX_CAP);
-        assertFalse(okArmed, "T4/B8: (pinned) armed transfer behind garbage reads");
-        assertTrue(okPlain, "T4/B8: unarmed transfer must not read");
+        assertFalse(okArmed, "T4: (pinned) armed transfer behind garbage reads");
+        assertTrue(okPlain, "T4: unarmed transfer must not read");
     }
 
     // ===================================================================
@@ -573,8 +573,8 @@ contract TD24TransferDisarm is J11Base {
         assertEq(delegation.delegation(id).delegatee, recipient, "T5: not moved");
     }
 
-    /// @dev A known residual, PINNED: both hostile -> the armed transfer cannot
-    ///      execute at 29.93M; the unarmed twin can.
+    /// @dev A known limitation, PINNED: both hostile -> the armed transfer
+    ///      cannot execute at 29.93M; the unarmed twin can.
     function test_TD24_T5_bothHostile_armedReverts_unarmedExecutes() public {
         uint256 id = _armedFlat();
         (uint256 plain, , ) = createLock(victim, PRINCIPAL, 4 * 365 days);
@@ -582,12 +582,12 @@ contract TD24TransferDisarm is J11Base {
         veHemi.updateRewardDistributor(new TD24GasEaterDistributor());
         (bool okArmed, ) = _transfer(id, victim, recipient, false, HEMI_TX_CAP);
         (bool okPlain, ) = _transfer(plain, victim, recipient, false, HEMI_TX_CAP);
-        assertFalse(okArmed, "T5: (pinned residual) both-hostile armed transfer");
+        assertFalse(okArmed, "T5: (pinned known limitation) both-hostile armed transfer");
         assertTrue(okPlain, "T5: unarmed twin must execute");
     }
 
     // ===================================================================
-    // A1 -- THE FALLBACK REMOVAL IS ALWAYS HANDED THE WHOLE CEILING.
+    // T11 -- THE FALLBACK REMOVAL IS ALWAYS HANDED THE WHOLE CEILING.
     //   Swept over gas limits: whenever the transfer commits with a removal,
     //   the module saw (nearly) the full DELEGATION_GAS_CEILING; below the
     //   floor the transfer reverts DelegationCallStarved. Monotone.
@@ -606,16 +606,16 @@ contract TD24TransferDisarm is J11Base {
             if (ok) {
                 ++commits;
                 seenCommit = true;
-                assertEq(TD24RemovalGasProbe(module_).removals(), 1, "A1: committed without a removal");
-                assertGe(TD24RemovalGasProbe(module_).removalGasAtEntry(), minEntry_, "A1: removal STARVED yet committed");
+                assertEq(TD24RemovalGasProbe(module_).removals(), 1, "T11: committed without a removal");
+                assertGe(TD24RemovalGasProbe(module_).removalGasAtEntry(), minEntry_, "T11: removal STARVED yet committed");
             } else {
-                assertFalse(seenCommit, "A1: gas response not monotone");
+                assertFalse(seenCommit, "T11: gas response not monotone");
                 if (ret.length >= 4 && bytes4(ret) == VeHemi.DelegationCallStarved.selector) ++starvedReverts;
             }
             vm.revertToState(snap);
         }
-        assertGt(commits, 0, "A1: vacuous -- never committed");
-        assertGt(starvedReverts, 0, "A1: vacuous -- the floor never fired");
+        assertGt(commits, 0, "T11: vacuous -- never committed");
+        assertGt(starvedReverts, 0, "T11: vacuous -- the floor never fired");
     }
 
     function test_TD24_A1_directModule_removalGetsFullCeiling() public {
@@ -681,11 +681,11 @@ contract TD24TransferDisarm is J11Base {
 
     function test_TD24_T6_proxied_dormant_healthyRecipient_lo() public { _dormantSweep(false, 100_000, 3_000_000, 10_000, true); }
     function test_TD24_T6_proxied_dormant_healthyRecipient_hi() public { _dormantSweep(false, 3_000_000, 12_000_000, 100_000, true); }
-    /// @dev Below the removal gas floor (A1) the fallback removal cannot
+    /// @dev Below the removal gas floor the fallback removal cannot
     ///      run, so nothing in this band may commit; the law is checked on
     ///      whatever does.
     function test_TD24_T6_proxied_dormant_saturatedRecipient_lo() public {
-        assertEq(_dormantSweep(true, 100_000, 3_000_000, 10_000, false), 0, "T6: commit below the A1 floor");
+        assertEq(_dormantSweep(true, 100_000, 3_000_000, 10_000, false), 0, "T6: commit below the removal gas floor");
     }
     function test_TD24_T6_proxied_dormant_saturatedRecipient_hi() public { _dormantSweep(true, 3_000_000, 12_000_000, 25_000, true); }
 
@@ -752,7 +752,7 @@ contract TD24TransferDisarm is J11Base {
         assertGt(veHemi.autoRelockRemaining(id), 0, "T7: self-transfer disarmed");
     }
 
-    /// @dev F09: exactly two notifications on an armed transfer; the FIRST
+    /// @dev Exactly two reward notifications on an armed transfer; the FIRST
     ///      sees the flat weight (before the flag clears), the LAST sees the
     ///      post-transfer weight (the re-anchor). One on unarmed / self.
     function test_TD24_T7_rewardNotifications_bracketTheDisarm() public {
@@ -887,8 +887,8 @@ contract TD24TransferDisarm is J11Base {
         _assertNoPhantomFarFuture(dele2, "T9: phantom on the second delegate");
     }
 
-    /// @dev A known residual: a distributor re-entering the delegation module
-    ///      through the permissionless `retireStrandedFlatTerm` during the
+    /// @dev A known limitation: a distributor re-entering the delegation
+    ///      module through the permissionless `retireStrandedFlatTerm` in the
     ///      re-anchor (flag clear, record still flat) changes nothing final.
     function test_TD24_T9_reentrantDistributor_sameFinalState() public {
         uint256 id = _armedFlat();
@@ -994,7 +994,7 @@ contract TD24TransferDisarm is J11Base {
         assertEq(_count(logs, address(veHemi), T_UNVERIFIED), 1);
     }
 
-    /// @dev F09 on the REFUSED-move branches: still exactly two notifications,
+    /// @dev Reward notifications on the REFUSED-move branches: still exactly two,
     ///      the first on the flat weight, the last on the post-transfer weight.
     function _assertTwoNotifies(uint256 id_, F09Counter c_, uint256 wFlat_) internal view {
         assertEq(c_.nSeenFor(id_), 2, "T7b: armed transfer must notify exactly twice");
@@ -1045,7 +1045,7 @@ contract TD24TransferDisarm is J11Base {
         enable(victim, id);
         veHemi.updateVoteDelegation(real);
         IVeHemiVoteDelegation.Delegation memory d = delegation.delegation(id);
-        require(d.delegatee == dele && d.slope > 0 && veHemi.autoRelockRemaining(id) != 0, "TD24: stale-decaying premise");
+        require(d.delegatee == dele && d.slope > 0 && veHemi.autoRelockRemaining(id) != 0, "stale-decaying premise");
         vm.warp(block.timestamp + 7200);
     }
 
@@ -1078,7 +1078,7 @@ contract TD24TransferDisarm is J11Base {
         // D_old holds ONLY the victim's stale record in this rig, so the
         // whole of its weight must leave: positive without the transfer,
         // exactly zero with it.
-        require(pre.delegatee == dele && oldNo > 0, "TD24: stale-decaying premise (D_old weight)");
+        require(pre.delegatee == dele && oldNo > 0, "stale-decaying premise (D_old weight)");
         uint256 tol = 2 * (PRINCIPAL / MAX_TIME) + 2;
         assertEq(delegation.getVotes(dele), 0, "T9: stale weight did not leave D_old");
         if (targetSat_) {
@@ -1137,12 +1137,12 @@ contract TD24TransferDisarm is J11Base {
         vm.prank(stranger);
         veHemi.retireStaleAutoRelock(id);
         assertEq(veHemi.autoRelockRemaining(id), 0);
-        assertTrue(_isFlat(delegation.delegation(id)), "T10: premise -- Q30-P1 flat record not left");
+        assertTrue(_isFlat(delegation.delegation(id)), "T10: premise -- the stale retire did not leave the flat record");
         _setAuto(recipient, dele3);
         (bool ok, ) = _transfer(id, victim, recipient, false, HEMI_TX_CAP);
         assertTrue(ok);
         IVeHemiVoteDelegation.Delegation memory d = delegation.delegation(id);
-        assertTrue(_isFlat(d) && d.delegatee == dele, "T10: (pinned) Q30-P1 record unchanged by an unarmed transfer");
+        assertTrue(_isFlat(d) && d.delegatee == dele, "T10: (pinned) stale-retired flat record unchanged by an unarmed transfer");
     }
 
     /// @dev The transfer's reward notifications settle the SELLER's segment:
@@ -1240,7 +1240,7 @@ contract TD24TransferDisarm is J11Base {
         assertEq(n, 0, "T8/adapter: (pinned) mixed recipient relays nothing");
     }
 
-    // ---- A1, fine-grained at the boundary -------------------------------
+    // ---- T11, fine-grained at the boundary ------------------------------
 
     /// @dev Find the smallest committing gas limit (coarse), then sweep the
     ///      60k below it in 1k steps: everything there must revert (monotone),
@@ -1257,21 +1257,21 @@ contract TD24TransferDisarm is J11Base {
             vm.revertToState(snap);
             if (ok) { gFirst = g; break; }
         }
-        assertGt(gFirst, 0, "A1: vacuous -- no commit in range");
+        assertGt(gFirst, 0, "T11: vacuous -- no commit in range");
         for (uint256 g = gFirst - 60_000; g <= gFirst; g += 1_000) {
             uint256 snap = vm.snapshotState();
             (bool ok, bytes memory ret) = _transfer(id, victim, recipient, false, g);
             if (ok) {
-                assertGe(m.removalGasAtEntry(), CEILING - 2_000, "A1: boundary commit with a short removal");
+                assertGe(m.removalGasAtEntry(), CEILING - 2_000, "T11: boundary commit with a short removal");
             } else {
-                assertEq(bytes4(ret), VeHemi.DelegationCallStarved.selector, "A1: below the floor must be DelegationCallStarved");
+                assertEq(bytes4(ret), VeHemi.DelegationCallStarved.selector, "T11: below the floor must be DelegationCallStarved");
             }
             vm.revertToState(snap);
         }
     }
 
     // ===================================================================
-    // H -- BOUNDED SELECTOR COPY (through VeHemi) AND STRICT RE-RAISE.
+    // T12 -- BOUNDED SELECTOR COPY (through VeHemi) AND STRICT RE-RAISE.
     // ===================================================================
 
     function _expectedSelector(bytes memory data_) internal pure returns (bytes4 r) {
@@ -1296,7 +1296,7 @@ contract TD24TransferDisarm is J11Base {
             assertTrue(ok);
             bytes4[] memory rs = _reasons(logs);
             assertEq(rs.length, 1);
-            assertEq(rs[0], _expectedSelector(data), "H: DUFR differs from bytes4(revert data)");
+            assertEq(rs[0], _expectedSelector(data), "T12: DUFR differs from bytes4(revert data)");
             vm.revertToState(snap);
         }
     }
@@ -1316,7 +1316,7 @@ contract TD24TransferDisarm is J11Base {
         bytes4[] memory rs = _reasons(logs);
         assertEq(rs.length, 2);
         assertEq(rs[0], TD24MixedFailure.MoveRefused.selector);
-        assertEq(rs[1], bytes4(0), "H: stale scratch word reported for an empty revert");
+        assertEq(rs[1], bytes4(0), "T12: stale scratch word reported for an empty revert");
     }
 
     /// @dev Strict leg on the REAL module: exactly the 4-byte selector.
@@ -1326,7 +1326,7 @@ contract TD24TransferDisarm is J11Base {
         vm.prank(victim);
         (bool ok, bytes memory ret) = address(veHemi).call(abi.encodeWithSignature("disableAutoRelock(uint256)", id));
         assertFalse(ok);
-        assertEq(ret, abi.encodeWithSelector(SEL_DSO), "H: strict re-raise bytes differ");
+        assertEq(ret, abi.encodeWithSelector(SEL_DSO), "T12: strict re-raise bytes differ");
     }
 
     /// @dev Strict leg with TRAILING DATA: forwarded byte for byte.
@@ -1338,6 +1338,6 @@ contract TD24TransferDisarm is J11Base {
         vm.prank(victim);
         (bool ok, bytes memory ret) = address(veHemi).call(abi.encodeWithSignature("disableAutoRelock(uint256)", id));
         assertFalse(ok);
-        assertEq(ret, abi.encodePacked(bytes4(0xf2b4513c), uint256(0xbeef), bytes3(0x112233)), "H: payload truncated");
+        assertEq(ret, abi.encodePacked(bytes4(0xf2b4513c), uint256(0xbeef), bytes3(0x112233)), "T12: payload truncated");
     }
 }

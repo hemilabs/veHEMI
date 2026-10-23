@@ -19,8 +19,8 @@ contract C13Forfeitable is LockedCurveTestBase {
         return amt / MAX_TIME;
     }
 
-    /// @dev The V-MEAN flat level of `id`, from the closed form: R is the whole
-    ///      buckets from grid(now) to the lock end.
+    /// @dev The bucket-mean flat level of `id`, from the closed form: R is
+    ///      the whole buckets from grid(now) to the lock end.
     function _flatLevel(uint256 id, uint256 amt) internal view returns (uint256) {
         uint256 gridNow = (block.timestamp / SIX_DAYS) * SIX_DAYS;
         uint256 r = ((uint256(veHemi.getLockedBalance(id).end) - gridNow) / SIX_DAYS) * SIX_DAYS;
@@ -28,8 +28,8 @@ contract C13Forfeitable is LockedCurveTestBase {
     }
 
     /// @dev At enable, at six phases of the bucket (both edges and both sides
-    ///      of the midpoint): both subcurves carry
-    ///      `slope * (ta - now)` and the global weight is the V-MEAN level, so
+    ///      of the midpoint): both subcurves carry `slope * (ta - now)` and
+    ///      the global weight is the bucket-mean level, so
     ///      `subcurve - total == slope * (SIX_DAYS/2 - now mod SIX_DAYS)`
     ///      (`ta` is the grid-aligned lock end).
     function test_F1_flatForfeitableIsInBothSubcurves() public {
@@ -51,7 +51,7 @@ contract C13Forfeitable is LockedCurveTestBase {
 
             uint256 sub = _slope(amt) * (ta - block.timestamp);
             uint256 total = veHemi.totalVeHemiSupply();
-            assertEq(veHemi.balanceOfNFT(id), _flatLevel(id, amt), "flat level is not V-MEAN");
+            assertEq(veHemi.balanceOfNFT(id), _flatLevel(id, amt), "flat level is not the bucket mean");
             assertEq(total, veHemi.balanceOfNFT(id), "total != the only position");
             assertEq(veHemi.nonTransferableTotalVeHemiSupply(), sub, "locked subcurve != slope * (ta - now)");
             assertEq(veHemi.forfeitableTotalVeHemiSupply(), sub, "forfeitable subcurve != slope * (ta - now)");

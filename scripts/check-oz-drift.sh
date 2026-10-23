@@ -13,7 +13,7 @@
 #  library state in ERC-7201 namespaced slots, which never appear in a derived
 #  contract's `storageLayout`, so the golden fixtures carry no OpenZeppelin
 #  entry. An OZ bump (5.3.0 -> 5.4.0, say) moves no golden, keeps `forge build`
-#  and `forge test` green, and silently decouples the audited bytes from the
+#  and `forge test` green, and silently decouples the tested bytes from the
 #  deployed ones.
 #
 #  What it compares:
@@ -70,7 +70,7 @@ for b in bundles:
         got  = open(installed, encoding="utf-8").read()
         if want != got:
             print("  !! DRIFT     %-34s %s" % (os.path.basename(b), path))
-            print("     committed %d B vs installed %d B -- the audited bytes and the"
+            print("     committed %d B vs installed %d B -- the tested bytes and the"
                   " deployed bytes have diverged." % (len(want.encode()), len(got.encode())))
             drift += 1; continue
         same += 1

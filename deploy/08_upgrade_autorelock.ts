@@ -341,8 +341,8 @@ async function upgradeAutoRelock(hre: import("hardhat/types").HardhatRuntimeEnvi
     }
 
     // 6. Storage-layout pre-flight. It compares the build with the golden fixture
-    //    in the same tree, which the change set regenerated, so it passes by
-    //    construction for a re-cut golden. The append-only check against the
+    //    in the same tree, so it passes by construction when the golden was
+    //    regenerated with the layout change. The append-only check against the
     //    deployed layout is test/StorageLayoutOnchainAnchor.t.sol (a forge test;
     //    this script does not run it).
     console.log("Running storage layout pre-flight...");
@@ -659,7 +659,7 @@ async function assertNothingToDoIsTrue(
                 "  legacyDatingUntil() == 0: the VVD leg landed as a PLAIN upgrade, not\n" +
                 "  upgradeAndCall(VVD, impl, armLegacyDatingWindow()). The implementation reads 0\n" +
                 "  as an OPEN window (live dating) until the first _delegate closes it at the next\n" +
-                "  hour boundary -- fail-safe, but not the reviewed shape. Investigate before\n" +
+                "  hour boundary -- fail-safe, but not the expected shape. Investigate before\n" +
                 "  reporting the upgrade as done; auto-relock arming is refused until it closes.\n" +
                 "=".repeat(78) + "\n"
             );
@@ -675,7 +675,7 @@ async function assertNothingToDoIsTrue(
             return [];
         }
         if (w % 3600n !== 0n) {
-            throw new GateRefusal(`VVD legacyDatingUntil() == ${w} is not an hour boundary: not written by the reviewed arm. Investigate.`);
+            throw new GateRefusal(`VVD legacyDatingUntil() == ${w} is not an hour boundary: not written by the expected arm. Investigate.`);
         }
         const armTx = await assertWindowArmedByUpgrade(hre, expected.vvdProxy, expected.vvdImpl, w);
         console.log(`Window word:             legacyDatingUntil = ${w}, bound to the arming upgrade tx (immediate dating from ${w} on)`);
@@ -775,7 +775,7 @@ async function assertWindowArmedByUpgrade(
     if (!ok) {
         throw new GateRefusal(
             `The VVD upgrade tx ${found.transactionHash} (block ${found.blockNumber}) carries no LegacyDatingWindowArmed(${nb}, true) ` +
-                `matching legacyDatingUntil() == ${w}: the VVD leg was not the reviewed upgradeAndCall(..., armLegacyDatingWindow()). Investigate.`
+                `matching legacyDatingUntil() == ${w}: the VVD leg was not the expected upgradeAndCall(..., armLegacyDatingWindow()). Investigate.`
         );
     }
     return found;
@@ -794,7 +794,7 @@ async function assertWindowArmedByUpgrade(
 //     docs/AUTO_RELOCK_UPGRADE.md, section 8). The search starts at
 //     `autoRelockAuditFrom`, not at the latest Upgraded log, so a re-upgrade
 //     cannot hide the gap.
-//   * VeHemi upgraded in the arming transaction: the reviewed shape.
+//   * VeHemi upgraded in the arming transaction: the expected shape.
 //   * VeHemi upgraded in an EARLIER transaction, nothing armed: a warning.
 //   * VeHemi upgraded in a LATER transaction: the new VVD ran under the live
 //     VeHemi, which commits its own mint / lock / transfer changes and drops the
@@ -871,7 +871,7 @@ async function assertVeHemiUpgradedWithArm(
         const w =
             `VeHemi (tx ${last.transactionHash}, block ${last.blockNumber}) and the VVD arm (tx ${armTx.transactionHash}, ` +
             `block ${armTx.blockNumber}) landed in SEPARATE transactions (a split forward). No AutoRelockEnabled before the arm, ` +
-            "so no position was armed in the gap, but this is not the reviewed ONE-MultiSend shape.";
+            "so no position was armed in the gap, but this is not the expected ONE-MultiSend shape.";
         console.warn(`WARNING: ${w}`);
         return [w];
     }
@@ -898,7 +898,7 @@ async function assertVeHemiUpgradedWithArm(
     const w =
         `the VVD was upgraded and armed (tx ${armTx.transactionHash}, block ${armTx.blockNumber}) BEFORE VeHemi (tx ` +
         `${veAfter.transactionHash}, block ${veAfter.blockNumber}), in separate transactions: direct delegate / ` +
-        "delegateBySig / delegateAllFor calls reverted in between; no DelegationUpdateFailed was emitted. Not the reviewed " +
+        "delegateBySig / delegateAllFor calls reverted in between; no DelegationUpdateFailed was emitted. Not the expected " +
         "ONE-MultiSend shape.";
     console.warn(`WARNING: ${w}`);
     return [w];
