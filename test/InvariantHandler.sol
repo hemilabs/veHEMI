@@ -9,7 +9,7 @@ import {MockERC20} from "./mocks/MockERC20.sol";
 import {IVeHemi} from "src/interfaces/IVeHemi.sol";
 
 /// @notice Minimal IAdapterNotify-compatible adapter that counts every
-///         relay call. Used by the handler to drive the previously-dead
+///         relay call. Used by the handler to drive the
 ///         `notifyDelegateChanged`/`notifyVotesChanged` paths and by
 ///         `invariant_adapterRelayParity` to assert the relays fire.
 contract CountingAdapter {
@@ -61,10 +61,10 @@ contract InvariantHandler is Test {
     ///      return;` short-circuit) and the test suite would silently pass.
     ///
     ///      The invariant only fires once `seedAttempts > 0`, so runs whose
-    ///      fuzz sequence never picks `seed()` are tolerated. Empirically
-    ///      ~6% of handler ticks invoke `seed()` (per N4-A7 measurement),
-    ///      so at depth=128 the probability of a fully vacuous run is
-    ///      ~(1-0.06)^128 ≈ 0.04% — acceptable.
+    ///      fuzz sequence never picks `seed()` are tolerated. About
+    ///      6% of handler ticks invoke `seed()`, so at depth=128 the
+    ///      probability of a fully vacuous run is ~(1-0.06)^128 ≈ 0.04% —
+    ///      acceptable.
     uint256 public seedAttempts;
 
     /// @dev Token IDs that have been cleared via `forfeit()`. Used by
@@ -82,8 +82,8 @@ contract InvariantHandler is Test {
     ///         `notifyDelegateChanged` / `notifyVotesChanged` call from the
     ///         delegation contract bumps a counter. Used by
     ///         `invariant_adapterRelayParity` to prove the relay paths are
-    ///         being exercised under fuzz (pre-addition, the entire
-    ///         IAdapterNotify code branch was dead in the invariant suite).
+    ///         being exercised under fuzz (without it, the entire
+    ///         IAdapterNotify code branch is dead in the invariant suite).
     CountingAdapter public adapter;
 
     /// @notice Past-votes ring buffer for `invariant_pastVotesImmutability`.
@@ -126,7 +126,7 @@ contract InvariantHandler is Test {
         vm.stopPrank();
 
         // Install a counting adapter as the trustedAdapter so the
-        // IAdapterNotify relay paths (previously dead under fuzz) are
+        // IAdapterNotify relay paths (otherwise unreached under fuzz) are
         // exercised on every delegation mutation.
         adapter = new CountingAdapter();
         vm.prank(admin_);
@@ -215,8 +215,8 @@ contract InvariantHandler is Test {
 
         // Confirm at least one tracked token survived (not burned) and has
         // an active non-transferable lock. If everything has been forfeited
-        // or expired we skip — the new flow accepts an all-empty scan but
-        // existing tests assert post-seed totals, so we mirror the old
+        // or expired we skip — the seeding flow accepts an all-empty scan
+        // but the tests assert post-seed totals, so the handler keeps a
         // skip-when-empty semantic.
         bool anyEligible;
         for (uint256 i; i < _lockedTokenIds.length; i++) {
@@ -231,7 +231,7 @@ contract InvariantHandler is Test {
         // Record that an eligible seeding attempt was made. Read by
         // `invariant_seedingAttemptCounterAndSeededLatchAreCoherent` in
         // Invariant.t.sol to defend against the vacuity-on-broken-seed
-        // regression class (MUT-Q7 in N4-A2's analysis).
+        // regression class.
         seedAttempts += 1;
 
         vm.startPrank(admin);
@@ -246,10 +246,10 @@ contract InvariantHandler is Test {
 
     /// @dev Multi-block seeding probe: open the window, advance time, drive
     ///      a permissionless `seedBatch` from a non-admin caller, and then a
-    ///      permissionless `finalizeSeeding` (also cross-block). The
-    ///      single-block atomicity guard was removed in the multi-block
-    ///      refactor — cross-block execution MUST now succeed and the
-    ///      seeded totals must match a single-block scan.
+    ///      permissionless `finalizeSeeding` (also cross-block). Seeding
+    ///      has no single-block atomicity guard — cross-block execution
+    ///      MUST succeed and the seeded totals must match a single-block
+    ///      scan.
     ///
     ///      This probe pins three properties under fuzz:
     ///        1. `seedBatch` is callable by ANY address (not just owner).
@@ -331,20 +331,20 @@ contract InvariantHandler is Test {
         }
     }
 
-    /// @notice Deliberately warp into the previously-buggy
+    /// @notice Deliberately warp into the
     ///         `[lock.end - CHECKPOINT_INTERVAL, lock.end)` window and forfeit.
-    ///         Pre-fix, this window silently skipped the delegation cleanup
-    ///         call and left `voteDelegation.delegations[id]` stale forever.
+    ///         A forfeit there must still run the delegation cleanup and
+    ///         clear `voteDelegation.delegations[id]`.
     ///         The generic `forfeit()` handler above almost never lands here
     ///         under uniform warps (1-hour window out of multi-year horizon),
     ///         so this dedicated action gives the fuzzer determined coverage
-    ///         of the previously-broken regime.
+    ///         of that window.
     function forfeitNearExpiry(uint256 seed) public {
         for (uint256 id = 1; id < veHemi.nextTokenId(); id++) {
             if (!veHemi.forfeitable(id)) continue;
             IVeHemi.LockedBalance memory _lock = veHemi.getLockedBalance(id);
             // Need at least one full checkpoint interval of headroom and a
-            // live (not-yet-expired) lock to land inside the buggy window.
+            // live (not-yet-expired) lock to land inside that window.
             if (_lock.end <= block.timestamp + 1) continue;
             if (_lock.end <= 1 hours) continue;
 
@@ -524,8 +524,8 @@ contract InvariantHandler is Test {
     ///      so most ticks overshoot every hour boundary at once and the
     ///      fuzzer rarely probes inter-checkpoint edges. `warpSmall`
     ///      restricts to `[1, 3 hours]` so the fuzzer can land between
-    ///      hour buckets and exercise the boundary code paths that the
-    ///      forfeit-stale-delegation fix specifically targeted.
+    ///      hour buckets and exercise the boundary code paths, such as
+    ///      the near-expiry forfeit delegation cleanup.
     function warpSmall(uint256 time) public {
         if (maxWarp == 0) return;
 

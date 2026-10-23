@@ -795,9 +795,8 @@ contract TestVeHemiVoteDelegation is Test {
     }
 
     function test_forfeit_cleansDelegationStruct() public {
-        // Regression test: after forfeit, delegation(tokenId) must return an
-        // all-zeros struct. Before the cleanup fix, the struct retained stale
-        // bias/slope/amount values from the now-burned position.
+        // After forfeit, delegation(tokenId) must return an all-zeros struct,
+        // not stale bias/slope/amount values from the burned position.
         uint256 lockAmount = 11 ether;
         address forfeitAdmin = address(0x5678);
 

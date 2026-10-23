@@ -9,8 +9,8 @@ import {MockERC20} from "./mocks/MockERC20.sol";
 import {IVeHemiVoteDelegation} from "../src/interfaces/IVeHemiVoteDelegation.sol";
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 
-/// @title HIGH-2 Legacy Import Tests
-/// @notice Audit HIGH-2 (`updateVoteDelegation` orphans every delegation) is
+/// @title Legacy Import Tests
+/// @notice `updateVoteDelegation` alone orphans every delegation; this is
 ///         mitigated by `importDelegationsFromLegacy` + `importAutoDelegatesFromLegacy`
 ///         + `finalizeMigration` on the new VVD. The operator runs these
 ///         BEFORE flipping `veHemi.voteDelegation()` in the same Safe MultiSend,
@@ -217,7 +217,7 @@ contract HIGH2_LegacyImportTest is Test {
 
     // ─── End-to-end runbook ─────────────────────────────────────────────
 
-    /// @notice The full HIGH-2 mitigation runbook in one test. Demonstrates
+    /// @notice The full migration runbook in one test. Demonstrates
     ///         that votes are preserved across `updateVoteDelegation` when
     ///         the operator imports state first.
     function test_endToEndMigrationRunbook_preservesVotes() public {
@@ -296,8 +296,7 @@ contract HIGH2_LegacyImportTest is Test {
     }
 
     /// @notice WITHOUT the import step, the pointer swap silently zeros votes
-    ///         (this is the HIGH-2 bug). This test demonstrates the bug
-    ///         pre-fix and gives the fix a regression beacon.
+    ///         (the failure the import step prevents). This test pins it.
     function test_withoutImport_swapZerosVotes_documentedBug() public {
         uint256 aliceId = _mintLock(ALICE, LOCK_AMOUNT);
         vm.prank(ALICE);
@@ -312,7 +311,7 @@ contract HIGH2_LegacyImportTest is Test {
         veHemi.updateVoteDelegation(newVVD);
 
         // newVVD has no record of any delegation.
-        assertEq(newVVD.getVotes(DAVE), 0, "documented HIGH-2 bug: votes zeroed");
+        assertEq(newVVD.getVotes(DAVE), 0, "without the import, votes are zeroed");
         assertEq(newVVD.delegation(aliceId).delegatee, address(0), "delegation lost");
     }
 
@@ -360,7 +359,7 @@ contract HIGH2_LegacyImportTest is Test {
         assertEq(newVVD.autoDelegate(ALICE), address(0));
     }
 
-    // ─── Expired-lock skip (HR1-G6) ──────────────────────────────────────
+    // ─── Expired-lock skip ───────────────────────────────────────────────
     //
     // `importDelegationsFromLegacy` pre-checks each lock against the next
     // epoch boundary so that a single expired lock does NOT revert the
@@ -472,7 +471,7 @@ contract HIGH2_LegacyImportTest is Test {
         );
     }
 
-    // ─── amount == 0 skip path (HR1-G14) ─────────────────────────────────
+    // ─── amount == 0 skip path ───────────────────────────────────────────
     //
     // After `withdraw()` on VeHemi the lock's `amount` is zeroed and the NFT
     // is burned. The import path must skip these tokens silently — they have
@@ -497,7 +496,7 @@ contract HIGH2_LegacyImportTest is Test {
             "withdraw should zero locked amount"
         );
 
-        // LOW-9: withdraw now clears the legacy delegation record as well
+        // withdraw clears the legacy delegation record as well
         // (the legacy VVD is the live `voteDelegation` in this test setup,
         // so its delegations[id] is cleaned up by the cleanup path). Both
         // guards in import — `legacyD.delegatee == 0` AND `_lock.amount == 0`
@@ -505,7 +504,7 @@ contract HIGH2_LegacyImportTest is Test {
         assertEq(
             legacyVVD.delegation(aliceId).delegatee,
             address(0),
-            "LOW-9: withdraw clears legacy delegation cache"
+            "withdraw clears legacy delegation cache"
         );
 
         // Import must skip silently (no revert) and write no record.
@@ -521,7 +520,7 @@ contract HIGH2_LegacyImportTest is Test {
         );
     }
 
-    // ─── Event emission (HR1-G14) ─────────────────────────────────────────
+    // ─── Event emission ───────────────────────────────────────────────────
     //
     // `finalizeMigration` must emit `MigrationFinalizedEvent` EXACTLY ONCE
     // — the second call is a no-op (idempotent) and must NOT re-emit, so
@@ -608,7 +607,7 @@ contract HIGH2_LegacyImportTest is Test {
         assertEq(finCount, 1, "finalize event must be emitted exactly once");
     }
 
-    // ─── HR2-G9: idempotency stress tests ────────────────────────────────
+    // ─── Idempotency stress tests ────────────────────────────────────────
     //
     // The guards `if (delegations[id].delegatee != address(0)) continue;`
     // and `if (autoDelegate[o] != address(0)) continue;` must hold under
@@ -757,7 +756,7 @@ contract HIGH2_LegacyImportTest is Test {
         assertEq(newVVD.delegation(dId).delegatee, ALICE, "d newly imported");
     }
 
-    // ─── HR2-G14: user-set autoDelegate preempts import ──────────────────
+    // ─── User-set autoDelegate preempts import ───────────────────────────
     //
     // Mirror of `userDelegationPreemptsImport` for the autoDelegate path.
     // Guard: `if (autoDelegate[o] != address(0)) continue;`. If a user has
@@ -785,7 +784,7 @@ contract HIGH2_LegacyImportTest is Test {
         );
     }
 
-    // ─── HR2-G14: event-arg correctness ──────────────────────────────────
+    // ─── Event-arg correctness ───────────────────────────────────────────
     //
     // The end-to-end event-order test only asserts on `topics[0]`
     // signatures. This test pins the FULL args of both legacy-import

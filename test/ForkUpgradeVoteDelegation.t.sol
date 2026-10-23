@@ -277,7 +277,7 @@ contract ForkUpgradeVoteDelegationTest is Test {
     function testForkDelegationSetTrustedAdapterPostUpgrade() public onlyFork {
         _upgradeDelegationProxy();
 
-        // LOW-5 (2026-05-04 audit): setTrustedAdapter rejects zero-code
+        // setTrustedAdapter rejects zero-code
         // addresses, so the new adapter must be a real contract. Use the
         // in-test MockAdapter stub (defined at the bottom of this file).
         address newAdapter = address(new MockAdapter());
@@ -989,10 +989,9 @@ contract ForkUpgradeVoteDelegationTest is Test {
     ///             emits no event and writes no storage, and
     ///         (d) passing `address(0)` clears the setting.
     ///
-    ///         Pre-fix VVD has no `setAutoDelegate` entry — only the
-    ///         adapter-side `delegateAllFor` could populate `autoDelegate`.
-    ///         This test pins the new user-facing surface against the
-    ///         deployed proxy.
+    ///         `setAutoDelegate` lets a holder set `autoDelegate` directly,
+    ///         without the adapter-side `delegateAllFor`. This test pins
+    ///         that user-facing surface against the deployed proxy.
     function testForkSetAutoDelegateSelfPath() public onlyFork {
         _upgradeDelegationProxy();
 

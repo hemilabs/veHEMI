@@ -164,13 +164,12 @@ contract InvariantTest is Test {
     ///      EVERY observation of `seedAttempts > 0` MUST coincide with
     ///      `seeded == true` at this invariant check point.
     ///
-    ///      Defends against the regression class where `markSeedingStarted`
-    ///      silently fails to set the latch (e.g., MUT-Q7 of N4-A2's
-    ///      mutation analysis: `seedingStartedAt = block.timestamp - 1`):
-    ///      `seedAttempts` would increment but the immediate cross-block
-    ///      revert from `_requireSeedingActive` would either fail the run
-    ///      under fail_on_revert (catching the bug) or leave `seeded ==
-    ///      false` (caught by THIS invariant).
+    ///      Defends against a `markSeedingStarted` that silently fails to
+    ///      set the latch (e.g., one that never sets `seedingStarted`): the
+    ///      `SeedingNotStarted` revert from `_requireSeedingActive` in the
+    ///      following `seedBatch` fails the run under fail_on_revert. (A
+    ///      reverted `seed()` also rolls back its `seedAttempts` increment,
+    ///      so without fail_on_revert this invariant would not see it.)
     function invariant_seedingAttemptCounterAndSeededLatchAreCoherent() public view {
         if (handler.seedAttempts() > 0) {
             assertTrue(
@@ -539,14 +538,10 @@ contract InvariantTest is Test {
 
     /// @notice The IAdapterNotify relay paths (`notifyDelegateChanged` and
     ///         `notifyVotesChanged` callbacks from `VeHemiVoteDelegation`
-    ///         to the configured `trustedAdapter`) were previously DEAD
-    ///         under fuzz — `setTrustedAdapter` was never called by any
-    ///         handler action, so the three relay sites in
-    ///         `VeHemiVoteDelegation._delegate` / `_moveVotingPowerTo*` /
-    ///         `refreshVotingPower*` had zero fuzz exposure.
-    ///
-    ///         The handler now installs a `CountingAdapter` at construction
-    ///         time. This invariant asserts:
+    ///         to the configured `trustedAdapter`) need an adapter to be
+    ///         reached under fuzz, so the handler installs a
+    ///         `CountingAdapter` at construction time. This invariant
+    ///         asserts:
     ///           (a) the adapter received at LEAST one notify call per
     ///               forfeited token (every forfeit fires
     ///               `notifyDelegateChanged(_, _, address(0))`), and

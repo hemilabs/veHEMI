@@ -766,7 +766,7 @@ contract StorageLayoutGoldenTest is Test {
         );
     }
 
-    // ─── Forge-layer type pinning (NA-3) ────────────────────────────────────
+    // ─── Forge-layer type pinning ───────────────────────────────────────────
     //
     // The shell gate in scripts/check-storage-layouts.sh already catches any
     // change to the `.type` field (it diffs the full normalized JSON). These

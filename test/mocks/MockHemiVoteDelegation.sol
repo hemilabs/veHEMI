@@ -39,7 +39,7 @@ contract MockHemiVoteDelegation is IVeHemiVoteDelegation {
 
     function refreshVotingPowerBatch(address[] calldata) external override {}
 
-    // HIGH-2 migration interface stubs — mock VVD ignores migration calls.
+    // Migration interface stubs — mock VVD ignores migration calls.
     function importDelegationsFromLegacy(
         IVeHemiVoteDelegation, uint256[] calldata
     ) external override {}

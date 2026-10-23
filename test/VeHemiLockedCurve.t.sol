@@ -111,13 +111,13 @@ contract VeHemiLockedCurveTest is LockedCurveTestBase {
         assertEq(lockedSupply, expectedBias, "Locked supply should match seeded positions");
     }
 
-    /// @dev DRIFT-VECTOR REGRESSION (companion to the atomicity guard): seed
-    ///      three non-transferable positions with distinct `subEnd`s, finalize
-    ///      atomically, then walk forward in time past each subEnd in turn and
-    ///      call `checkpoint()`. After each warp the locked subcurve must
-    ///      decay in lockstep with the underlying positions — proving that
-    ///      every slope-change `seedBatch` wrote at a future timestamp is
-    ///      actually visited by the post-finalize `_checkpoint` catchup walk.
+    /// @dev DRIFT-VECTOR REGRESSION: seed three non-transferable positions
+    ///      with distinct `subEnd`s, finalize atomically, then walk forward
+    ///      in time past each subEnd in turn and call `checkpoint()`. After
+    ///      each warp the locked subcurve must decay in lockstep with the
+    ///      underlying positions — proving that every slope-change
+    ///      `seedBatch` wrote at a future timestamp is actually visited by
+    ///      the post-finalize `_checkpoint` catchup walk.
     ///
     ///      A single-position warp is insufficient: it can't distinguish
     ///      "applies one change" from "applies all pending changes". Three
@@ -175,7 +175,7 @@ contract VeHemiLockedCurveTest is LockedCurveTestBase {
         );
     }
 
-    /// @dev COLLIDED SUBEND REGRESSION (N4-A6 follow-up): when two positions
+    /// @dev COLLIDED SUBEND: when two positions
     ///      share the same `subEnd`, both write to the same
     ///      `lockedSlopeChanges[_subEnd]` slot. The catchup walk reads that
     ///      slot ONCE per SIX_DAYS boundary, so the slope-change must already
@@ -1335,7 +1335,7 @@ contract VeHemiLockedCurveTest is LockedCurveTestBase {
 
     /// @notice The on-chain scan visits IDs in ascending order intrinsically
     ///         (the loop walks `id` from `startId` to `endId - 1`), so
-    ///         ordering is not a caller concern under the new flow. This
+    ///         ordering is not a caller concern. This
     ///         test pins the behavioral property: regardless of mint order,
     ///         the final aggregate is independent of any external sequencing.
     function test_SeedAndFinalize_AggregateIndependentOfMintOrder() public {

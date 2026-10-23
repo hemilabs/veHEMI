@@ -1307,10 +1307,9 @@ contract VeHemiTest is Test {
     // =========================================================================
     // Negative input-validation tests
     // -------------------------------------------------------------------------
-    // Each of these covers a single revert path that was previously unreachable
-    // by the existing test suite. Grouped here so future refactors that widen
-    // the input domain trip an obvious failure instead of silently dropping the
-    // guard.
+    // Each of these covers a single revert path. Grouped here so future
+    // refactors that widen the input domain trip an obvious failure instead
+    // of silently dropping the guard.
     // =========================================================================
 
     function test_constructor_revertsOnZeroHemi() public {
@@ -1468,11 +1467,11 @@ contract VeHemiTest is Test {
     }
 
     function test_withdraw_succeedsWhenDelegationReverts() public {
-        // L9R2-G13 (DelegationUpdateFailed behaviour, withdraw arm):
+        // DelegationUpdateFailed behaviour, withdraw arm:
         // PROPERTY: withdraw() is robust even when the live voteDelegation
         // contract reverts on every entry point.
         //
-        // Per LOW-9 fix, withdraw() routes through `_delegate(id, address(0))`
+        // withdraw() routes through `_delegate(id, address(0))`
         // BEFORE `_withdraw` (see VeHemi.withdraw). When the live VVD reverts,
         // the try/catch in `_delegate` swallows the revert and emits
         // DelegationUpdateFailed(tokenId), and withdraw completes normally —
@@ -1492,8 +1491,9 @@ contract VeHemiTest is Test {
         uint256 hemiBefore = hemi.balanceOf(user);
 
         // Withdraw must succeed and emit DelegationUpdateFailed(tokenId)
-        // because the LOW-9 cleanup `_delegate(id, 0)` reverts on the
-        // reverting VVD and the try/catch in `VeHemi._delegate` catches it.
+        // because the module call in the withdraw cleanup `_delegate(id, 0)`
+        // reverts on the reverting VVD and the try/catch in `_delegate`
+        // catches it.
         vm.expectEmit(true, false, false, false);
         emit IVeHemi.DelegationUpdateFailed(tokenId);
         vm.prank(user);
@@ -1511,7 +1511,7 @@ contract VeHemiTest is Test {
     }
 
     function test_forfeit_emitsDelegationUpdateFailedWhenDelegationReverts() public {
-        // L9R2-G13 (DelegationUpdateFailed behaviour, forfeit arm):
+        // DelegationUpdateFailed behaviour, forfeit arm:
         // PROPERTY: forfeit() routes through `_delegate(id, address(0))`
         // BEFORE `_withdraw` (see VeHemi.forfeit, lines ~222-233). When the
         // live VVD reverts, the try/catch in `_delegate` swallows the revert

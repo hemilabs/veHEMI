@@ -738,8 +738,8 @@ contract VeHemiAragonAdapterTest is Test {
         vm.warp(block.timestamp + SIX_DAYS * 3); // ~18 days
 
         // ALICE should still be able to delegate via adapter even though
-        // one lock has expired. Without the fix, this would revert with
-        // CanNotDelegateExpiredLocks.
+        // one lock has expired: the expired lock is skipped instead of
+        // reverting with CanNotDelegateExpiredLocks.
         vm.prank(ALICE);
         adapter.delegate(BOB);
 
@@ -907,7 +907,7 @@ contract VeHemiAragonAdapterTest is Test {
         assertGt(adapter.getPastVotes(BOB, block.timestamp), 0, "getPastVotes must be > 0 at epoch boundary");
     }
 
-    // ─── CRITICAL: balanceOf with expired but unwithdrawn locks ─────────
+    // ─── balanceOf with expired but unwithdrawn locks ───────────────────
 
     function test_balanceOf_nonZeroForExpiredButUnwithdrawnLock() public {
         // A user who created a lock that has expired but hasn't called withdraw()
@@ -933,7 +933,7 @@ contract VeHemiAragonAdapterTest is Test {
         );
     }
 
-    // ─── CRITICAL: getVotes/getPastVotes after delegation expiry ────────
+    // ─── getVotes/getPastVotes after delegation expiry ──────────────────
 
     function test_getVotes_zeroAfterDelegationExpiry() public {
         // When a delegation expires (the delegator's lock ends), the delegatee's
@@ -975,7 +975,7 @@ contract VeHemiAragonAdapterTest is Test {
         assertEq(pastVotesAfterExpiry, 0, "getPastVotes after expiry should be zero (vote inflation check)");
     }
 
-    // ─── CRITICAL: getPastTotalSupply at block.timestamp - 1 ────────────
+    // ─── getPastTotalSupply at block.timestamp - 1 ──────────────────────
 
     function test_getPastTotalSupply_atTimestampMinusOne() public {
         // Aragon's TokenVoting snapshots voting power at block.timestamp - 1.
@@ -998,7 +998,7 @@ contract VeHemiAragonAdapterTest is Test {
         );
     }
 
-    // ─── HIGH: getVotes with multiple delegated NFTs from different users ─
+    // ─── getVotes with multiple delegated NFTs from different users ───────
 
     function test_getVotes_withMultipleDelegationsFromDifferentUsers() public {
         // When multiple users delegate their NFTs to the same delegatee,
@@ -1040,14 +1040,14 @@ contract VeHemiAragonAdapterTest is Test {
         assertEq(adapter.balanceOf(CAROL), 0, "CAROL should have no locked HEMI");
     }
 
-    // ─── HIGH: getPastTotalSupply reverts for future timestamp ──────────
+    // ─── getPastTotalSupply reverts for future timestamp ────────────────
 
     function test_getPastTotalSupply_revertsForFutureTimestamp() public {
         vm.expectRevert(VeHemiVoteDelegation.TimestampInFuture.selector);
         adapter.getPastTotalSupply(block.timestamp + 1);
     }
 
-    // ─── HIGH: Constructor with non-contract addresses ──────────────────
+    // ─── Constructor with non-contract addresses ────────────────────────
 
     function test_constructor_withNonContractAddress() public {
         // The adapter constructor does not check for code at the provided address.
@@ -1076,7 +1076,7 @@ contract VeHemiAragonAdapterTest is Test {
         badAdapter.clock();
     }
 
-    // ─── HIGH: Fuzz test for getPastVotes with random timestamps ────────
+    // ─── Fuzz test for getPastVotes with random timestamps ──────────────
 
     function testFuzz_getPastVotes_randomTimestamps(uint256 queryOffset) public {
         // Create a lock and delegate so there is actual voting power to query
@@ -1112,7 +1112,7 @@ contract VeHemiAragonAdapterTest is Test {
         assertLe(power, maxExpectedPower, "fuzz: voting power should not exceed theoretical max");
     }
 
-    // ─── CRITICAL: Access Control ──────────────────────────────────────
+    // ─── Access Control ────────────────────────────────────────────────
 
     // 1. setTrustedAdapter called by non-owner must revert NotVeHemiOwner
 
@@ -1125,7 +1125,7 @@ contract VeHemiAragonAdapterTest is Test {
 
     function test_setTrustedAdapter_succeedsForOwner() public {
         // address(this) is the veHemi owner (set in setUp via initialize).
-        // LOW-5: setTrustedAdapter rejects zero-code addresses (EOAs), so the
+        // setTrustedAdapter rejects zero-code addresses (EOAs), so the
         // placeholder needs bytecode for the success path.
         address oldAdapter = delegation.trustedAdapter();
         address newAdapter = address(0xADA);
@@ -1161,9 +1161,9 @@ contract VeHemiAragonAdapterTest is Test {
     function test_delegateAllFor_revertsForPreviousTrustedAdapter() public {
         _createLock(ALICE, 11e18, YEAR);
 
-        // Replace the trusted adapter with a new one. LOW-5 requires
-        // the candidate to be a contract; etch dummy bytecode at the
-        // placeholder address.
+        // Replace the trusted adapter with a new one. setTrustedAdapter
+        // requires a contract; etch dummy bytecode at the placeholder
+        // address.
         address newAdapter = address(0xADA);
         vm.etch(newAdapter, hex"60006000");
         delegation.setTrustedAdapter(newAdapter);
@@ -1625,7 +1625,7 @@ contract VeHemiAragonAdapterTest is Test {
         assertEq(adapterEmitCount, 2, "should emit DelegateVotesChanged twice for duplicate address");
     }
 
-    // ─── NEW: 8 additional relay / refresh tests ─────────────────────
+    // ─── Relay / refresh: lifecycle operations and decoded values ────
 
     function test_relay_onIncreaseAmount() public {
         uint256 tokenId = _createLock(ALICE, 10e18, 2 * YEAR);
@@ -1725,12 +1725,12 @@ contract VeHemiAragonAdapterTest is Test {
         assertTrue(foundDc, "forfeit must relay DelegateChanged from adapter");
     }
 
-    /// @notice Regression for FR2-B5: pre-fix, forfeit-near-expiry silently
-    ///         skipped the inner `voteDelegation.delegate(id, address(0))`
-    ///         call, so the adapter never received `DelegateChanged` /
-    ///         `DelegateVotesChanged` for the cleanup. Post-fix, the relay
-    ///         must fire even when the forfeit lands in the last hour of
-    ///         the lock's lifetime.
+    /// @notice A forfeit in the last hour of the lock's lifetime also runs
+    ///         the inner `voteDelegation.delegate(id, address(0))` cleanup
+    ///         call (`_delegate` exempts `address(0)` from the near-expiry
+    ///         skip), so the adapter receives `DelegateChanged` /
+    ///         `DelegateVotesChanged` for the cleanup. The relay must fire
+    ///         even inside that window.
     function test_relay_onForfeit_nearExpiry() public {
         veHemi.updateForfeitAdmin(address(this));
 
@@ -1743,7 +1743,7 @@ contract VeHemiAragonAdapterTest is Test {
         uint256 delegationStarts = ((block.timestamp / CHECKPOINT_INTERVAL) * CHECKPOINT_INTERVAL) + CHECKPOINT_INTERVAL;
         vm.warp(delegationStarts);
 
-        // Warp into the previously-buggy `[lockEnd - 1h, lockEnd)` window.
+        // Warp into the lock's last hour, `[lockEnd - 1h, lockEnd)`.
         uint256 lockEnd = veHemi.getLockedBalance(tokenId).end;
         vm.warp(lockEnd - 30 minutes);
 
@@ -2136,7 +2136,7 @@ contract VeHemiAragonAdapterTest is Test {
         assertEq(delegation.getVotes(ALICE), 0, "ALICE should have 0 votes");
     }
 
-    // ─── MED-7 (2026-05-04 audit) ───────────────────────────────────────
+    // ─── Account-wide DelegateChanged consistency ───────────────────────
     //
     // Per-tokenId `voteDelegation.delegate(tokenId, X)` on a multi-token
     // owner moves only ONE token. The adapter MUST NOT emit
@@ -2144,7 +2144,7 @@ contract VeHemiAragonAdapterTest is Test {
     // advertise an account-wide change and diverge from
     // `adapter.delegates(owner)` (which returns address(0) for mixed states).
     //
-    // The three following tests pin the corrected event behavior:
+    // The three following tests pin the event behavior:
     //
     //   1. Multi-token owner does a per-tokenId delegate that leaves a
     //      mixed state → adapter emits NO `DelegateChanged`.
@@ -2173,7 +2173,7 @@ contract VeHemiAragonAdapterTest is Test {
         // Post-state: mixed.
         assertEq(adapter.delegates(ALICE), address(0), "post: mixed state");
 
-        // MED-7 INVARIANT: no IVotes-shaped DelegateChanged from the adapter.
+        // INVARIANT: no IVotes-shaped DelegateChanged from the adapter.
         bytes32 ivotesDelegateChangedTopic = keccak256(
             "DelegateChanged(address,address,address)"
         );
@@ -2291,7 +2291,7 @@ contract VeHemiAragonAdapterTest is Test {
         assertEq(adapter.delegates(ALICE), BOB, "post-batch consistent at BOB");
     }
 
-    /// @notice MED-7 coverage: mixed → consistent re-alignment via per-tokenId calls.
+    /// @notice Mixed → consistent re-alignment via per-tokenId calls.
     ///         Three tokens land in a mixed state, then the user re-aligns the
     ///         outlier with a single per-tokenId `delegate(tokenId, X)` call.
     ///         That final call's `notifyDelegateChanged` post-state is
@@ -2343,13 +2343,13 @@ contract VeHemiAragonAdapterTest is Test {
         assertEq(adapterEventCount, 1, "consolidating final outlier must emit exactly ONE adapter DelegateChanged");
     }
 
-    /// @notice MED-7 coverage: forfeit of one token from a multi-token owner
+    /// @notice Forfeit of one token from a multi-token owner
     ///         leaves the other tokens still delegated to their original
     ///         delegate. The post-state is MIXED (forfeited token at 0, others
     ///         at BOB), so the adapter MUST NOT emit `DelegateChanged` from
     ///         the relay path. (The address-shaped `DelegateVotesChanged` for
     ///         the unbinding token is still relayed — only `DelegateChanged`
-    ///         is gated by the MED-7 consistency check.)
+    ///         is gated by the account-wide consistency check.)
     function test_MED7_forfeit_multiToken_skipsAdapterEmit() public {
         veHemi.updateForfeitAdmin(address(this));
 
@@ -2399,12 +2399,12 @@ contract VeHemiAragonAdapterTest is Test {
             sawAdapterDelegateChanged,
             "forfeit on multi-token mixed-state owner must NOT emit IVotes DelegateChanged from adapter"
         );
-        // Sanity: the votes-change relay is independent of MED-7 gating and
+        // Sanity: the votes-change relay is not consistency-gated and
         // should still fire so indexers can refresh BOB's voting power.
         assertTrue(sawAdapterDvc, "forfeit must still relay DelegateVotesChanged from adapter");
     }
 
-    /// @notice MED-7 (M7R1-G2 / G16 follow-up): expired-but-unwithdrawn NFTs
+    /// @notice Expired-but-unwithdrawn NFTs
     ///         can leave `delegateAllFor` with a residual mixed state because
     ///         `delegateAllFor` skips tokens whose `lock.end <= checkpointTs`.
     ///         If the adapter emitted `DelegateChanged(_, _, delegatee)`
@@ -2448,8 +2448,8 @@ contract VeHemiAragonAdapterTest is Test {
 
         // The adapter MUST NOT emit DelegateChanged in this case, otherwise
         // the Aragon subgraph would think ALICE delegates to CAROL while the
-        // on-chain view says address(0) (mixed) — re-introducing the exact
-        // MED-7 divergence the fix is supposed to close.
+        // on-chain view says address(0) (mixed): the divergence the
+        // post-batch recompute in `delegate(address)` exists to prevent.
         bytes32 ivotesDelegateChangedTopic = keccak256(
             "DelegateChanged(address,address,address)"
         );
@@ -2464,7 +2464,7 @@ contract VeHemiAragonAdapterTest is Test {
         }
 
         // Operator escape hatch: ALICE can withdraw the expired token to
-        // clear its stale delegation record (LOW-9 cleanup). After that, a
+        // clear its stale delegation record. After that, a
         // retry of adapter.delegate(CAROL) should emit cleanly.
         vm.prank(ALICE);
         veHemi.withdraw(shortTid);
@@ -2495,7 +2495,7 @@ contract VeHemiAragonAdapterTest is Test {
         assertTrue(sawEmit, "post-cleanup retry MUST emit DelegateChanged");
     }
 
-    /// @notice MED-7 boundary: `adapter.delegate(addr)` on a caller who owns
+    /// @notice Boundary: `adapter.delegate(addr)` on a caller who owns
     ///         zero veHEMI positions. `_delegatesOf` returns `address(0)` both
     ///         before and after (count == 0 early-return), `delegateAllFor`
     ///         loops zero times. The post-state recompute is `address(0)` so
@@ -2529,7 +2529,7 @@ contract VeHemiAragonAdapterTest is Test {
         }
     }
 
-    /// @notice MED-7 idempotency: a multi-token owner already consistent at
+    /// @notice Idempotency: a multi-token owner already consistent at
     ///         BOB calls `adapter.delegate(BOB)` again. `delegateAllFor`
     ///         re-writes each position's delegate (a no-op in semantic terms),
     ///         and the post-state remains consistent at BOB. The adapter MUST
@@ -2586,7 +2586,7 @@ contract VeHemiAragonAdapterTest is Test {
         assertEq(adapterEventCount, 1, "idempotent re-affirmation MUST emit exactly one DelegateChanged");
     }
 
-    // ─── M7R4-G14: consistency walk fuzz ────────────────────────────────
+    // ─── Consistency walk fuzz ──────────────────────────────────────────
 
     address constant DAVE = address(0xDadaDadadadadadaDaDadAdaDADAdadAdADaDADA);
 

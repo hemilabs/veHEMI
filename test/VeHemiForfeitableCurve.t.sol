@@ -437,7 +437,7 @@ contract VeHemiForfeitableCurveTest is LockedCurveTestBase {
         assertEq(slopeAfter, int128(0), "Slope change should be unwound after forfeit");
     }
 
-    /// @notice Joint-accounting regression. forfeit() decrements THREE
+    /// @notice Joint accounting. forfeit() decrements THREE
     ///         accumulators that must all balance:
     ///           (a) nonTransferableTotalVeHemiSupply
     ///           (b) forfeitableTotalVeHemiSupply
@@ -936,7 +936,7 @@ contract VeHemiForfeitableCurveTest is LockedCurveTestBase {
     }
 
     // ═════════════════════════════════════════════════════════════════════
-    //  13. MEDIUM FIXES — MISSING CROSS-TYPE ISOLATION TESTS
+    //  13. CROSS-TYPE ISOLATION
     // ═════════════════════════════════════════════════════════════════════
 
     function test_IncreaseUnlockTime_LockedOnlyDoesNotAffectForfeitable() public {

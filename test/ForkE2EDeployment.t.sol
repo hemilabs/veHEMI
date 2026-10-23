@@ -344,7 +344,7 @@ contract ForkE2EDeploymentTest is Test {
         vm.expectRevert(VeHemiVoteDelegation.NotVeHemiOwner.selector);
         voteDelegation.setTrustedAdapter(address(adapter));
 
-        // LOW-5 regression guard: setTrustedAdapter MUST reject an EOA (a
+        // setTrustedAdapter MUST reject an EOA (a
         // typo'd address with no code). The new InvalidAdapter revert path
         // is verified locally; re-pin against forked state so a future
         // VVD upgrade that drops the check fails this E2E loudly.
@@ -827,7 +827,7 @@ contract ForkE2EDeploymentTest is Test {
         veHemi.createLock(100 ether, MAX_TIME);
         address delegatee = makeAddr("phase6-delegatee");
 
-        // MED-7 event-relay assertion: adapter.delegate(addr) must emit
+        // Event-relay assertion: adapter.delegate(addr) must emit
         // EXACTLY ONE account-wide DelegateChanged(voter, prev, delegatee)
         // for a single-position owner. Mixed-state suppression and per-
         // tokenId notify suppression are pinned by the local
