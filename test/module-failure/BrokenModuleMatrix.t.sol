@@ -14,8 +14,19 @@ import "./BrokenModules.sol";
 ///         and `StarvedAndUnreadableModulesTest.test_H5_...` instantiate
 ///         "broken" with ONE shape (`RevertingVoteDelegation`, which reverts
 ///         on reads as well as writes). This matrix adds the shapes VeHemi
-///         CAN read (half-broken, lying, stale, silent-freeze, gas-eating on
-///         write or read, mute).
+///         CAN read (write-reverting, lying, stale, silent-freeze, gas-eating
+///         on write or read, mute). The cells are the shapes B1..B9 of
+///         BrokenModules.sol except B8 (below); B0 is the control: the
+///         healthy, real module, on which the same apparatus must see the
+///         flat term retired and the principal returned.
+///
+///         B8 (`GarbageModule`: `delegation()` returns undecodable data) is
+///         not a cell. Its read reverts the caller, so the holder's disable
+///         cannot commit and law (A) cannot hold while it is installed; it is
+///         tested in `ArmedTransferMoveOrRemoveTest`
+///         (`test_T4_garbageRead_armedRefused_unarmedSucceeds`) and in
+///         test/guards/AutoRelockGuards.t.sol
+///         (`test_undecodableModule_locksArmedPrincipalUntilTheOwnerReplacesIt`).
 ///
 /// @dev    Two laws, asserted for EVERY cell:
 ///
@@ -28,28 +39,26 @@ import "./BrokenModules.sol";
 ///               100 % of the principal in bounded time.
 contract BrokenModuleMatrixTest is AutoRelockTestBase {
     uint256 internal constant PRINCIPAL = 1_000 ether;
-    uint256 internal constant BIG_GAS = 30_000_000;
+    uint256 internal constant CALL_GAS_LIMIT = 30_000_000;
 
-    bytes32 internal constant TOPIC_UNVERIFIED =
+    bytes32 internal constant TOPIC_AUTO_RELOCK_RETIREMENT_UNVERIFIED =
         keccak256("AutoRelockRetirementUnverified(uint256)");
-    bytes32 internal constant TOPIC_SWALLOWED =
-        keccak256("DelegationUpdateFailed(uint256)");
 
     // ------------------------------------------------------------------
     // apparatus
     // ------------------------------------------------------------------
 
     /// @dev A DELEGATED, auto-relocked position with its flat term genuinely
-    ///      booked at `dele` in the REAL module. `delegation` (the test base's
+    ///      booked at `delegateeA` in the REAL module. `delegation` (the test base's
     ///      handle) always reads the REAL module, never the mock installed in
-    ///      VeHemi, so `delegation.getVotes(dele)` measures the phantom
+    ///      VeHemi, so `delegation.getVotes(delegateeA)` measures the phantom
     ///      directly.
     function _flatDelegated(address who_) internal returns (uint256 id) {
         (id, , ) = createLock(who_, PRINCIPAL, 4 * 365 days);
         enable(who_, id);
-        delegateTo(who_, id, dele);
+        delegateTo(who_, id, delegateeA);
         vm.warp(block.timestamp + 7200);
-        assertGt(delegation.getVotes(dele), 0, "probe: no flat term booked");
+        assertGt(delegation.getVotes(delegateeA), 0, "premise: no flat term booked");
     }
 
     function _install(address module_) internal {
@@ -58,14 +67,14 @@ contract BrokenModuleMatrixTest is AutoRelockTestBase {
 
     function _call(address who_, bytes memory data_) internal returns (bool ok) {
         vm.prank(who_);
-        (ok, ) = address(veHemi).call{gas: BIG_GAS}(data_);
+        (ok, ) = address(veHemi).call{gas: CALL_GAS_LIMIT}(data_);
     }
 
     function _disable(address who_, uint256 id_) internal returns (bool) {
         return _call(who_, abi.encodeWithSignature("disableAutoRelock(uint256)", id_));
     }
 
-    function _retire(address who_, uint256 id_) internal returns (bool) {
+    function _retireStale(address who_, uint256 id_) internal returns (bool) {
         return _call(who_, abi.encodeWithSignature("retireStaleAutoRelock(uint256)", id_));
     }
 
@@ -76,10 +85,10 @@ contract BrokenModuleMatrixTest is AutoRelockTestBase {
         if (veHemi.autoRelockRemaining(id_) == 0) return true;
         if (_disable(holder_, id_) && veHemi.autoRelockRemaining(id_) == 0) return true;
 
-        // the permissionless keeper remedy, once the heartbeat horizon opens
+        // the permissionless keeper remedy, once the abandonment horizon opens
         uint256 staleAt = veHemi.autoRelockStaleAt(id_);
         if (block.timestamp < staleAt) vm.warp(staleAt);
-        if (_retire(stranger, id_) && veHemi.autoRelockRemaining(id_) == 0) return true;
+        if (_retireStale(stranger, id_) && veHemi.autoRelockRemaining(id_) == 0) return true;
 
         return veHemi.autoRelockRemaining(id_) == 0;
     }
@@ -88,11 +97,11 @@ contract BrokenModuleMatrixTest is AutoRelockTestBase {
     ///      action anywhere in the sequence. 0 means trapped.
     function _recoverPrincipal(uint256 id_, address holder_) internal returns (uint256) {
         if (!_ownerIndependentExit(id_, holder_)) return 0;
-        uint256 target = uint256(veHemi.getLockedBalance(id_).end) + 1;
-        if (block.timestamp < target) vm.warp(target);
+        uint256 withdrawAt = uint256(veHemi.getLockedBalance(id_).end) + 1;
+        if (block.timestamp < withdrawAt) vm.warp(withdrawAt);
         // amortise the global curve the way a live chain does, so `withdraw`
         // is not paying for years of un-checkpointed buckets in one call.
-        for (uint256 c = 0; c < 8; ++c) { try veHemi.checkpoint() {} catch {} }
+        for (uint256 i = 0; i < 8; ++i) { try veHemi.checkpoint() {} catch {} }
         uint256 before = hemi.balanceOf(holder_);
         // withdraw may itself route through the broken module; sweep a few
         // horizons so a bounded quarantine is not mistaken for a trap.
@@ -107,7 +116,7 @@ contract BrokenModuleMatrixTest is AutoRelockTestBase {
     ///      announced that it could not verify it.
     function _announced(Vm.Log[] memory logs_) internal pure returns (bool) {
         for (uint256 i = 0; i < logs_.length; ++i) {
-            if (logs_[i].topics[0] == TOPIC_UNVERIFIED) return true;
+            if (logs_[i].topics[0] == TOPIC_AUTO_RELOCK_RETIREMENT_UNVERIFIED) return true;
         }
         return false;
     }
@@ -116,19 +125,19 @@ contract BrokenModuleMatrixTest is AutoRelockTestBase {
     ///      halves of the law.
     function _cell(string memory name_, address module_, bool seedReadable_) internal {
         uint256 id = _flatDelegated(attacker);
-        uint256 booked = delegation.getVotes(dele);
+        uint256 booked = delegation.getVotes(delegateeA);
         _install(module_);
         if (seedReadable_) {
             // give the readable shapes the record they are meant to serve:
             // the position's OWN flat booking, so the post-condition sees a
             // truthful "still flat".
             (bool ok, ) = module_.call(
-                abi.encodeWithSignature("seedFlat(uint256,address,uint96)", id, dele, uint96(booked)));
+                abi.encodeWithSignature("seedFlat(uint256,address,uint96)", id, delegateeA, uint96(booked)));
             if (!ok) {
                 (ok, ) = module_.call(
-                    abi.encodeWithSignature("freezeAt(uint256,address,uint96)", id, dele, uint96(booked)));
+                    abi.encodeWithSignature("freezeAt(uint256,address,uint96)", id, delegateeA, uint96(booked)));
             }
-            assertTrue(ok, "probe: could not seed the readable module");
+            assertTrue(ok, "premise: could not seed the readable module");
         }
         vm.warp(block.timestamp + 40 * SIX_DAYS);
 
@@ -141,15 +150,16 @@ contract BrokenModuleMatrixTest is AutoRelockTestBase {
         //     says so.
         assertTrue(committed, string.concat("(A) ", name_, ": the holder's disable was refused"));
         assertEq(veHemi.autoRelockRemaining(id), 0, string.concat("(A) ", name_, ": disable left the flag set"));
-        assertEq(delegation.getVotes(dele), booked, string.concat("probe ", name_, ": the real module's booking moved"));
+        assertEq(delegation.getVotes(delegateeA), booked,
+            string.concat("(A) ", name_, ": the real module's booking moved"));
         assertTrue(_announced(logs),
             string.concat("(A) ", name_, ": SILENT phantom -- retirement committed unverified with no event"));
 
         // (B) the principal comes home without the owner.
-        uint256 got = _recoverPrincipal(id, attacker);
-        emit log_named_uint(string.concat("  ", name_, " recovered"), got);
-        emit log_named_uint(string.concat("  ", name_, " residual phantom"), delegation.getVotes(dele));
-        assertEq(got, PRINCIPAL,
+        uint256 recovered = _recoverPrincipal(id, attacker);
+        emit log_named_uint(string.concat("  ", name_, " recovered"), recovered);
+        emit log_named_uint(string.concat("  ", name_, " residual phantom"), delegation.getVotes(delegateeA));
+        assertEq(recovered, PRINCIPAL,
             string.concat("(B) ", name_, ": PRINCIPAL TRAPPED -- no owner-independent exit"));
     }
 
@@ -165,7 +175,7 @@ contract BrokenModuleMatrixTest is AutoRelockTestBase {
     /// B2 — reverts on WRITE, succeeds on READ: the read-back sees a
     ///      still-flat record, which B1 never reaches.
     function test_B2_writeFailsReadSucceeds() public {
-        _cell("B2 read-ok/write-revert", address(new HalfBrokenModule()), true);
+        _cell("B2 read-ok/write-revert", address(new WriteRevertingModule()), true);
     }
 
     /// B3 — succeeds and LIES. `delegate` is a silent no-op; every read is
@@ -213,12 +223,12 @@ contract BrokenModuleMatrixTest is AutoRelockTestBase {
     ///      every cell above is measuring the harness, not the contract.
     function test_B0_vacuity_healthyModuleRetiresForReal() public {
         uint256 id = _flatDelegated(attacker);
-        uint256 booked = delegation.getVotes(dele);
+        uint256 booked = delegation.getVotes(delegateeA);
         assertGt(booked, 0, "vacuity: nothing booked");
         vm.warp(block.timestamp + 40 * SIX_DAYS);
         assertTrue(_disable(attacker, id), "vacuity: honest disable refused");
         vm.warp(((block.timestamp / 1 hours) + 2) * 1 hours);
-        assertEq(delegation.getVotes(dele), veHemi.balanceOfNFT(id), "vacuity: honest retirement mis-booked");
+        assertEq(delegation.getVotes(delegateeA), veHemi.balanceOfNFT(id), "vacuity: honest retirement mis-booked");
         assertEq(_recoverPrincipal(id, attacker), PRINCIPAL, "vacuity: honest principal not returned");
     }
 }

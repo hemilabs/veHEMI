@@ -18,17 +18,17 @@ import "../LockedCurveTestBase.sol";
 /// Every trigger is the POSITION OWNER: `increaseAmount` is owner-gated, so a
 /// stranger's top-up would revert and the oracle would see nothing.
 contract TopUpVoteOracleTest is LockedCurveTestBase {
-    function _b(uint256 t) internal pure returns (uint256) { return (t / 1 hours) * 1 hours + 1 hours; }
+    function _nextHourBoundary(uint256 t) internal pure returns (uint256) { return (t / 1 hours) * 1 hours + 1 hours; }
 
-    function _mk(address o, uint256 a, uint256 d) internal returns (uint256 id) {
-        hemi.mint(o, a);
-        vm.prank(o); hemi.approve(address(veHemi), type(uint256).max);
-        vm.prank(o); id = veHemi.createLock(a, d);
+    function _mk(address owner_, uint256 amount_, uint256 duration_) internal returns (uint256 id) {
+        hemi.mint(owner_, amount_);
+        vm.prank(owner_); hemi.approve(address(veHemi), type(uint256).max);
+        vm.prank(owner_); id = veHemi.createLock(amount_, duration_);
     }
 
     /// @dev The trigger: `who` tops up position `id` by `amt`. Every caller
     ///      passes the position owner.
-    function _touch(uint256 id, address who, uint256 amt) internal {
+    function _ownerTopUp(address who, uint256 id, uint256 amt) internal {
         hemi.mint(who, amt);
         vm.prank(who); hemi.approve(address(veHemi), type(uint256).max);
         vm.prank(who); veHemi.increaseAmount(id, amt);
@@ -49,25 +49,25 @@ contract TopUpVoteOracleTest is LockedCurveTestBase {
         uint256 id = _mk(alice, 500 ether, 20 * SIX_DAYS);
         vm.prank(alice); delegation.delegate(id, bob);
         vm.prank(alice); veHemi.enableAutoRelock(id);
-        vm.warp(_b(block.timestamp) + 600);
+        vm.warp(_nextHourBoundary(block.timestamp) + 600);
 
         uint256 before_ = delegation.getVotes(bob);
-        assertGt(before_, 0, "precondition: a flat term is booked on bob");
+        assertGt(before_, 0, "premise: a flat term is booked on bob");
 
-        _touch(id, alice, 1);      // the owner
-        uint256 T = block.timestamp;
+        _ownerTopUp(alice, id, 1);      // the owner
+        uint256 writeAt = block.timestamp;
 
         // Live half, and the historical half, out to TWO hour boundaries so a
         // "heals at the boundary" argument cannot rescue it.
         uint256 worstDrop; uint256 belowSamples;
-        for (uint256 t = T + 1; t <= T + 2 hours; ++t) {
+        for (uint256 t = writeAt + 1; t <= writeAt + 2 hours; ++t) {
             vm.warp(t);
             uint256 v = delegation.getVotes(bob);
             if (v < before_) { unchecked { ++belowSamples; } if (before_ - v > worstDrop) worstDrop = before_ - v; }
         }
-        vm.warp(T + 400 days);
+        vm.warp(writeAt + 400 days);
         uint256 sealedBelow;
-        for (uint256 t = T + 1; t <= T + 2 hours; ++t) {
+        for (uint256 t = writeAt + 1; t <= writeAt + 2 hours; ++t) {
             if (delegation.getPastVotes(bob, t) < before_) { unchecked { ++sealedBelow; } }
         }
 
@@ -82,34 +82,34 @@ contract TopUpVoteOracleTest is LockedCurveTestBase {
 
     // =================================================================
     // O2. THE COUNTERFACTUAL.  Run the identical scenario TWICE from one
-    //     state snapshot: arm B performs the owner's 1-wei top-up, arm A
-    //     does not. The expected value at every instant is arm A's reading.
+    //     state snapshot: case B performs the owner's 1-wei top-up, case A
+    //     does not. The expected value at every instant is case A's reading.
     //
     //     ORACLE: the contract, on the same tree, without the trigger. It
     //     needs NO closed form for the weight, so it works for a DECAYING
     //     position, where O1's zero tolerance would not.
     // =================================================================
-    function test_O2_counterfactualDecayingPosition() public {
+    function test_O2_ownerTopUpNeverLeavesDecayingDelegateeBelowTheNoTopUpRun() public {
         vm.warp(((block.timestamp / SIX_DAYS) + 2) * SIX_DAYS + 1);
         uint256 id = _mk(alice, 500 ether, 7 * SIX_DAYS);
         vm.prank(alice); delegation.delegate(id, bob);
-        vm.warp(_b(block.timestamp) + 600);
+        vm.warp(_nextHourBoundary(block.timestamp) + 600);
 
-        uint256 T = block.timestamp;
+        uint256 writeAt = block.timestamp;
         uint256 N = 120;              // 120 samples, 30 s apart == 1 hour
         uint256[] memory control = new uint256[](N);
 
         uint256 snap = vm.snapshotState();
-        // ARM A -- no touch at all.
-        for (uint256 i; i < N; ++i) { vm.warp(T + 1 + i * 30); control[i] = delegation.getVotes(bob); }
+        // CASE A -- no touch at all.
+        for (uint256 i; i < N; ++i) { vm.warp(writeAt + 1 + i * 30); control[i] = delegation.getVotes(bob); }
         vm.revertToState(snap);
 
-        // ARM B -- the OWNER, one wei, everything else identical.
-        _touch(id, alice, 1);
-        assertEq(block.timestamp, T, "arm B must start at the same instant");
+        // CASE B -- the OWNER, one wei, everything else identical.
+        _ownerTopUp(alice, id, 1);
+        assertEq(block.timestamp, writeAt, "case B must start at the same instant");
         uint256 worst; uint256 below;
         for (uint256 i; i < N; ++i) {
-            vm.warp(T + 1 + i * 30);
+            vm.warp(writeAt + 1 + i * 30);
             uint256 v = delegation.getVotes(bob);
             if (v < control[i]) { unchecked { ++below; } if (control[i] - v > worst) worst = control[i] - v; }
         }
@@ -129,31 +129,35 @@ contract TopUpVoteOracleTest is LockedCurveTestBase {
         vm.warp(((block.timestamp / SIX_DAYS) + 2) * SIX_DAYS + 1);
         uint256 id = _mk(alice, 500 ether, 7 * SIX_DAYS);
         vm.prank(alice); delegation.delegate(id, bob);
-        vm.warp(_b(block.timestamp) + 600);
+        vm.warp(_nextHourBoundary(block.timestamp) + 600);
 
         vm.prank(alice); delegation.delegate(id, charlie);
-        uint256 T = block.timestamp;
-        uint256 bnd = _b(T);
+        uint256 writeAt = block.timestamp;
+        uint256 nextHourBoundary = _nextHourBoundary(writeAt);
 
         // (1) THE STATED PROPERTY: the MOVE is not visible in its own block.
         assertEq(delegation.getVotes(charlie), 0,
             "O3: a MOVE became visible IN ITS OWN BLOCK -- same-block flash-delegation");
 
         // (2) Visible from the very next second.
-        vm.warp(T + 1);
-        uint256 atNextBlock = delegation.getVotes(charlie);
-        assertGt(atNextBlock, 0, "O3: the move never landed at all");
+        vm.warp(writeAt + 1);
+        uint256 votesAtNextSecond = delegation.getVotes(charlie);
+        assertGt(votesAtNextSecond, 0, "O3: the move never landed at all");
 
-        // (3) Live for the whole run from T+1 to the boundary, so the body
+        // (3) Live for the whole run from `writeAt + 1` to the boundary, so the body
         //     fails loudly if the dating changes in either direction.
         uint256 live;
-        for (uint256 t = T + 1; t < bnd; ++t) { vm.warp(t); if (delegation.getVotes(charlie) != 0) ++live; }
-        emit log_named_uint("O3 seconds between T+1 and the boundary that are LIVE", live);
-        assertEq(live, bnd - T - 1,
-            "O3: the move is live at T+1 but NOT for the whole run to the boundary -- the dating is neither t+1 nor the grid");
+        for (uint256 t = writeAt + 1; t < nextHourBoundary; ++t) {
+            vm.warp(t);
+            if (delegation.getVotes(charlie) != 0) ++live;
+        }
+        emit log_named_uint("O3 seconds from the next second to the boundary that are LIVE", live);
+        assertEq(live, nextHourBoundary - writeAt - 1,
+            "O3: the move is live at the next second but NOT for the whole run to the boundary -- "
+            "the dating is neither t+1 nor the grid");
 
         // (4) And it is still live at the boundary.
-        vm.warp(bnd);
+        vm.warp(nextHourBoundary);
         assertGt(delegation.getVotes(charlie), 0, "O3: the move did not survive to the boundary");
     }
 }

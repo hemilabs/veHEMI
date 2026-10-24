@@ -8,7 +8,8 @@ the behaviour changes you can observe on chain and what to do about them.
 Contracts on Hemi mainnet (chain 43111):
 
 - VeHemi proxy `0x371d3718D5b7F75EAb050FAe6Da7DF3092031c89`
-- VeHemiVoteDelegation (VVD) proxy `0xBF5b2f370370494B8A4575962512dd3ea7c29e2d`
+- VeHemiVoteDelegation (VVD) proxy `0xBF5b2f370370494B8A4575962512dd3ea7c29e2d`,
+  the delegation module VeHemi calls
 - Aragon adapter `0x3f41c138082b29fb1a6c91066e73480163f984e4` (not changed by
   this upgrade)
 
@@ -24,11 +25,15 @@ These apply whether or not anyone uses auto-relock.
   `ts + 1`. Before the upgrade it took effect at the next hour boundary.
 - So a delegation is never counted in the block that makes it, and
   `getPastVotes(account, t)` reflects every change made before `t`.
-- During the hour in which the upgrade executes, until the next hour boundary
-  B, the old timing still applies: changes take effect at B, and vote events
-  carry B values. `VVD.legacyDatingActive()` is true until B − 1 (at B − 1 the
-  dating already equals `block.timestamp + 1`), and `VVD.legacyDatingUntil()`
-  returns B.
+- During the hour in which the upgrade executes, until the next hour boundary B,
+  the old timing still applies: changes take effect at B, and vote events carry
+  B values. `VVD.legacyDatingActive()` is true until B − 1 (at B − 1 the dating
+  already equals `block.timestamp + 1`), and `VVD.legacyDatingUntil()` returns
+  B. This notice calls that period the upgrade hour. The VVD NatSpec calls it
+  the upgrade-hour window, the `legacyDating*` views are named after the old
+  timing (unrelated to the `...FromLegacy` import functions, where "legacy"
+  means an earlier VVD proxy), and VeHemi's refusal to enable auto-relock during
+  it is `VoteDelegationTransitionInProgress` (section 2).
 
 **Quorum denominator.**
 - `VVD.getPastTotalSupply(t)` now returns the total veHEMI supply at `t - 1`
@@ -56,21 +61,24 @@ These apply whether or not anyone uses auto-relock.
   functions.
 - VeHemi caps each call into the delegation module at 8,000,000 gas (the
   `legacyDatingActive` probe at 50,000). A refused `delegate` is announced with
-  `DelegationUpdateFailed(id)` and the new
-  `DelegationUpdateFailedReason(id, selector)`; a failed `delegation(id)` read
+  `DelegationUpdateFailed(delegator)` and the new
+  `DelegationUpdateFailedReason(delegator, reason)` (`delegator`: the token id;
+  `reason`: the refusal's 4-byte selector); a failed `delegation(id)` read
   before a re-delegation emits `DelegationUpdateFailed` alone;
   `disableAutoRelock` re-raises `DelegationSlopeOverflow`. A starved call of
   those listed in section 2 (Gas limit) reverts `DelegationCallStarved`, while
   any other starved re-delegation (of an UNARMED position, or an owner's
-  self-transfer of an armed one) can commit behind the deployed proxy,
-  announced as a refusal (`DelegationUpdateFailed`, with
-  `DelegationUpdateFailedReason(id, 0x00000000)` when the write itself ran out
-  of gas), leaving that position's record as it was until it is re-delegated.
-- `DelegationUpdateSkipped(id)` (new) is emitted when VeHemi does not forward an
-  update for an ordinary position in the last `((end - 1) mod 3600) + 1` seconds
-  of its lock (360 to 3,600 s), and at any time after `end` (for example a
-  transfer of an expired, not yet withdrawn position). See section 4 for the
-  consequence.
+  self-transfer of an armed one; armed means auto-relock enabled, section 2) can
+  commit behind the deployed proxy, announced as a refusal
+  (`DelegationUpdateFailed`, with
+  `DelegationUpdateFailedReason(delegator, 0x00000000)` when the write itself
+  ran out of gas), leaving that position's record as it was until it is
+  re-delegated.
+- `DelegationUpdateSkipped(delegator)` (new) is emitted when VeHemi does not
+  forward an update for an unarmed position in the last
+  `((end - 1) mod 3600) + 1` seconds of its lock (360 to 3,600 s), and at any
+  time after `end` (for example a transfer of an expired, not yet withdrawn
+  position). See section 4 for the consequence.
 - The VVD emits `DelegateChanged` before the `DelegateVotesChanged` pair of the
   same write.
 - A delegation write no longer reverts on a VVD `totalAmount` underflow: a
@@ -85,13 +93,13 @@ These apply whether or not anyone uses auto-relock.
   - `delegationBookedAt(id)`: the time from which a record is in force. 0 means
     already in force: never delegated, cleared by a withdraw, a forfeit or an
     armed transfer whose move was refused (the removal itself counts from the
-    next second, or from the window's end during the upgrade hour), or booked
-    before the upgrade, except a record booked earlier in the upgrade hour,
-    before the upgrade executed, which takes effect only at that hour's
-    boundary. If the upgrade is rolled back within the upgrade hour and later
-    re-applied, a stamp written before the rollback can outlive a rebooking or
-    burn of that id by the pre-upgrade implementation in between, which never
-    writes it; it is exact again from the id's next booking;
+    next second, or from B during the upgrade hour), or booked before the
+    upgrade, except a record booked earlier in the upgrade hour, before the
+    upgrade executed, which takes effect only at that hour's boundary. If the
+    upgrade is rolled back within the upgrade hour and later re-applied, a
+    `delegationBookedAt` value written before the rollback can outlive a
+    rebooking or burn of that id by the pre-upgrade implementation in between,
+    which never writes it; it is exact again from the id's next booking;
   - `legacyDatingActive()` and `legacyDatingUntil()`;
   - `getDelegationCheckpointsLength(delegatee)`;
   - `getDelegationCheckpointsPage(delegatee, offset, limit)`.
@@ -133,9 +141,11 @@ These apply whether or not anyone uses auto-relock.
 ## 2. Auto-relock
 
 A holder can freeze a position's remaining lock time so that its weight stops
-decaying. The entry points are `enableAutoRelock(id)` on an existing position and
-`createLockWithAutoRelock(amount, duration, transferable, forfeitable)` for a new
-one.
+decaying. The entry points are `enableAutoRelock(id)` on an existing position
+and `createLockWithAutoRelock(amount, duration, transferable, forfeitable)` for
+a new one. A position with auto-relock enabled is called **armed**: these two
+calls arm it; `disableAutoRelock`, `retireStaleAutoRelock` and a transfer to
+another account disarm it.
 
 **Weight.**
 - While armed, the position's weight is constant at `slope * (R - SIX_DAYS/2)`.
@@ -165,8 +175,8 @@ one.
   arming or of the latest `refreshAutoRelock`, 0 while unarmed.
 - From `autoRelockStaleAt(id)` on, anyone may call `retireStaleAutoRelock(id)`.
   It ends the term as a disable would, but never reverts on a refusal by the
-  vote module: a disable re-raises only `DelegationSlopeOverflow`, and a retire
-  swallows that too. A swallowed refusal is announced with
+  delegation module: a disable re-raises only `DelegationSlopeOverflow`, and a
+  retire swallows that too. A swallowed refusal is announced with
   `DelegationUpdateFailed` / `DelegationUpdateFailedReason`, and with
   `AutoRelockRetirementUnverified` when the record still reads flat afterwards
   (or cannot be read).
@@ -180,9 +190,9 @@ one.
 - A buyer therefore does not receive the armed weight it read before the
   transfer. Marketplaces and lenders should value an armed position only after
   holding it, or require the seller to disarm first.
-- If the module refuses the move to the recipient's delegatee, the position
-  arrives undelegated (`DelegateChanged(id, old, 0)`) and the transfer needs
-  the gas limit below; the new owner must delegate it.
+- If the delegation module refuses the move to the recipient's delegatee, the
+  position arrives undelegated (`DelegateChanged(id, old, 0)`) and the transfer
+  needs the gas limit below; the new owner must delegate it.
 
 **Gas limit.**
 - When the position is delegated, these calls need a gas **limit** of about 8.8
@@ -211,7 +221,7 @@ one.
 - An `eth_estimateGas` of a transaction that calls VeHemi directly already
   includes the requirement, because a lower limit reverts. A caller that
   catches the revert (a try/catch loop, Multicall3 with `allowFailure`, a Safe
-  transaction with `safeTxGas != 0`, an action allowed to fail) must forward
+  transaction with `safeTxGas != 0`, an action allowed to fail) must pass on
   that much gas explicitly and check the result: an estimate through such a
   frame can settle on a limit at which VeHemi reverts and the outer
   transaction still succeeds. Do not cap these calls' gas limits below it.
@@ -228,7 +238,12 @@ one.
 **Indexers.**
 - `DelegateCheckpoint.fixedBias` now carries the constant auto-relock weight. A
   delegatee's votes at `t` are
-  `max(normalizedBias − expiredBias − (normalizedSlope − expiredSlope) · t, 0) + fixedBias`.
+  `max(normalizedBias − expiredBias − (normalizedSlope − expiredSlope) · t, 0) + fixedBias`,
+  where `normalizedBias`, `normalizedSlope` and `fixedBias` are those of the
+  delegatee's last checkpoint at or before `t`, and `expiredBias` and
+  `expiredSlope` are the sums of the `bias` and of the `slope` of
+  `expiredDelegations(delegatee, bucket)` over every SIX_DAYS bucket after that
+  checkpoint, up to `t`.
 - `totalAmount` includes the principal of armed positions.
 - `getGlobalPoint(e).amount` is the aggregate constant weight: supply is the
   walked bias plus `amount`.
@@ -243,7 +258,7 @@ the VeHemi proxy:
 | `AutoRelockDisabled(tokenId, restoredEnd)` | disarmed by a disable, a stale retire or a transfer; `restoredEnd` is the new `end` |
 | `AutoRelockRefreshed(tokenId, refreshedAt)` | heartbeat |
 | `AutoRelockRetired(tokenId, caller)` | the disarm was a stale retire; `AutoRelockDisabled` follows in the same transaction |
-| `AutoRelockRetirementUnverified(tokenId)` | the disarm could not confirm that the vote module retired the flat term (see section 5) |
+| `AutoRelockRetirementUnverified(tokenId)` | the disarm could not confirm that the delegation module retired the flat term (see section 5) |
 
 - `AutoRelockEnabled` and `AutoRelockDisabled` are emitted before the
   `Checkpoint` they describe.
@@ -300,7 +315,7 @@ This behaviour is unchanged from today.
   of its lock, VeHemi skips the delegation update (`DelegationUpdateSkipped`).
 - The record still names the seller's delegatee. The new owner cannot move the
   weight with `delegate()` until the lock is extended
-  (`CanNotDelegateExpiredLocks`; the exception is a stranded flat record, which
+  (`CanNotDelegateExpiredLocks`; the exception is a stranded flat term, which
   that call retires, booking nothing).
 - Extending the lock with `increaseUnlockTime` first re-books the weight to the
   **previous** delegatee. The same happens on a later `increaseAmount`,
@@ -316,11 +331,11 @@ This behaviour is unchanged from today.
 - **Stale positions.** From `autoRelockStaleAt(id)` on, anyone may retire a
   position with `retireStaleAutoRelock(id)`, using the gas limit in section 2. A
   keeper should call it directly, or call `VeHemi.checkpoint()` first and then
-  forward at least 9 million gas per id, plus the distributor's per-call cost if
+  pass on at least 9 million gas per id, plus the distributor's per-call cost if
   one is installed, and treat the `DelegationCallStarved` selector
   (`0xce31767f`) as fatal: an estimate-sized call through a frame that catches
   reverts retires nothing.
-- **Unverified retirements.** On `AutoRelockRetirementUnverified(id)`, if
+- **Unverified retirements.** On `AutoRelockRetirementUnverified` for an id, if
   `delegation(id)` is still flat and `isAutoRelockEnabled(id)` is false:
   1. call `VVD.retireStrandedFlatTerm(id)` (permissionless);
   2. if it reverts `DelegationSlopeOverflow`, the delegatee cannot absorb the
@@ -340,8 +355,8 @@ This behaviour is unchanged from today.
   the id is burned.
 - **Armed transfers that arrive undelegated.** `AutoRelockDisabled` and
   `DelegationUpdateFailed` for the same id in one transfer, with no
-  `AutoRelockRetirementUnverified`: the module refused the move and the
-  position arrived undelegated. The new owner calls
+  `AutoRelockRetirementUnverified`: the delegation module refused the move and
+  the position arrived undelegated. The new owner calls
   `VVD.delegate(id, <a delegatee other than the refused one>)`.
 - **Global catch-up.** Every VeHemi write first catches the global point up, one
   SIX_DAYS bucket at a time. After years with no VeHemi write at all, that

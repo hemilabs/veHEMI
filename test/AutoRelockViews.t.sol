@@ -21,12 +21,12 @@ contract AutoRelockViewsTest is LockedCurveTestBase {
         vm.warp(_grid(block.timestamp) + 3 * SIX_DAYS + 12_345);   // mid-bucket
         end_ = _grid(block.timestamp + DURATION);
         (id_, , ) = createLock(alice, 100 ether, DURATION);
-        assertEq(veHemi.getLockedBalance(id_).end, end_, "precondition: end is floor-snapped to the grid");
+        assertEq(veHemi.getLockedBalance(id_).end, end_, "premise: end is floor-snapped to the grid");
     }
 
     function test_effectiveLockEnd_unarmedIsStoredEnd() public {
         (uint256 id, uint256 end) = _start();
-        assertFalse(veHemi.isAutoRelockEnabled(id), "precondition: unarmed");
+        assertFalse(veHemi.isAutoRelockEnabled(id), "premise: unarmed");
         assertEq(veHemi.effectiveLockEnd(id), end, "unarmed: effectiveLockEnd != stored end");
 
         vm.warp(block.timestamp + 7 * SIX_DAYS + 999);

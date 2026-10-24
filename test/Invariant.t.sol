@@ -19,7 +19,7 @@ contract InvariantTest is Test {
     ///      will silently drift — update both together.
     uint256 internal constant MAX_TIME = 4 * 365.25 days;
 
-    /// @dev SIX_DAYS from VeHemi.sol (private there): MONTH / 5 = 525,960 s.
+    /// @dev SIX_DAYS from VeHemi.sol (`veHemi.SIX_DAYS()`), restated: MONTH / 5 = 525,960 s.
     uint256 internal constant SIX_DAYS = 365.25 days / (12 * 5);
 
     address admin = makeAddr("admin");
@@ -64,7 +64,7 @@ contract InvariantTest is Test {
     }
 
     function invariant_votingPower() public {
-        // Warp to next hourly epoch boundary (delegation takes effect at hour boundaries),
+        // Warp to the next hour boundary, so every pending (hour-dated) change has landed,
         // then restore timestamp so we don't pollute handler state.
         uint256 savedTimestamp = block.timestamp;
         vm.warp(((block.timestamp / 1 hours) * 1 hours) + 1 hours);
@@ -179,7 +179,8 @@ contract InvariantTest is Test {
         }
     }
 
-    /// @dev V2: After seeding, forfeitable <= locked <= total must always hold.
+    /// @dev V2: After seeding, forfeitable <= locked <= total + the flat positions'
+    ///      bucket-mean slack must always hold (with no flat position, locked <= total).
     function invariant_subcurveOrdering() public view {
         if (!handler.seeded()) return; // Subcurves not active yet
 
@@ -203,6 +204,7 @@ contract InvariantTest is Test {
     ///      curve, and its cap, rebuilt from the contract's primitives:
     ///        sub_i  = slope_i * (min(lock.end, transferableAfter) - now)
     ///        glob_i = flat ? slope_i * (R - SIX_DAYS/2) : slope_i * (lock.end - now)
+    ///      with R = autoRelockRemaining(id), non-zero exactly when the position is flat.
     ///      Only flat positions can have `sub_i > glob_i`; each adds
     ///      `slope_i * SIX_DAYS/2` to the cap.
     function _bucketMeanSlack() internal view returns (uint256 slack, uint256 cap) {

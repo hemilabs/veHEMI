@@ -11,48 +11,53 @@ contract FlatAggregateTest is AutoRelockSeamsBase {
     function setUp() public { _deploy(); }
 
     /// Three flat positions; burn/forfeit/disable one at a time and check the
-    /// global flat aggregate (Point.amount, clamped at 0 in Phase C) never
-    /// eats a neighbour's weight.
+    /// global flat aggregate (Point.amount, clamped at 0 in VeHemiCurveLib's
+    /// Phase C) never eats a neighbour's weight.
     function test_flat_aggregate_no_cross_contamination() public {
-        uint256 a = _mint(alice, 1000e18, 100 * SIX_DAYS, true, false);
-        uint256 b = _mint(bob,    700e18,  80 * SIX_DAYS, false, true);
-        uint256 cId = _mint(carol, 300e18, 60 * SIX_DAYS, false, false);
-        vm.prank(alice); ve.enableAutoRelock(a);
-        vm.prank(bob);   ve.enableAutoRelock(b);
-        vm.prank(carol); ve.enableAutoRelock(cId);
+        uint256 aliceId = _mint(alice, 1000e18, 100 * SIX_DAYS, true, false);
+        uint256 bobId = _mint(bob,    700e18,  80 * SIX_DAYS, false, true);
+        uint256 carolId = _mint(carol, 300e18, 60 * SIX_DAYS, false, false);
+        vm.prank(alice); ve.enableAutoRelock(aliceId);
+        vm.prank(bob);   ve.enableAutoRelock(bobId);
+        vm.prank(carol); ve.enableAutoRelock(carolId);
 
-        uint256 wa = ve.balanceOfNFT(a);
-        uint256 wb = ve.balanceOfNFT(b);
-        uint256 wc = ve.balanceOfNFT(cId);
-        emit log_named_uint("wa", wa); emit log_named_uint("wb", wb); emit log_named_uint("wc", wc);
-        assertEq(ve.totalVeHemiSupply(), wa + wb + wc, "aggregate != sum of flat levels");
+        uint256 aliceWeight = ve.balanceOfNFT(aliceId);
+        uint256 bobWeight = ve.balanceOfNFT(bobId);
+        uint256 carolWeight = ve.balanceOfNFT(carolId);
+        emit log_named_uint("alice flat weight", aliceWeight);
+        emit log_named_uint("bob flat weight", bobWeight);
+        emit log_named_uint("carol flat weight", carolWeight);
+        assertEq(ve.totalVeHemiSupply(), aliceWeight + bobWeight + carolWeight, "aggregate != sum of flat levels");
 
-        // 1) forfeit b (flat + forfeitable)
+        // 1) forfeit bob's position (flat + forfeitable)
         vm.warp(block.timestamp + 3 * SIX_DAYS);
-        vm.prank(admin); ve.forfeit(b);
-        assertEq(ve.totalVeHemiSupply(), wa + wc, "forfeit of b disturbed a/c");
-        assertEq(ve.balanceOfNFT(a), wa, "a moved"); assertEq(ve.balanceOfNFT(cId), wc, "c moved");
+        vm.prank(admin); ve.forfeit(bobId);
+        assertEq(
+            ve.totalVeHemiSupply(), aliceWeight + carolWeight, "forfeit of bob's position disturbed alice's or carol's position"
+        );
+        assertEq(ve.balanceOfNFT(aliceId), aliceWeight, "alice's position moved");
+        assertEq(ve.balanceOfNFT(carolId), carolWeight, "carol's position moved");
 
-        // 2) the owner's increaseAmount on a -> flat level steps up
-        address ownerA = ve.ownerOf(a);
-        hemi.mint(ownerA, 100e18);
-        vm.startPrank(ownerA);
+        // 2) the owner's increaseAmount on alice's position -> flat level steps up
+        address aliceOwner = ve.ownerOf(aliceId);
+        hemi.mint(aliceOwner, 100e18);
+        vm.startPrank(aliceOwner);
         hemi.approve(address(ve), type(uint256).max);
-        ve.increaseAmount(a, 100e18);
+        ve.increaseAmount(aliceId, 100e18);
         vm.stopPrank();
-        uint256 wa2 = ve.balanceOfNFT(a);
-        emit log_named_uint("wa after owner top-up +100e18", wa2);
-        assertEq(ve.totalVeHemiSupply(), wa2 + wc, "aggregate wrong after increaseAmount");
+        uint256 aliceWeightAfterTopUp = ve.balanceOfNFT(aliceId);
+        emit log_named_uint("alice flat weight after owner top-up +100e18", aliceWeightAfterTopUp);
+        assertEq(ve.totalVeHemiSupply(), aliceWeightAfterTopUp + carolWeight, "aggregate wrong after increaseAmount");
 
-        // 3) permissionless stale retire of c
-        vm.warp(ve.autoRelockStaleAt(cId));
-        vm.prank(address(0xDEAD)); ve.retireStaleAutoRelock(cId);
-        assertEq(ve.balanceOfNFT(a), wa2, "a disturbed by c's retire");
-        assertEq(ve.totalVeHemiSupply(), wa2 + ve.balanceOfNFT(cId), "aggregate wrong after retire");
+        // 3) permissionless stale retire of carol's position
+        vm.warp(ve.autoRelockStaleAt(carolId));
+        vm.prank(address(0xDEAD)); ve.retireStaleAutoRelock(carolId);
+        assertEq(ve.balanceOfNFT(aliceId), aliceWeightAfterTopUp, "alice's position disturbed by the retire of carol's position");
+        assertEq(ve.totalVeHemiSupply(), aliceWeightAfterTopUp + ve.balanceOfNFT(carolId), "aggregate wrong after retire");
 
-        // 4) owner disable of a
-        vm.prank(alice); ve.disableAutoRelock(a);
-        assertEq(ve.totalVeHemiSupply(), ve.balanceOfNFT(a) + ve.balanceOfNFT(cId), "aggregate wrong after disable");
+        // 4) owner disable of alice's position
+        vm.prank(alice); ve.disableAutoRelock(aliceId);
+        assertEq(ve.totalVeHemiSupply(), ve.balanceOfNFT(aliceId) + ve.balanceOfNFT(carolId), "aggregate wrong after disable");
         emit log_named_uint("final total", ve.totalVeHemiSupply());
 
         // 5) everything must drain to zero eventually
@@ -65,8 +70,8 @@ contract FlatAggregateTest is AutoRelockSeamsBase {
     /// Historical supply at a timestamp inside a flat episode must equal the
     /// live reading taken at that timestamp.
     function test_historical_supply_matches_live() public {
-        uint256 a = _mint(alice, 1000e18, 100 * SIX_DAYS, true, false);
-        vm.prank(alice); ve.enableAutoRelock(a);
+        uint256 aliceId = _mint(alice, 1000e18, 100 * SIX_DAYS, true, false);
+        vm.prank(alice); ve.enableAutoRelock(aliceId);
         uint256[] memory ts = new uint256[](5);
         uint256[] memory live = new uint256[](5);
         for (uint256 i; i < 5; ++i) {
@@ -75,7 +80,7 @@ contract FlatAggregateTest is AutoRelockSeamsBase {
             live[i] = ve.totalVeHemiSupply();
         }
         vm.warp(block.timestamp + 1); // sample instants are strictly in the past
-        vm.prank(alice); ve.disableAutoRelock(a);
+        vm.prank(alice); ve.disableAutoRelock(aliceId);
         vm.warp(block.timestamp + 3 * SIX_DAYS);
         for (uint256 i; i < 5; ++i) {
             emit log_named_uint("ts", ts[i]);

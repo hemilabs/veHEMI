@@ -56,7 +56,7 @@ command -v forge >/dev/null 2>&1 || { err "'forge' is required."; exit 2; }
 WORK=$(mktemp -d); trap 'rm -rf "$WORK"' EXIT
 FAILED=0
 
-# ---------------------------------------------------------------- GATE 0a ---
+# ---------------------------------------------------------- CHECK 0a: build ---
 # Build. Incremental is fine and cheap; a build failure is exit 2, NOT drift.
 note "Building (incremental) so both artifacts come from the same compilation..."
 if ! forge build >"$WORK/build.log" 2>&1; then
@@ -65,7 +65,7 @@ if ! forge build >"$WORK/build.log" 2>&1; then
   exit 2
 fi
 
-# ---------------------------------------------------------------- GATE 0b ---
+# ----------------------------------------- CHECK 0b: one mirror declaration ---
 # Exactly one declaration of the mirror struct.
 DECLS=$(grep -rlE '^[[:space:]]*struct[[:space:]]+VeHemiLayout[[:space:]]*\{' src/ 2>/dev/null | sort -u)
 if [ "$(printf '%s\n' "$DECLS" | grep -c .)" != "1" ]; then
@@ -74,7 +74,7 @@ if [ "$(printf '%s\n' "$DECLS" | grep -c .)" != "1" ]; then
   exit 2
 fi
 
-# ---------------------------------------------------------------- GATE 0c ---
+# ------------------------------------------- CHECK 0c: inspect both layouts ---
 # Both layouts come from `forge inspect`, not from a hand-picked path under
 # out/. forge resolves the artifact for the CURRENT source (and errors on an
 # ambiguous contract name, which doubles as the "exactly one probe" check),
@@ -101,26 +101,26 @@ PROBE_NAME=VeHemiLayoutProbe
 inspect VeHemi           "$WORK/vehemi.json"
 inspect "$PROBE_NAME"    "$WORK/probe.json"
 
-# ---------------------------------------------------------------- GATE 0d ---
+# ---------------------------------------------------- CHECK 0d: probe shape ---
 # The probe must be exactly ONE state variable of the mirror struct type at
 # slot 0 offset 0 — otherwise the numbers below describe something else.
-PN=$(jq -r '.storage | length'      "$WORK/probe.json")
-PT=$(jq -r '.storage[0].type // ""' "$WORK/probe.json")
-PS=$(jq -r '.storage[0].slot // ""' "$WORK/probe.json")
-PO=$(jq -r '.storage[0].offset // ""' "$WORK/probe.json")
-if [ "$PN" != "1" ] || [ "$PS" != "0" ] || [ "$PO" != "0" ] || ! grep -q 't_struct(VeHemiLayout)' <<<"$PT"; then
+PROBE_ENTRIES=$(jq -r '.storage | length'      "$WORK/probe.json")
+PROBE_TYPE=$(jq -r '.storage[0].type // ""' "$WORK/probe.json")
+PROBE_SLOT=$(jq -r '.storage[0].slot // ""' "$WORK/probe.json")
+PROBE_OFFSET=$(jq -r '.storage[0].offset // ""' "$WORK/probe.json")
+if [ "$PROBE_ENTRIES" != "1" ] || [ "$PROBE_SLOT" != "0" ] || [ "$PROBE_OFFSET" != "0" ] || ! grep -q 't_struct(VeHemiLayout)' <<<"$PROBE_TYPE"; then
   err "the probe is not a single VeHemiLayout at slot 0 offset 0"
-  err "  entries=$PN slot=$PS offset=$PO type=$PT"
+  err "  entries=$PROBE_ENTRIES slot=$PROBE_SLOT offset=$PROBE_OFFSET type=$PROBE_TYPE"
   exit 2
 fi
 
-# ---------------------------------------------------------------- GATE 1 ----
-jq -r --arg root "contract"            -f "$CANON" "$WORK/vehemi.json" > "$WORK/vehemi.tsv" 2>"$WORK/e1"
-jq -r --arg root "struct:VeHemiLayout" -f "$CANON" "$WORK/probe.json"  > "$WORK/mirror.tsv" 2>"$WORK/e2"
-NV=$(grep -c . "$WORK/vehemi.tsv"); NM=$(grep -c . "$WORK/mirror.tsv")
-if [ "$NV" -lt "$MIN_MEMBERS" ] || [ "$NM" -lt "$MIN_MEMBERS" ]; then
-  err "VACUOUS INPUT: VeHemi rendered $NV members, mirror rendered $NM (floor $MIN_MEMBERS)."
-  err "The gate COULD NOT RUN. jq stderr:"; sed 's/^/::error::  /' "$WORK/e1" "$WORK/e2" >&2
+# ------------------------------------- CHECK 1: member-by-member comparison ---
+jq -r --arg root "contract"            -f "$CANON" "$WORK/vehemi.json" > "$WORK/vehemi.tsv" 2>"$WORK/jq-vehemi.err"
+jq -r --arg root "struct:VeHemiLayout" -f "$CANON" "$WORK/probe.json"  > "$WORK/mirror.tsv" 2>"$WORK/jq-mirror.err"
+VEHEMI_MEMBERS=$(grep -c . "$WORK/vehemi.tsv"); MIRROR_MEMBERS=$(grep -c . "$WORK/mirror.tsv")
+if [ "$VEHEMI_MEMBERS" -lt "$MIN_MEMBERS" ] || [ "$MIRROR_MEMBERS" -lt "$MIN_MEMBERS" ]; then
+  err "VACUOUS INPUT: VeHemi rendered $VEHEMI_MEMBERS members, mirror rendered $MIRROR_MEMBERS (floor $MIN_MEMBERS)."
+  err "The gate COULD NOT RUN. jq stderr:"; sed 's/^/::error::  /' "$WORK/jq-vehemi.err" "$WORK/jq-mirror.err" >&2
   exit 2
 fi
 if grep -q 'MISSING_TYPE\|DEPTH_LIMIT' "$WORK/vehemi.tsv" "$WORK/mirror.tsv"; then
@@ -140,10 +140,10 @@ if ! diff -u --label "VeHemi (compiled)" --label "VeHemiLayout mirror (compiled)
   err "A mismatch means live reads/writes land on the WRONG SLOT. Fix the struct"
   err "(or, if VeHemi's own layout changed on purpose, update BOTH)."
 else
-  note "OK: VeHemiLayout mirrors all $NV VeHemi state variables (label/slot/offset/type, recursive)"
+  note "OK: VeHemiLayout mirrors all $VEHEMI_MEMBERS VeHemi state variables (label/slot/offset/type, recursive)"
 fi
 
-# ---------------------------------------------------------------- GATE 2 ----
+# -------------------------------------------------- CHECK 2: slot-0 anchors ---
 # Anchors. A perfect struct read from `slot := 1` is just as fatal.
 ANCHORS=0; ANCHOR_BAD=0
 while IFS= read -r hit; do
@@ -163,33 +163,35 @@ else
   note "OK: $ANCHORS slot-0 anchors under src/lib"
 fi
 
-# ---------------------------------------------------------------- GATE 3 ----
+# -------------------------------------- CHECK 3: OZ ERC-7201 _owners offset ---
 # VeHemiCurveLib hardcodes OZ's ERC-7201 ERC721 namespace and the member index
 # of `_owners` inside it. This is the only check on that offset, so a missing OZ
 # source or a value that cannot be extracted fails (`FAILED=1`) rather than
 # dropping the check silently.
-OZ=node_modules/@openzeppelin/contracts-upgradeable/token/ERC721/ERC721Upgradeable.sol
-if [ ! -f "$OZ" ] || ! grep -q 'ERC721StorageLocation\|0x' "$OZ"; then
-  err "GATE 3 has gone vacuous: $OZ is missing or carries no ERC-7201 namespace"
-  err "constant. This is the ONLY check on VeHemiCurveLib's hardcoded _owners"
-  err "offset; it must not pass by being absent. (npm ci not run, or OZ moved?)"
+OZ_ERC721_SOURCE=node_modules/@openzeppelin/contracts-upgradeable/token/ERC721/ERC721Upgradeable.sol
+if [ ! -f "$OZ_ERC721_SOURCE" ] || ! grep -q 'ERC721StorageLocation\|0x' "$OZ_ERC721_SOURCE"; then
+  err "The OZ _owners offset check (CHECK 3) has gone vacuous: $OZ_ERC721_SOURCE is missing or"
+  err "carries no ERC-7201 namespace constant. This is the ONLY check on"
+  err "VeHemiCurveLib's hardcoded _owners offset; it must not pass by being absent."
+  err "(npm ci not run, or OZ moved?)"
   FAILED=1
 else
-  NS=$(grep -oE '0x[0-9a-fA-F]{64}' "$OZ" | head -1)
-  OWNIDX=$(awk '/struct ERC721Storage/,/^    }/' "$OZ" \
+  OZ_NAMESPACE=$(grep -oE '0x[0-9a-fA-F]{64}' "$OZ_ERC721_SOURCE" | head -1)
+  OWNERS_INDEX=$(awk '/struct ERC721Storage/,/^    }/' "$OZ_ERC721_SOURCE" \
            | grep -E '^\s+(mapping|string|uint|address|bool|bytes)' | grep -n '_owners' | cut -d: -f1)
-  if [ -z "$NS" ] || [ -z "$OWNIDX" ]; then
-    err "GATE 3 has gone vacuous: could not extract the ERC-7201 namespace"
-    err "(NS='${NS:-}') or the \`_owners\` member index (OWNIDX='${OWNIDX:-}') from"
-    err "$OZ -- did the struct or the constant get renamed upstream?"
+  if [ -z "$OZ_NAMESPACE" ] || [ -z "$OWNERS_INDEX" ]; then
+    err "The OZ _owners offset check (CHECK 3) has gone vacuous: could not extract"
+    err "the ERC-7201 namespace (OZ_NAMESPACE='${OZ_NAMESPACE:-}') or the \`_owners\`"
+    err "member index (OWNERS_INDEX='${OWNERS_INDEX:-}') from $OZ_ERC721_SOURCE -- did the struct"
+    err "or the constant get renamed upstream?"
     FAILED=1
   else
-    OWNOFF=$((OWNIDX-1))
-    grep -q "$NS" src/lib/VeHemiCurveLib.sol || {
-      err "VeHemiCurveLib's ERC-7201 namespace constant does not match $OZ ($NS)"; FAILED=1; }
-    grep -qE "\+[[:space:]]*$OWNOFF\)" src/lib/VeHemiCurveLib.sol || {
-      err "VeHemiCurveLib hardcodes a different _owners member index; OZ has it at member offset $OWNOFF"; FAILED=1; }
-    [ "$FAILED" -eq 1 ] || note "OK: OZ ERC-7201 _owners pin (namespace $NS, member offset $OWNOFF)"
+    OWNERS_OFFSET=$((OWNERS_INDEX-1))
+    grep -q "$OZ_NAMESPACE" src/lib/VeHemiCurveLib.sol || {
+      err "VeHemiCurveLib's ERC-7201 namespace constant does not match $OZ_ERC721_SOURCE ($OZ_NAMESPACE)"; FAILED=1; }
+    grep -qE "\+[[:space:]]*$OWNERS_OFFSET\)" src/lib/VeHemiCurveLib.sol || {
+      err "VeHemiCurveLib hardcodes a different _owners member index; OZ has it at member offset $OWNERS_OFFSET"; FAILED=1; }
+    [ "$FAILED" -eq 1 ] || note "OK: OZ ERC-7201 _owners offset (namespace $OZ_NAMESPACE, member offset $OWNERS_OFFSET)"
   fi
 fi
 

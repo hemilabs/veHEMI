@@ -27,9 +27,9 @@ pragma solidity ^0.8.29;
 import "./TwinOracle.sol";
 
 contract FlatSubcurveOrderingTest is TwinOracle {
-    address internal constant NT   = address(0x17A1);  // non-transferable holder
-    address internal constant FRF  = address(0x50FF);  // forfeitable holder
-    address internal constant PLN  = address(0x9141);  // an ordinary transferable lock
+    address internal constant NONTRANSFERABLE_HOLDER = address(0x17A1);
+    address internal constant FORFEITABLE_HOLDER     = address(0x50FF);
+    address internal constant PLAIN_HOLDER           = address(0x9141);  // an ordinary transferable lock
 
     uint256 internal constant AMT = 1000 ether;
     uint256 internal constant N   = 6;
@@ -59,8 +59,8 @@ contract FlatSubcurveOrderingTest is TwinOracle {
     ///         on a bucket boundary: `locked > total` by EXACTLY
     ///         `slope * SIX_DAYS/2`.
     function test_S1_minimal_subcurve_ordering_break() public {
-        uint256 i = spawn(true, NT, AMT, N, Cadence.NEVER, true, false);
-        vm.prank(NT);
+        uint256 i = spawn(true, NONTRANSFERABLE_HOLDER, AMT, N, Cadence.NEVER, true, false);
+        vm.prank(NONTRANSFERABLE_HOLDER);
         X.ve.enableAutoRelock(_id(i));
         _assertMean(_id(i), AMT, N);
 
@@ -79,14 +79,14 @@ contract FlatSubcurveOrderingTest is TwinOracle {
     ///         phase, to the wei -- and zero from the half-bucket onward.
     function test_S2_twelve_phases_excess_is_the_closed_form() public {
         uint256 worst;
-        uint256 redPhases;
+        uint256 excessPhases;
         for (uint256 p; p < 12; ++p) {
             uint256 snap = vm.snapshotState();
             uint256 off = (p * SIX_DAYS) / 12;
             vm.warp(t0 + off);
             vm.roll(block.number + 1 + p);
-            uint256 i = spawn(true, NT, AMT, N, Cadence.NEVER, true, false);
-            vm.prank(NT);
+            uint256 i = spawn(true, NONTRANSFERABLE_HOLDER, AMT, N, Cadence.NEVER, true, false);
+            vm.prank(NONTRANSFERABLE_HOLDER);
             X.ve.enableAutoRelock(_id(i));
             _assertMean(_id(i), AMT, N);
 
@@ -94,28 +94,28 @@ contract FlatSubcurveOrderingTest is TwinOracle {
             uint256 locked = X.ve.nonTransferableTotalVeHemiSupply();
             uint256 excess = locked > total ? locked - total : 0;
             assertEq(excess, _predictedExcess(AMT, off), "S2 excess != the closed form");
-            if (excess > 0) { redPhases += 1; if (excess > worst) worst = excess; }
+            if (excess > 0) { excessPhases += 1; if (excess > worst) worst = excess; }
             vm.revertToState(snap);
         }
-        assertEq(redPhases, 6, "S2 excess outside the first half-bucket");
+        assertEq(excessPhases, 6, "S2 excess outside the first half-bucket");
         assertLe(worst, slopeOf(AMT) * (SIX_DAYS / 2), "S2 excess exceeded slope * SIX_DAYS/2");
     }
 
     // ==================================================================== S4
     /// @notice FORFEITABLE. The same law on the outer ordering; the INNER
     ///         ordering (forfeitable <= locked) is exact.
-    function test_S4_forfeitable_flat_position_orders() public {
-        uint256 i = spawn(true, FRF, AMT, N, Cadence.NEVER, true, true);
-        vm.prank(FRF);
+    function test_S4_forfeitable_flat_position_excess_is_the_closed_form() public {
+        uint256 i = spawn(true, FORFEITABLE_HOLDER, AMT, N, Cadence.NEVER, true, true);
+        vm.prank(FORFEITABLE_HOLDER);
         X.ve.enableAutoRelock(_id(i));
         _assertMean(_id(i), AMT, N);
-        uint256 total = X.ve.totalVeHemiSupply();
-        uint256 lk    = X.ve.nonTransferableTotalVeHemiSupply();
-        uint256 ff    = X.ve.forfeitableTotalVeHemiSupply();
-        assertEq(ff, lk, "S4 a lone forfeitable position: forfeitable != locked");
-        uint256 pe = _predictedExcess(AMT, _off());
-        assertLe(lk, total + pe, "S4 locked > total + slack");
-        assertEq(lk > total ? lk - total : 0, pe, "S4 forfeitable excess != the closed form");
+        uint256 total       = X.ve.totalVeHemiSupply();
+        uint256 locked      = X.ve.nonTransferableTotalVeHemiSupply();
+        uint256 forfeitable = X.ve.forfeitableTotalVeHemiSupply();
+        assertEq(forfeitable, locked, "S4 a lone forfeitable position: forfeitable != locked");
+        uint256 predictedExcess = _predictedExcess(AMT, _off());
+        assertLe(locked, total + predictedExcess, "S4 locked > total + slack");
+        assertEq(locked > total ? locked - total : 0, predictedExcess, "S4 forfeitable excess != the closed form");
     }
 
     // ==================================================================== S5
@@ -123,9 +123,9 @@ contract FlatSubcurveOrderingTest is TwinOracle {
     ///         non-transferable one does not, so the law can only break by the
     ///         flat position's own half-bucket slack.
     function test_S5_mixed_universe_orders() public {
-        spawn(true, PLN, AMT * 3, N + 4, Cadence.NEVER, false, false);
-        uint256 i = spawn(true, NT, AMT, N, Cadence.NEVER, true, false);
-        vm.prank(NT);
+        spawn(true, PLAIN_HOLDER, AMT * 3, N + 4, Cadence.NEVER, false, false);
+        uint256 i = spawn(true, NONTRANSFERABLE_HOLDER, AMT, N, Cadence.NEVER, true, false);
+        vm.prank(NONTRANSFERABLE_HOLDER);
         X.ve.enableAutoRelock(_id(i));
         _assertMean(_id(i), AMT, N);
         assertLe(X.ve.nonTransferableTotalVeHemiSupply(),
@@ -134,31 +134,31 @@ contract FlatSubcurveOrderingTest is TwinOracle {
     }
 
     // ==================================================================== S7
-    /// @notice THE WINDOW IS ONE HALF-BUCKET AND IT HEALS. Sample every
+    /// @notice THE EXCESS LASTS AT MOST HALF A BUCKET AND HEALS. Sample every
     ///         3 hours for two full buckets after the enable: the ordering is
     ///         violated only within SIX_DAYS/2 of the enable, by at most half a
     ///         bucket of the position's own slope.
-    function test_S7_the_window_is_at_most_one_half_bucket() public {
-        uint256 i = spawn(true, NT, AMT, N, Cadence.NEVER, true, false);
-        vm.prank(NT);
+    function test_S7_excess_lasts_at_most_half_a_bucket() public {
+        uint256 i = spawn(true, NONTRANSFERABLE_HOLDER, AMT, N, Cadence.NEVER, true, false);
+        vm.prank(NONTRANSFERABLE_HOLDER);
         X.ve.enableAutoRelock(_id(i));
         _assertMean(_id(i), AMT, N);
         uint256 enableAt = block.timestamp;
-        uint256 lastRed;
-        bool sawRed;
+        uint256 lastExcessAt;
+        bool sawExcess;
         uint256 worstWei;
         for (uint256 t = enableAt; t <= enableAt + 2 * SIX_DAYS; t += 10_800) {
             vm.warp(t);
-            uint256 lk2 = X.ve.nonTransferableTotalVeHemiSupply();
-            uint256 tt2 = X.ve.totalVeHemiSupply();
-            if (lk2 > tt2) {
-                sawRed = true;
-                lastRed = t;
-                if (lk2 - tt2 > worstWei) worstWei = lk2 - tt2;
+            uint256 locked = X.ve.nonTransferableTotalVeHemiSupply();
+            uint256 total = X.ve.totalVeHemiSupply();
+            if (locked > total) {
+                sawExcess = true;
+                lastExcessAt = t;
+                if (locked - total > worstWei) worstWei = locked - total;
             }
         }
-        assertTrue(sawRed, "S7 no excess observed: the sweep is blind");
-        assertLe(lastRed - enableAt, SIX_DAYS / 2, "S7 the excess outlived the half-bucket window");
+        assertTrue(sawExcess, "S7 no excess observed: the sweep is blind");
+        assertLe(lastExcessAt - enableAt, SIX_DAYS / 2, "S7 the excess outlived the first half-bucket");
         assertLe(worstWei, slopeOf(AMT) * (SIX_DAYS / 2), "S7 excess exceeded slope * SIX_DAYS/2");
     }
 }

@@ -30,13 +30,13 @@ if (!RPC_URL) {
     process.exit(1);
 }
 
-const VE_HEMI = "0x371d3718D5b7F75EAb050FAe6Da7DF3092031c89";
-const VVD = "0xBF5b2f370370494B8A4575962512dd3ea7c29e2d";
+const VEHEMI_PROXY = "0x371d3718D5b7F75EAb050FAe6Da7DF3092031c89";
+const VVD_PROXY = "0xBF5b2f370370494B8A4575962512dd3ea7c29e2d";
 const MULTICALL3 = "0xcA11bde05977b3631167028862bE2a173976CA11";
 
 // The import's gas figure plus Hemi's limits, named so the plan's arithmetic
 // is visible.
-const GAS_PER_ID = 165_000; // ~165k gas/iter worst case, measured before the auto-relock upgrade's per-booking stamp and autoRelockRemaining reads; size each Safe tx with eth_estimateGas
+const GAS_PER_ID = 165_000; // ~165k gas/iter worst case, measured before the auto-relock upgrade's booking stamp and autoRelockRemaining reads; size each Safe tx with eth_estimateGas
 const BLOCK_GAS_LIMIT = 30_000_000; // Hemi
 const PER_TX_CEILING = 29_930_000; // measured Hemi per-tx ceiling
 const SAFE_BASE_GAS = 21_000 + 9_000; // 21k intrinsic + ~3k per ECDSA check, 3 signatures (today's threshold)
@@ -44,7 +44,7 @@ const CALLDATA_GAS_PER_ID = 32 * 16; // one uint256 of non-zero calldata, worst 
 const VVD_DEPLOY_BLOCK = 2_527_716; // deployments/hemi/VeHemiVoteDelegation_Proxy.json receipt.blockNumber
 const AUTO_DELEGATE_SET_TOPIC = id("AutoDelegateSet(address,address,address)");
 
-const VE_ABI = [
+const VEHEMI_ABI = [
     "function nextTokenId() view returns (uint256)",
     "function ownerOf(uint256) view returns (address)",
 ];
@@ -52,26 +52,27 @@ const VVD_ABI = [
     "function delegation(uint256) view returns (tuple(address delegatee,uint48 end,uint96 bias,uint96 amount,uint64 slope))",
     "function autoDelegate(address) view returns (address)",
 ];
-const MC3_ABI = [
+const MULTICALL3_ABI = [
     "function aggregate3(tuple(address target, bool allowFailure, bytes callData)[] calls) payable returns (tuple(bool success, bytes returnData)[])",
 ];
 
 async function main() {
     const provider = new JsonRpcProvider(RPC_URL, 43111, { staticNetwork: true });
-    const mc = new Contract(MULTICALL3, MC3_ABI, provider);
-    const veI = new Interface(VE_ABI);
-    const vdI = new Interface(VVD_ABI);
-    const veHemi = new Contract(VE_HEMI, VE_ABI, provider);
+    const multicall = new Contract(MULTICALL3, MULTICALL3_ABI, provider);
+    const veHemiIface = new Interface(VEHEMI_ABI);
+    const vvdIface = new Interface(VVD_ABI);
+    const veHemi = new Contract(VEHEMI_PROXY, VEHEMI_ABI, provider);
 
-    // Every read below is pinned to this block, the one the census prints.
+    // Every read below is pinned to this block, the block printed in the COUNTS
+    // heading.
     const block = await provider.getBlockNumber();
     const nextTokenId = Number(await veHemi.nextTokenId({ blockTag: block }));
     console.log(`Hemi block ${block} — nextTokenId ${nextTokenId}`);
 
-    const agg = async (calls: any[]) => {
+    const aggregate = async (calls: any[]) => {
         for (let a = 0; a < 8; a++) {
             try {
-                return await mc.aggregate3.staticCall(calls, { blockTag: block });
+                return await multicall.aggregate3.staticCall(calls, { blockTag: block });
             } catch (e) {
                 if (a === 7) throw e;
                 await new Promise((r) => setTimeout(r, 500 * 2 ** a));
@@ -81,38 +82,38 @@ async function main() {
     };
 
     const liveDelegated: number[] = [];
-    const staleDelegated: number[] = [];
+    const burnedDelegated: number[] = [];
     const owners = new Set<string>();
     let live = 0;
 
-    const B = 300;
-    for (let i = 1; i < nextTokenId; i += B) {
-        const end = Math.min(i + B, nextTokenId);
+    const IDS_PER_SCAN_CALL = 300;
+    for (let i = 1; i < nextTokenId; i += IDS_PER_SCAN_CALL) {
+        const end = Math.min(i + IDS_PER_SCAN_CALL, nextTokenId);
         const calls: any[] = [];
         for (let id = i; id < end; id++) {
-            calls.push({ target: VE_HEMI, allowFailure: true, callData: veI.encodeFunctionData("ownerOf", [id]) });
-            calls.push({ target: VVD, allowFailure: true, callData: vdI.encodeFunctionData("delegation", [id]) });
+            calls.push({ target: VEHEMI_PROXY, allowFailure: true, callData: veHemiIface.encodeFunctionData("ownerOf", [id]) });
+            calls.push({ target: VVD_PROXY, allowFailure: true, callData: vvdIface.encodeFunctionData("delegation", [id]) });
         }
-        const res: any[] = await agg(calls);
+        const res: any[] = await aggregate(calls);
         for (let k = 0; k < end - i; k++) {
             const id = i + k;
-            const ro = res[2 * k];
-            const rd = res[2 * k + 1];
-            const isLive = ro.success && ro.returnData !== "0x";
+            const ownerResult = res[2 * k];
+            const delegationResult = res[2 * k + 1];
+            const isLive = ownerResult.success && ownerResult.returnData !== "0x";
             if (isLive) {
                 live++;
-                owners.add((veI.decodeFunctionResult("ownerOf", ro.returnData)[0] as string).toLowerCase());
+                owners.add((veHemiIface.decodeFunctionResult("ownerOf", ownerResult.returnData)[0] as string).toLowerCase());
             }
-            if (rd.success && rd.returnData !== "0x") {
-                const d: any = vdI.decodeFunctionResult("delegation", rd.returnData)[0];
-                if (d[0] !== "0x0000000000000000000000000000000000000000") {
-                    (isLive ? liveDelegated : staleDelegated).push(id);
+            if (delegationResult.success && delegationResult.returnData !== "0x") {
+                const record: any = vvdIface.decodeFunctionResult("delegation", delegationResult.returnData)[0];
+                if (record[0] !== "0x0000000000000000000000000000000000000000") {
+                    (isLive ? liveDelegated : burnedDelegated).push(id);
                 }
             }
         }
     }
 
-    // autoDelegate census (the auto-delegate import). `setAutoDelegate` is permissionless, so
+    // autoDelegate counts (the auto-delegate import). `setAutoDelegate` is permissionless, so
     // scan every address that ever emitted AutoDelegateSet, not only live owners.
     const liveOwners = owners.size;
     const scanned = new Set<string>(owners);
@@ -121,7 +122,7 @@ async function main() {
         const e = Math.min(b + step - 1, block);
         let logs;
         try {
-            logs = await provider.getLogs({ address: VVD, topics: [AUTO_DELEGATE_SET_TOPIC], fromBlock: b, toBlock: e });
+            logs = await provider.getLogs({ address: VVD_PROXY, topics: [AUTO_DELEGATE_SET_TOPIC], fromBlock: b, toBlock: e });
         } catch (err) {
             if (step > 1_000) {
                 step = Math.max(1_000, Math.floor(step / 4));
@@ -133,21 +134,21 @@ async function main() {
         for (const l of logs) scanned.add(("0x" + l.topics[1].slice(26)).toLowerCase());
         b = e + 1;
     }
-    let autoSet = 0;
-    const ownerList = [...scanned];
-    for (let i = 0; i < ownerList.length; i += 500) {
-        const slice = ownerList.slice(i, i + 500);
-        const res: any[] = await agg(
+    let addressesWithAutoDelegate = 0;
+    const scannedAddresses = [...scanned];
+    for (let i = 0; i < scannedAddresses.length; i += 500) {
+        const slice = scannedAddresses.slice(i, i + 500);
+        const res: any[] = await aggregate(
             slice.map((o) => ({
-                target: VVD,
+                target: VVD_PROXY,
                 allowFailure: true,
-                callData: vdI.encodeFunctionData("autoDelegate", [o]),
+                callData: vvdIface.encodeFunctionData("autoDelegate", [o]),
             }))
         );
         for (const r of res) {
             if (r.success && r.returnData !== "0x") {
-                const a = vdI.decodeFunctionResult("autoDelegate", r.returnData)[0] as string;
-                if (a !== "0x0000000000000000000000000000000000000000") autoSet++;
+                const autoDelegateValue = vvdIface.decodeFunctionResult("autoDelegate", r.returnData)[0] as string;
+                if (autoDelegateValue !== "0x0000000000000000000000000000000000000000") addressesWithAutoDelegate++;
             }
         }
     }
@@ -161,23 +162,23 @@ async function main() {
     const idsPerBatch = process.env.IDS_PER_BATCH === undefined ? Math.min(150, fitIds) : Number(process.env.IDS_PER_BATCH);
     if (!Number.isInteger(idsPerBatch) || idsPerBatch < 1) throw new Error("IDS_PER_BATCH must be a positive integer");
     if (idsPerBatch > fitIds) console.warn(`WARNING: IDS_PER_BATCH=${idsPerBatch} is above the ${fitIds} ids that fit in one Safe transaction`);
-    const importTxs = Math.ceil(liveDelegated.length / idsPerBatch);
-    const autoTxs = autoSet === 0 ? 0 : Math.ceil(autoSet / idsPerBatch);
+    const delegationImportTxs = Math.ceil(liveDelegated.length / idsPerBatch);
+    const autoDelegateImportTxs = addressesWithAutoDelegate === 0 ? 0 : Math.ceil(addressesWithAutoDelegate / idsPerBatch);
     const forfeitTxs = 2; // updateForfeitAdmin(address(0)) first; the previous admin restored last
     const tailTxs = 2; // setTrustedAdapter; then MultiSend[(late imports), finalizeMigration, updateVoteDelegation]
-    const totalTxs = forfeitTxs + importTxs + autoTxs + tailTxs;
+    const totalTxs = forfeitTxs + delegationImportTxs + autoDelegateImportTxs + tailTxs;
     const importGas = BigInt(liveDelegated.length) * BigInt(GAS_PER_ID);
 
     console.log(`
-=== CENSUS (read-only, block ${block}) ===
+=== COUNTS (read-only, block ${block}) ===
   ids ever minted                  ${nextTokenId - 1}
   live positions                   ${live}
   live positions WITH a delegation  ${liveDelegated.length}  (${((100 * liveDelegated.length) / live).toFixed(1)}% of live)
-  STALE delegation records (burned) ${staleDelegated.length}  <-- records left on burned ids; the import skips them
+  delegation records on burned ids  ${burnedDelegated.length}  <-- the import skips them
   distinct owners of live positions ${liveOwners}
   AutoDelegateSet logs since deploy ${autoDelegateLogs}  (blocks ${VVD_DEPLOY_BLOCK} .. ${block})
-  addresses scanned for autoDelegate ${ownerList.length}  (live owners and every AutoDelegateSet emitter)
-  addresses with autoDelegate set   ${autoSet}${autoSet === 0 ? "  <-- the auto-delegate import is a NO-OP today" : ""}
+  addresses scanned for autoDelegate ${scannedAddresses.length}  (live owners and every AutoDelegateSet emitter)
+  addresses with autoDelegate set   ${addressesWithAutoDelegate}${addressesWithAutoDelegate === 0 ? "  <-- the auto-delegate import is a NO-OP today" : ""}
 
 === WHY THE IMPORTS CANNOT BE ONE MULTISEND ===
   assumed import cost               ${GAS_PER_ID.toLocaleString()} gas per imported id
@@ -186,16 +187,16 @@ async function main() {
   Safe overhead (3 signatures)      ${SAFE_BASE_GAS.toLocaleString()}
   ids that fit in ONE Safe tx       ${fitIds}  (after three 63/64 retentions; the plan uses ${idsPerBatch})
   ids that MUST be imported         ${liveDelegated.length}
-  => minimum Safe transactions      ${importTxs} for the delegation imports alone
+  => minimum Safe transactions      ${delegationImportTxs} for the delegation imports alone
   total import gas                  ${importGas.toLocaleString()} (~${Math.ceil(Number(importGas) / BLOCK_GAS_LIMIT)} full Hemi blocks)
 
 === THE SEQUENCE (${totalTxs} Safe transactions, ${idsPerBatch} ids per import tx) ===
-  Safe tx   1         veHemi.updateForfeitAdmin(address(0))   <-- FIRST: no forfeit in the window
-  Safe tx   2 .. ${String(1 + importTxs).padStart(3)}   importDelegationsFromLegacy(oldProxy, ids[..]) — idempotent, resumable
+  Safe tx   1         veHemi.updateForfeitAdmin(address(0))   <-- FIRST: no forfeit in the import window
+  Safe tx   2 .. ${String(1 + delegationImportTxs).padStart(3)}   importDelegationsFromLegacy(oldProxy, ids[..]) — idempotent, resumable
 ${
-        autoTxs === 0
+        autoDelegateImportTxs === 0
             ? "  (importAutoDelegatesFromLegacy: SKIPPED — no scanned address has autoDelegate set)"
-            : `  Safe tx ${String(2 + importTxs).padStart(3)} .. ${String(1 + importTxs + autoTxs).padStart(3)}   importAutoDelegatesFromLegacy(oldProxy, owners[..])`
+            : `  Safe tx ${String(2 + delegationImportTxs).padStart(3)} .. ${String(1 + delegationImportTxs + autoDelegateImportTxs).padStart(3)}   importAutoDelegatesFromLegacy(oldProxy, owners[..])`
     }
   Safe tx ${String(totalTxs - 2).padStart(3)}         setTrustedAdapter(adapter)
   Safe tx ${String(totalTxs - 1).padStart(3)}         MultiSend[ (late imports, optional), finalizeMigration(), veHemi.updateVoteDelegation(newProxy) ]  <-- the swap
@@ -216,14 +217,14 @@ ${
   * NOT ATOMIC. ${totalTxs} separate Safe quorums. Between the first import and
     the swap the NEW proxy is partially populated and the OLD one is still
     authoritative. Only the swap is a state change voters see.
-  * Import ONLY the ${liveDelegated.length} LIVE ids. The ${staleDelegated.length} stale records belong to burned
-    positions; importDelegationsFromLegacy skips them (lock.amount == 0) but you
+  * Import ONLY the ${liveDelegated.length} LIVE ids. The ${burnedDelegated.length} delegation records on burned
+    ids are skipped by importDelegationsFromLegacy (lock.amount == 0), but you
     still pay calldata and two STATICCALLs for each.
   * A GOVERNANCE FREEZE MUST SPAN ALL ${totalTxs} TRANSACTIONS AND THE RECONCILE.
-    Any Aragon proposal snapshotted inside the window reads, on the new contract,
-    only what the new contract had booked by its snapshot (the imports so far;
-    after the swap, stale records until the reconcile), and that is
-    unrecoverable (forward-only checkpoints).
+    Any Aragon proposal snapshotted from the first import until the reconcile is
+    complete reads, on the new contract, only what the new contract had booked by
+    its snapshot (the imports so far; after the swap, stale records until the
+    reconcile), and that is unrecoverable (forward-only checkpoints).
   * Every import tx is idempotent (delegations[id].delegatee != 0 -> continue),
     so a failed batch can simply be re-sent.
 `);

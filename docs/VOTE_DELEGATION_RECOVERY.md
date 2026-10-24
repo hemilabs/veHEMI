@@ -6,7 +6,7 @@ that is irreparably broken; a routine implementation change is a proxy upgrade,
 which keeps all storage (for example `docs/AUTO_RELOCK_UPGRADE.md`). This
 document is the procedure for the replacement.
 `scripts/plan-legacy-migration.ts` counts the live chain (read-only) and prints
-its Safe transactions.
+its Safe transactions: the plan.
 
 | Contract | Address |
 | --- | --- |
@@ -19,14 +19,14 @@ its Safe transactions.
 The swap is one storage write. It migrates nothing: every delegation record,
 every `autoDelegate`, the checkpoint history, the slope buckets, the EIP-712
 nonces and `trustedAdapter` stay in the OLD module, and the new one starts
-empty. The new module is therefore seeded from the OLD one before the swap
+empty. The new module is therefore populated from the OLD one before the swap
 (section 3), and the swap is followed by a reconcile (section 5).
 
 - **History.** The imports build forward-only checkpoints, dated
   `block.timestamp + 1` of each import on a freshly deployed, initialized
   module. `getPastVotes` on the new module for a time before an import returns
   only what was imported by then, so a proposal snapshotted before or during the
-  window reads too little there.
+  import window (from the first import to the swap) reads too little there.
 - **Aragon relay.** The adapter's event relay stops until `setTrustedAdapter` is
   called on the new module. The adapter reads `veHemi.voteDelegation()` on every
   call, so after the swap its `delegate(address)` acts on the new module.
@@ -40,26 +40,27 @@ empty. The new module is therefore seeded from the OLD one before the swap
 
 - **Governance freeze.** No Aragon proposal may be snapshotted from the first
   import until the reconcile (section 5) is complete, and none may be in flight
-  when the window opens.
+  when the import window opens.
 - **Holder freeze.** Announce that holders should not arm, disarm, top up,
   extend, transfer or re-delegate positions, or change their `autoDelegate`,
-  from the first import until the swap. Nothing enforces this: the arming guard
-  probes the module VeHemi points at, which is still the OLD one. Every such
+  from the first import until the swap. Nothing enforces this: the window probe
+  (VeHemi's 50,000-gas `legacyDatingActive()` call before arming a position)
+  reads the module VeHemi points at, which is still the OLD one. Every such
   change is reconciled after the swap, and the fewer there are, the shorter the
   reconcile.
 - **Forfeit disabled.** The first Safe transaction is
   `VeHemi.updateForfeitAdmin(address(0))`; record the admin it replaces, which
-  is restored after the swap. A position forfeited in the window keeps its
-  decaying imported record on the new module, and no call can remove it (the id
-  is burned: `delegate` reverts, and `retireStrandedFlatTerm` refuses a decaying
-  record).
+  is restored after the swap. A position forfeited in the import window keeps
+  its decaying imported record on the new module, and no call can remove it (the
+  id is burned: `delegate` reverts, and `retireStrandedFlatTerm` refuses a
+  decaying record).
 - **The new module.** Deploy the new VVD proxy and implementation, constructed
   with the VeHemi proxy address and initialized in the deploy (`initialize()`,
   as `deploy/01_vote_delegation.ts` does). Uninitialized, its first booking
   opens an upgrade-hour window, and every booking until the next hour boundary
   is dated at that boundary. Verify both on the explorer.
 
-## 3. Seeding (Safe transactions, in order)
+## 3. Imports (Safe transactions, in order)
 
 1. `VeHemi.updateForfeitAdmin(address(0))` (section 2).
 2. `newProxy.importDelegationsFromLegacy(oldProxy, ids)`, in batches, over every
@@ -99,9 +100,9 @@ empty. The new module is therefore seeded from the OLD one before the swap
 ## 4. The forfeit checks (before the swap)
 
 - **Events.** `VeHemi.forfeitAdmin()` returns `address(0)`. If VeHemi emitted
-  any `ForfeitAdminUpdated` after the one from Safe transaction 1, each non-zero
-  `newForfeitAdmin` in those logs is an admin appointed in the window. If
-  `forfeitAdmin()` is not `address(0)`, first send
+  any `ForfeitAdminUpdated` after the one from Safe transaction 1 (section 3,
+  step 1), each non-zero `newForfeitAdmin` in those logs is an admin appointed
+  since Safe transaction 1. If `forfeitAdmin()` is not `address(0)`, first send
   `VeHemi.updateForfeitAdmin(address(0))` (an admin in place can forfeit after
   these checks, up to the swap). Then treat as a forfeit each `Withdraw` that
   VeHemi emitted after the deployment of the module being checked, while its
@@ -115,13 +116,13 @@ empty. The new module is therefore seeded from the OLD one before the swap
   record on the new module (slope above 0) whose `end` is after the current
   time. A record's `end` is its lock's end when it was booked, and `withdraw`
   requires the lock to have ended, so a withdrawn id's record has always ended.
-  An unended decaying record on a burned id is a forfeit in the window. (A flat
-  record on a burned id is removed by section 5, step 1.)
+  An unended decaying record on a burned id is a forfeit in the import window.
+  (A flat record on a burned id is removed by section 5, step 1.)
 
 If either check finds a forfeit, do not swap: with `VeHemi.forfeitAdmin()` at
-`address(0)`, deploy a fresh module and seed it again from step 2 (the import
-skips burned ids; the fresh module's Events check starts at its deployment, so
-a forfeit found here is not counted again).
+`address(0)`, deploy a fresh module and import into it again from section 3,
+step 2 (the import skips burned ids; the fresh module's Events check starts at
+its deployment, so a forfeit found here is not counted again).
 
 ## 5. Reconcile (after the swap)
 
@@ -201,16 +202,16 @@ amount and slope.
     nothing (`delegate` reverts `CanNotDelegateExpiredLocks`; at most its last
     hour of weight stays where it is);
   - where the OLD module holds no record at S (a refused armed-transfer move in
-    the window removed it, so the position was undelegated there), the owner
-    chooses a delegatee; until then, a record imported before that transfer
-    keeps counting the position for the previous owner's delegatee;
+    the import window removed it, so the position was undelegated there), the
+    owner chooses a delegatee; until then, a record imported before that
+    transfer keeps counting the position for the previous owner's delegatee;
   - an id that changed owner after the swap without a booking (a transfer of an
     unarmed id whose move was refused): the new owner chooses.
 
 Burned ids: after step 1, a burned id's record must have ended or be gone. An
-unended decaying record on a burned id is a forfeit in the window that section 4
-missed; its weight stays with that delegatee until its end, and no call can
-remove it.
+unended decaying record on a burned id is a forfeit in the import window that
+section 4 missed; its weight stays with that delegatee until its end, and no
+call can remove it.
 
 ## 6. After the reconcile
 

@@ -8,9 +8,9 @@ import "../AutoRelockTestBase.sol";
 /// @notice An attacker who freezes a position flat must not hold more weight
 ///         than the lock-up it is still serving (beyond the bucket mean's
 ///         half-bucket slack), must not reach a one-second exit, must not move
-///         its end or its forfeit window, must not out-last a manual twin by
-///         cycling, and cannot keep an abandoned flat position in the
-///         denominator for ever.
+///         its end or its forfeit window, must not out-last an untouched
+///         control position by cycling, and cannot keep an abandoned flat
+///         position in the denominator for ever.
 ///         R is derived from `lock.end` (whole buckets, `R >= 2 * SIX_DAYS`)
 ///         and the flat level is the bucket mean, `slope * (R - SIX_DAYS/2)`.
 contract FlatPositionEconomicsTest is AutoRelockTestBase {
@@ -22,24 +22,26 @@ contract FlatPositionEconomicsTest is AutoRelockTestBase {
         uint256 amt = 1_000 ether;
         (uint256 id, , ) = createLock(attacker, amt, 2 * 365 days);
         enable(attacker, id);
-        uint256 s = slopeOf(amt);
+        uint256 slope = slopeOf(amt);
 
         uint256[8] memory phases = [uint256(0), 1, SIX_DAYS / 4, HALF_BUCKET - 1, HALF_BUCKET, HALF_BUCKET + 1, (3 * SIX_DAYS) / 4, SIX_DAYS - 1];
         uint256 worst;
         for (uint256 i = 0; i < phases.length; ++i) {
             warpToPhase(phases[i]);
-            uint256 w = veHemi.balanceOfNFT(id);
+            uint256 flatWeight = veHemi.balanceOfNFT(id);
             uint256 lockup = residualLockup(id);
             // THE VOTE-ESCROW LAW, with the bucket mean's half-bucket slack.
-            assertLe(w, s * lockup + s * HALF_BUCKET, "escrow-law excess exceeds HALF a bucket of slope");
+            assertLe(flatWeight, slope * lockup + slope * HALF_BUCKET, "escrow-law excess exceeds HALF a bucket of slope");
             // and the position is never under-paid by more than half a bucket
             // either (the other half of the bucket mean's minimax).
-            assertGe(w + s * HALF_BUCKET, s * lockup, "flat level below the twin by more than half a bucket");
-            if (w > s * lockup && w - s * lockup > worst) worst = w - s * lockup;
+            assertGe(
+                flatWeight + slope * HALF_BUCKET, slope * lockup, "flat level below slope * lockup by more than half a bucket"
+            );
+            if (flatWeight > slope * lockup && flatWeight - slope * lockup > worst) worst = flatWeight - slope * lockup;
         }
         // NON-VACUITY: the bound is actually approached, so `assertLe` above
         // is not passing on a degenerate zero excess.
-        assertGt(worst, s * (HALF_BUCKET - 2), "bound never approached -- body is vacuous");
+        assertGt(worst, slope * (HALF_BUCKET - 2), "bound never approached -- body is vacuous");
     }
 
     // ------------------------------------------------------------------
@@ -60,15 +62,15 @@ contract FlatPositionEconomicsTest is AutoRelockTestBase {
         assertGe(veHemi.getLockedBalance(id).end, block.timestamp + SIX_DAYS + 1, "restored end one second away");
     }
 
-    /// @dev The guard itself, directly: a position with exactly ONE bucket of
-    ///      term left is REFUSED. This is the line that makes A2 true.
+    /// @dev A2b — the guard itself, directly: a position with exactly ONE
+    ///      bucket of term left is REFUSED. This is the line that makes A2 true.
     function test_A2b_enableRefusesTheOneBucketHorizon() public {
         (uint256 id, , uint256 end) = createLock(attacker, 1_000 ether, 2 * SIX_DAYS);
         // walk forward until exactly one bucket of term remains from grid(now)
         while (end - (block.timestamp / SIX_DAYS) * SIX_DAYS > SIX_DAYS) {
             vm.warp(block.timestamp + SIX_DAYS);
         }
-        assertEq(end - (block.timestamp / SIX_DAYS) * SIX_DAYS, SIX_DAYS, "probe did not reach N=1");
+        assertEq(end - (block.timestamp / SIX_DAYS) * SIX_DAYS, SIX_DAYS, "premise: the walk did not reach N=1");
         vm.prank(attacker);
         vm.expectRevert(VeHemi.AutoRelockDurationTooShort.selector);
         veHemi.enableAutoRelock(id);
@@ -99,63 +101,65 @@ contract FlatPositionEconomicsTest is AutoRelockTestBase {
         hemi.mint(admin, 1_000 ether);
         hemi.approve(address(veHemi), type(uint256).max);
         uint256 id = veHemi.createLockFor(1_000 ether, 2 * 365 days, victim, false, true);
-        uint256 ta = veHemi.transferableAfter(id);
+        uint256 transferableAfter = veHemi.transferableAfter(id);
         enable(victim, id);
-        assertEq(veHemi.effectiveLockEnd(id), ta, "freeze moved the forfeit edge");
+        assertEq(veHemi.effectiveLockEnd(id), transferableAfter, "freeze moved the forfeit edge");
 
-        // 19 probes across the window: the admin can always claw back.
+        // 19 forfeit instants across the window: the admin can always claw back.
         uint256 t0 = block.timestamp;
         for (uint256 k = 1; k <= 19; ++k) {
-            uint256 probe = t0 + ((ta - t0) * k) / 20;
+            uint256 forfeitAt = t0 + ((transferableAfter - t0) * k) / 20;
             uint256 snap = vm.snapshotState();
-            vm.warp(probe);
+            vm.warp(forfeitAt);
             veHemi.forfeit(id); // must not revert
             vm.revertToState(snap);
         }
-        // and at `ta` itself the window is SHUT, not open.
-        vm.warp(ta);
+        // and at `transferableAfter` itself the window is SHUT, not open.
+        vm.warp(transferableAfter);
         vm.expectRevert(VeHemi.ForfeitWindowExpired.selector);
         veHemi.forfeit(id);
     }
 
     // ------------------------------------------------------------------
-    // A5 — NO RATCHET, against a MANUAL TWIN. Repeated enable/disable
-    //      cycling must never buy a later `end` than the twin holds.
+    // A5 — NO RATCHET, against an untouched control position. Repeated
+    //      enable/disable cycling must never buy a later `end` than the
+    //      control holds.
     // ------------------------------------------------------------------
-    function test_A5_cyclingNeverBeatsTheManualTwin() public {
-        (uint256 a, , ) = createLock(attacker, 1_000 ether, 2 * 365 days);
-        (uint256 b, , ) = createLock(victim, 1_000 ether, 2 * 365 days);
-        uint256 startEnd = veHemi.getLockedBalance(a).end;
+    function test_A5_enableDisableCyclingNeverRaisesTheEnd() public {
+        (uint256 cycledId, , ) = createLock(attacker, 1_000 ether, 2 * 365 days);
+        (uint256 controlId, , ) = createLock(victim, 1_000 ether, 2 * 365 days);
+        uint256 startEnd = veHemi.getLockedBalance(cycledId).end;
         for (uint256 i = 0; i < 60; ++i) {
-            enable(attacker, a);
+            enable(attacker, cycledId);
             vm.warp(block.timestamp + 60);
-            disable(attacker, a);
-            assertLe(veHemi.getLockedBalance(a).end, startEnd, "END RATCHETED UP -- free lock duration minted");
-            // the honest twin is not moved by the attacker's cycling
-            assertEq(veHemi.getLockedBalance(b).end, startEnd, "twin moved");
+            disable(attacker, cycledId);
+            assertLe(veHemi.getLockedBalance(cycledId).end, startEnd, "END RATCHETED UP -- free lock duration minted");
+            // the control position is not moved by the attacker's cycling
+            assertEq(veHemi.getLockedBalance(controlId).end, startEnd, "control position moved");
         }
     }
 
     // ------------------------------------------------------------------
     // A6 — A FLAT POSITION DELEGATES LIKE A PLAIN ONE, with a plain-position
-    //      control, on the STALE flat state (stored end far in the past) that
-    //      is the only place the flag clause in `VeHemi._delegate` is
+    //      control, on a stale flat position (past its abandonment horizon)
+    //      whose stored end is far in the past,
+    //      the only place the flag clause in `VeHemi._delegate` is
     //      load-bearing.
     // ------------------------------------------------------------------
     function test_A6_staleFlatSellerHandsOverTheVotes() public {
         (uint256 flatId, , ) = createLock(attacker, 1_000 ether, 2 * 365 days);
         (uint256 plainId, , ) = createLock(victim, 1_000 ether, 4 * 365 days);
         enable(attacker, flatId);
-        delegateTo(attacker, flatId, dele);
-        delegateTo(victim, plainId, dele2);
+        delegateTo(attacker, flatId, delegateeA);
+        delegateTo(victim, plainId, delegateeB);
         vm.warp(block.timestamp + 3600);
 
         // drive the FLAT position's STORED end deep into the past; the flag
         // keeps it alive. The plain control is still live on its own date.
         vm.warp(block.timestamp + 200 * SIX_DAYS);
-        assertLt(veHemi.getLockedBalance(flatId).end, block.timestamp, "probe: stored end not stale");
-        assertGt(delegation.getVotes(dele), 0, "probe: no flat votes to hand over");
-        assertGt(delegation.getVotes(dele2), 0, "probe: no plain votes to hand over");
+        assertLt(veHemi.getLockedBalance(flatId).end, block.timestamp, "premise: stored end not past");
+        assertGt(delegation.getVotes(delegateeA), 0, "premise: no flat votes to hand over");
+        assertGt(delegation.getVotes(delegateeB), 0, "premise: no plain votes to hand over");
 
         vm.prank(attacker);
         veHemi.transferFrom(attacker, bob, flatId);
@@ -168,10 +172,10 @@ contract FlatPositionEconomicsTest is AutoRelockTestBase {
         // `autoRelockRemaining[delegator_] != 0` in `VeHemi._delegate` is what
         // makes that true for a position whose stored end is in the past.
         vm.warp(block.timestamp + 1);
-        assertEq(delegation.getVotes(dele2), 0, "PLAIN control seller kept votes -- body is not measuring the flag");
-        assertEq(delegation.getVotes(dele), 0, "stale FLAT seller kept the votes after the sale");
+        assertEq(delegation.getVotes(delegateeB), 0, "PLAIN control seller kept votes -- body is not measuring the flag");
+        assertEq(delegation.getVotes(delegateeA), 0, "stale FLAT seller kept the votes after the sale");
         vm.warp(block.timestamp + 3600);
-        assertEq(delegation.getVotes(dele), 0, "stale FLAT seller still holds votes an hour later");
+        assertEq(delegation.getVotes(delegateeA), 0, "stale FLAT seller still holds votes an hour later");
     }
 
     // ------------------------------------------------------------------
@@ -193,44 +197,45 @@ contract FlatPositionEconomicsTest is AutoRelockTestBase {
     }
 
     // ------------------------------------------------------------------
-    // A8 — A TOP-UP RE-MATERIALISES THE LAZY END.
+    // A8 — A TOP-UP RE-MATERIALISES THE STORED END.
     // ------------------------------------------------------------------
     function test_A8_topUpRematerialisesTheEnd() public {
         (uint256 id, , ) = createLock(attacker, 1_000 ether, 2 * 365 days);
         enable(attacker, id);
         vm.warp(block.timestamp + 200 * SIX_DAYS);
-        uint256 eff = veHemi.effectiveLockEnd(id);
-        assertLt(veHemi.getLockedBalance(id).end, block.timestamp, "probe: stored end not stale");
+        uint256 effectiveEnd = veHemi.effectiveLockEnd(id);
+        assertLt(veHemi.getLockedBalance(id).end, block.timestamp, "premise: stored end not past");
         vm.prank(attacker);
         veHemi.increaseAmount(id, 10 ether);
-        assertEq(veHemi.getLockedBalance(id).end, eff, "top-up left the stored end stale");
-        assertEq(veHemi.effectiveLockEnd(id), eff, "top-up moved the effective end");
+        assertEq(veHemi.getLockedBalance(id).end, effectiveEnd, "top-up left the stored end in the past");
+        assertEq(veHemi.effectiveLockEnd(id), effectiveEnd, "top-up moved the effective end");
     }
 
     // ------------------------------------------------------------------
-    // A9 — A TOUCH ON A STALE FLAT POSITION DOES NOT KILL ITS WEIGHT. The
-    //      curve's flat branch must key on the FLAG, never on the stored
-    //      (deliberately stale) end.
+    // A9 — A TRANSFER OF A STALE FLAT POSITION DOES NOT KILL ITS WEIGHT. The
+    //      curve's flat branch must key on the FLAG, never on the stored end
+    //      (deliberately left in the past).
     // ------------------------------------------------------------------
-    function test_A9_touchOnStaleFlatDisarmsWithoutDestroyingWeight() public {
+    function test_A9_transferOfStaleFlatPositionDisarmsWithoutDestroyingWeight() public {
         (uint256 id, , ) = createLock(attacker, 1_000 ether, 2 * 365 days);
         enable(attacker, id);
         vm.warp(block.timestamp + 200 * SIX_DAYS);
-        uint256 w = veHemi.balanceOfNFT(id);
-        assertGt(w, 0, "probe: no weight");
+        uint256 flatWeight = veHemi.balanceOfNFT(id);
+        assertGt(flatWeight, 0, "premise: no weight");
         vm.prank(attacker);
-        veHemi.transferFrom(attacker, bob, id); // the TOUCH
+        veHemi.transferFrom(attacker, bob, id);
         // The transfer DISARMS the stale flat position into a decaying lock.
         // The weight is NOT destroyed -- it is preserved up to
-        // the disarm end-snap's sub-bucket phase step (at most half a SIX_DAYS
+        // the disarm floor-snap's sub-bucket phase step (at most half a SIX_DAYS
         // bucket of slope, either way) -- and the denominator still equals the
         // one live position.
-        assertEq(veHemi.autoRelockRemaining(id), 0, "touch did not disarm");
+        assertEq(veHemi.autoRelockRemaining(id), 0, "transfer did not disarm");
         // The post-disarm step is deterministic: end=grid(now)+R moves the
         // weight from slope*(R - SIX_DAYS/2) to slope*(R - now % SIX_DAYS), a
-        // step of at most slope*SIX_DAYS/2 either way (~0.42% of w for this
-        // R). 0.5% is the tight bound; a 1% band would admit >2x the physical max.
-        assertApproxEqRel(veHemi.balanceOfNFT(id), w, 0.005e18, "a touch on a stale flat position destroyed its weight");
+        // step of at most slope*SIX_DAYS/2 either way (~0.42% of flatWeight for
+        // this R). 0.5% is the tight bound; a 1% band would admit >2x the
+        // physical max.
+        assertApproxEqRel(veHemi.balanceOfNFT(id), flatWeight, 0.005e18, "a transfer of a stale flat position destroyed its weight");
         assertEq(veHemi.totalVeHemiSupply(), veHemi.balanceOfNFT(id), "denominator does not match the live weight");
     }
 
@@ -243,7 +248,7 @@ contract FlatPositionEconomicsTest is AutoRelockTestBase {
         (uint256 id, , ) = createLock(attacker, 1_000 ether, 4 * 365 days);
         enable(attacker, id);
         uint256 staleAt = veHemi.autoRelockStaleAt(id);
-        assertEq(staleAt, block.timestamp + veHemi.STALE_FLAT_BUCKETS() * SIX_DAYS, "stale clock wrong");
+        assertEq(staleAt, block.timestamp + veHemi.STALE_FLAT_BUCKETS() * SIX_DAYS, "abandonment clock wrong");
 
         // one second early it is NOT retirable -- the guard is real
         vm.warp(staleAt - 1);

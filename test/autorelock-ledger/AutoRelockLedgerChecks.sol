@@ -5,36 +5,38 @@ import {Vm} from "forge-std/Vm.sol";
 import {VeHemi} from "src/VeHemi.sol";
 import {VeHemiVoteDelegation} from "src/VeHemiVoteDelegation.sol";
 import {IVeHemi} from "src/interfaces/IVeHemi.sol";
-import {ARLHandler} from "./ARLHandler.sol";
+import {AutoRelockLedgerHandler} from "./AutoRelockLedgerHandler.sol";
 import {VoteHoleLaw} from "./VoteHoleLaw.sol";
 
 /**
- * @title ARLChecks
+ * @title AutoRelockLedgerChecks
  * @notice The auto-relock invariant laws, one external function per law, called
- *         by `ARLInvariantTest.invariant_arl_core` after every handler call and
- *         by the deterministic tests in test/arl/MaintainedEnd.t.sol.
+ *         by `AutoRelockLedgerInvariantTest.invariant_autoRelockLedgerLaws` after every handler call and
+ *         by the deterministic tests in test/autorelock-ledger/FlatPositionEnd.t.sol.
  *
  * @dev Each check reverts on failure (`vm.assert*`). "Authored" values come
- *      from `ARLHandler`'s ledger, which is written from the arguments the
+ *      from `AutoRelockLedgerHandler`'s ledger, which is written from the arguments the
  *      handler chose and its own clock, never read back from the contract.
+ *      As in the handler's header, R is a position's auto-relock term
+ *      (`autoRelockRemaining`) and grid(t) = floor(t / SIX_DAYS) * SIX_DAYS.
  */
-contract ARLChecks {
+contract AutoRelockLedgerChecks {
     Vm private constant vm = Vm(address(uint160(uint256(keccak256("hevm cheat code")))));
 
-    ARLHandler public immutable handler;
+    AutoRelockLedgerHandler public immutable handler;
     VeHemi public immutable veHemi;
     VeHemiVoteDelegation public immutable delegation;
 
-    constructor(ARLHandler h) {
-        handler = h;
-        veHemi = h.veHemi();
-        delegation = h.delegation();
+    constructor(AutoRelockLedgerHandler handler_) {
+        handler = handler_;
+        veHemi = handler_.veHemi();
+        delegation = handler_.delegation();
     }
 
-    function _rem(uint256 i) internal view returns (uint64 r) { (,,,,,, r) = handler.shadows(i); }
+    function _remaining(uint256 i) internal view returns (uint64 r) { (,,,,,, r) = handler.shadows(i); }
     function _alive(uint256 i) internal view returns (bool a) { (, a,,,,,) = handler.shadows(i); }
-    function _id(uint256 i) internal view returns (uint256 t) { (t,,,,,,) = handler.shadows(i); }
-    function _forf(uint256 i) internal view returns (bool f) { (,,,,, f,) = handler.shadows(i); }
+    function _id(uint256 i) internal view returns (uint256 tokenId) { (tokenId,,,,,,) = handler.shadows(i); }
+    function _forfeitable(uint256 i) internal view returns (bool f) { (,,,,, f,) = handler.shadows(i); }
 
     // ===================== weight and supply vs the ledger =====================
 
@@ -64,7 +66,7 @@ contract ARLChecks {
         uint256 expected;
         uint256 n = handler.shadowsLength();
         for (uint256 i; i < n; ++i) {
-            if (!_alive(i) || _rem(i) == 0) continue;
+            if (!_alive(i) || _remaining(i) == 0) continue;
             expected += handler.authoredWeight(i);
         }
         vm.assertEq(
@@ -79,16 +81,25 @@ contract ARLChecks {
     function checkPrimitivesMatchAuthoredLedger() external view {
         uint256 n = handler.shadowsLength();
         for (uint256 i; i < n; ++i) {
-            (uint256 id, bool alive, int128 amount, uint64 end, uint64 ta, bool forf, uint64 rem) =
-                handler.shadows(i);
+            (
+                uint256 id,
+                bool alive,
+                int128 amount,
+                uint64 end,
+                uint64 transferableAfter,
+                bool forfeitable,
+                uint64 remaining
+            ) = handler.shadows(i);
             if (!alive) continue;
             IVeHemi.LockedBalance memory lb = veHemi.getLockedBalance(id);
             vm.assertEq(int256(lb.amount), int256(amount), "locked.amount != authored");
             vm.assertEq(uint256(lb.end), uint256(end), "locked.end != authored");
-            vm.assertEq(veHemi.transferableAfter(id), uint256(ta), "transferableAfter != authored");
-            vm.assertEq(veHemi.forfeitable(id), forf, "forfeitable != authored");
-            vm.assertEq(uint256(veHemi.autoRelockRemaining(id)), uint256(rem), "autoRelockRemaining != authored");
-            if (rem != 0) {
+            vm.assertEq(veHemi.transferableAfter(id), uint256(transferableAfter), "transferableAfter != authored");
+            vm.assertEq(veHemi.forfeitable(id), forfeitable, "forfeitable != authored");
+            vm.assertEq(
+                uint256(veHemi.autoRelockRemaining(id)), uint256(remaining), "autoRelockRemaining != authored"
+            );
+            if (remaining != 0) {
                 vm.assertGt(uint256(veHemi.autoRelockRefreshedAt(id)), 0, "refresh stamp unset on a flat position");
                 vm.assertLe(uint256(veHemi.autoRelockRefreshedAt(id)), block.timestamp, "refresh stamp in the future");
             } else {
@@ -100,24 +111,24 @@ contract ARLChecks {
     /// @notice Every flat position's `autoRelockRemaining` is a whole number
     ///         of SIX_DAYS buckets.
     function checkRemainingIsWholeBuckets() external view {
-        uint256 S = handler.SIX_DAYS();
+        uint256 sixDays = handler.SIX_DAYS();
         uint256 n = handler.shadowsLength();
         for (uint256 i; i < n; ++i) {
-            if (!_alive(i) || _rem(i) == 0) continue;
-            vm.assertEq(uint256(veHemi.autoRelockRemaining(_id(i))) % S, 0,
+            if (!_alive(i) || _remaining(i) == 0) continue;
+            vm.assertEq(uint256(veHemi.autoRelockRemaining(_id(i))) % sixDays, 0,
                 "autoRelockRemaining is not a whole number of SIX_DAYS buckets");
         }
     }
 
     /// @notice `effectiveLockEnd` of a flat position is `grid(now) + R`, with
     ///         R from the ledger, at every instant (no touch needed).
-    function checkMaintainedEndIsPureFunction() external view {
-        uint256 S = handler.SIX_DAYS();
-        uint256 g = (block.timestamp / S) * S;
+    function checkEffectiveLockEndIsGridPlusR() external view {
+        uint256 sixDays = handler.SIX_DAYS();
+        uint256 gridNow = (block.timestamp / sixDays) * sixDays;
         uint256 n = handler.shadowsLength();
         for (uint256 i; i < n; ++i) {
-            if (!_alive(i) || _rem(i) == 0) continue;
-            vm.assertEq(veHemi.effectiveLockEnd(_id(i)), g + uint256(_rem(i)),
+            if (!_alive(i) || _remaining(i) == 0) continue;
+            vm.assertEq(veHemi.effectiveLockEnd(_id(i)), gridNow + uint256(_remaining(i)),
                 "effectiveLockEnd != grid(now) + AUTHORED R");
         }
     }
@@ -178,7 +189,10 @@ contract ARLChecks {
 
     /// @notice A flat position is never withdrawable, at any timestamp
     ///         (including past its stored `lock.end`), and the refusal is
-    ///         `LockNotExpired`. Fed by two independent probe actions.
+    ///         `LockNotExpired`. Fed by two probe paths: `_probeFlatWithdraw`
+    ///         (reached from the `withdraw` and `probeWithdrawWhileFlat`
+    ///         actions; it also checks the revert reason and the weight that
+    ///         left) and `probeFlatWithdrawBlocked`.
     function checkFlatIsNeverWithdrawable() external view {
         vm.assertEq(
             handler.flatWithdrawSuccesses(), 0,
@@ -194,15 +208,18 @@ contract ARLChecks {
         );
     }
 
-    /// @notice Calls the contract must refuse were refused, every time.
-    function checkGuardProbesAllRefused() external view {
+    /// @notice The enable, disable and shorter-extend calls the contract must
+    ///         refuse were refused, every time.
+    function checkEnableDisableAndShorterExtendRefusals() external view {
         vm.assertEq(handler.doubleEnableAccepted(), 0, "PROBE: a second enableAutoRelock was ACCEPTED");
         vm.assertEq(handler.shortREnableAccepted(), 0, "PROBE: enableAutoRelock ACCEPTED with R < 2 * SIX_DAYS");
         vm.assertEq(handler.disableNotEnabledAccepted(), 0, "PROBE: disableAutoRelock ACCEPTED on a non-flat position");
         vm.assertEq(handler.extendShorterAccepted(), 0, "PROBE: increaseUnlockTime ACCEPTED a SHORTER term while flat");
     }
 
-    function checkKeeperProbesAllRefused() external view {
+    /// @notice The refresh, early keeper-retire and too-long-extend calls the
+    ///         contract must refuse were refused, every time.
+    function checkRefreshRetireAndTooLongExtendRefusals() external view {
         vm.assertEq(handler.refreshStrangerAccepted(), 0,
             "PROBE: refreshAutoRelock ACCEPTED from a NON-OWNER (NotOwner)");
         vm.assertEq(handler.refreshNotEnabledAccepted(), 0,
@@ -213,30 +230,31 @@ contract ARLChecks {
             "PROBE: increaseUnlockTime ACCEPTED unlockTime > now + MAX_TIME while flat (LockDurationTooLong)");
     }
 
-    /// @notice `refreshAutoRelock` (and `enableAutoRelock`, which also stamps)
-    ///         sets `autoRelockStaleAt` to `stamp + STALE_FLAT_BUCKETS * SIX_DAYS`,
-    ///         with the stamp taken from the ledger.
-    function checkHeartbeatMovesStaleClock() external view {
-        vm.assertEq(handler.heartbeatClockViolations(), 0,
+    /// @notice `refreshAutoRelock` (and `enableAutoRelock`, which also sets
+    ///         the refresh stamp) sets `autoRelockStaleAt` to
+    ///         `refresh stamp + STALE_FLAT_BUCKETS * SIX_DAYS`, with the
+    ///         refresh stamp taken from the ledger.
+    function checkHeartbeatMovesAbandonmentClock() external view {
+        vm.assertEq(handler.abandonmentClockViolations(), 0,
             "refreshAutoRelock did NOT move autoRelockStaleAt to now + STALE_FLAT_BUCKETS * SIX_DAYS");
         uint256 n = handler.shadowsLength();
         for (uint256 i; i < n; ++i) {
-            (uint256 id, bool alive,,,,, uint64 rem) = handler.shadows(i);
-            if (!alive || rem == 0) continue;
-            uint64 stamped = handler.refreshedAtAuthored(id);
-            if (stamped == 0) continue;
+            (uint256 id, bool alive,,,,, uint64 remaining) = handler.shadows(i);
+            if (!alive || remaining == 0) continue;
+            uint64 authoredRefreshedAt = handler.authoredRefreshedAt(id);
+            if (authoredRefreshedAt == 0) continue;
             vm.assertEq(
                 veHemi.autoRelockStaleAt(id),
-                uint256(stamped) + handler.STALE_FLAT_BUCKETS_LOCAL() * handler.SIX_DAYS(),
+                uint256(authoredRefreshedAt) + handler.EXPECTED_STALE_FLAT_BUCKETS() * handler.SIX_DAYS(),
                 "autoRelockStaleAt != AUTHORED refresh stamp + STALE_FLAT_BUCKETS * SIX_DAYS"
             );
         }
     }
 
-    /// @notice The forfeit window is `transferableAfter`, not the (possibly
-    ///         frozen) `lock.end`: refused once `now >= ta`, accepted inside
-    ///         the window on a flat position.
-    function checkForfeitWindowIsTA() external view {
+    /// @notice The forfeit window is `transferableAfter`, not the stored
+    ///         `lock.end` (possibly past): refused once `now >= transferableAfter`,
+    ///         accepted inside the window on a flat position.
+    function checkForfeitWindowIsTransferableAfter() external view {
         vm.assertEq(handler.forfeitOutOfWindowAccepted(), 0,
             "forfeit ACCEPTED outside the transferableAfter window");
         vm.assertEq(handler.forfeitInWindowFlatRefused(), 0,
@@ -291,22 +309,22 @@ contract ARLChecks {
     function checkPastVotesNeverExceedPastTotalSupply() external view {
         _pastVotesBound(block.timestamp, "now");
         if (block.timestamp > 1) _pastVotesBound(block.timestamp - 1, "now - 1");
-        uint256 h = (block.timestamp / 1 hours) * 1 hours;
-        if (h != 0) _pastVotesBound(h, "last hour boundary");
+        uint256 lastHourBoundary = (block.timestamp / 1 hours) * 1 hours;
+        if (lastHourBoundary != 0) _pastVotesBound(lastHourBoundary, "last hour boundary");
     }
 
-    function _pastVotesBound(uint256 t, string memory at) internal view {
+    function _pastVotesBound(uint256 t, string memory instantLabel) internal view {
         uint256 votes;
         for (uint256 i; i < 5; ++i) votes += delegation.getPastVotes(handler.users(i), t);
         votes += delegation.getPastVotes(address(0), t);
         vm.assertLe(votes, delegation.getPastTotalSupply(t),
-            string.concat("sum(getPastVotes) EXCEEDS getPastTotalSupply at ", at));
+            string.concat("sum(getPastVotes) EXCEEDS getPastTotalSupply at ", instantLabel));
     }
 
     /// @notice No weight-changing call swallowed a delegation revert
     ///         (`DelegationUpdateFailed` is never emitted under the honest
     ///         module).
-    function checkDelegationRefreshNeverSilentlyFails() external view {
+    function checkNoDelegationUpdateFailedEmitted() external view {
         vm.assertEq(handler.delegationUpdateFailedCount(), 0,
             "a delegation refresh reverted and was swallowed (DelegationUpdateFailed)");
     }
@@ -314,11 +332,11 @@ contract ARLChecks {
     /// @notice For every live flat position the delegation record's cached
     ///         amount equals the ledger's principal, so a refresh that was
     ///         silently skipped (no revert, no event) is caught.
-    function checkFlatPositionsStayDelegated() external view {
+    function checkFlatRecordAmountMatchesLedger() external view {
         uint256 n = handler.shadowsLength();
         for (uint256 i; i < n; ++i) {
-            (uint256 id, bool alive, int128 amount,,,, uint64 rem) = handler.shadows(i);
-            if (!alive || rem == 0 || amount <= 0) continue;
+            (uint256 id, bool alive, int128 amount,,,, uint64 remaining) = handler.shadows(i);
+            if (!alive || remaining == 0 || amount <= 0) continue;
             uint256 cached = uint256(delegation.delegation(id).amount);
             vm.assertEq(cached, uint256(uint128(amount)),
                 "flat position's cached delegation is STALE - the refresh was silently skipped");
@@ -342,31 +360,31 @@ contract ARLChecks {
 
     /// @notice The `VoteHoleLaw` bound on a re-delegation's booking
     ///         (`delegationBookedAt`, `block.timestamp + 1`): (A) no booking
-    ///         matures past the next hourly boundary; (A2) a token without a
-    ///         delegation record has no maturity stamp; (B) every delegatee's
+    ///         matures past the next hour boundary; (A2) a token without a
+    ///         delegation record has no booking stamp; (B) every delegatee's
     ///         votes are at least the sum of its matured records, so no write
     ///         takes weight from a co-delegator.
     function checkVoteHoleBounded() external view {
         uint256 n = handler.shadowsLength();
         uint256[] memory ids = new uint256[](n);
         for (uint256 i; i < n; ++i) ids[i] = _id(i);
-        address[] memory dg = new address[](5);
-        for (uint256 i; i < 5; ++i) dg[i] = handler.users(i);
-        VoteHoleLaw.Report memory r = VoteHoleLaw.scan(delegation, ids, dg, block.timestamp);
+        address[] memory delegatees = new address[](5);
+        for (uint256 i; i < 5; ++i) delegatees[i] = handler.users(i);
+        VoteHoleLaw.Report memory report = VoteHoleLaw.scan(delegation, ids, delegatees, block.timestamp);
         vm.assertEq(
-            r.lateMaturity, 0,
+            report.lateMaturities, 0,
             string.concat(
-                "VOTE HOLE (A): a delegation booking matures PAST the next hourly boundary, by ",
-                vm.toString(r.maxLateBy), " s"
+                "VOTE HOLE (A): a delegation booking matures PAST the next hour boundary, by ",
+                vm.toString(report.maxLateBySeconds), " s"
             )
         );
-        vm.assertEq(r.orphanStamp, 0,
-            "VOTE HOLE (A2): a maturity stamp survived the deletion of its delegation record");
+        vm.assertEq(report.orphanBookingStamps, 0,
+            "VOTE HOLE (A2): a booking stamp survived the deletion of its delegation record");
         vm.assertEq(
-            r.shortfalls, 0,
+            report.shortfalls, 0,
             string.concat(
                 "VOTE HOLE (B): a delegatee's votes are BELOW the sum of its MATURED delegations by ",
-                vm.toString(r.maxShortfallWei), " wei"
+                vm.toString(report.maxShortfallWei), " wei"
             )
         );
     }
@@ -376,29 +394,30 @@ contract ARLChecks {
     function checkNonTransferableEqualsAuthoredSum() external view {
         uint256 expected;
         uint256 n = handler.shadowsLength();
-        for (uint256 i; i < n; ++i) expected += handler.authoredSubWeight(i);
+        for (uint256 i; i < n; ++i) expected += handler.authoredSubcurveWeight(i);
         vm.assertEq(expected, veHemi.nonTransferableTotalVeHemiSupply(), "non-transferable subcurve != AUTHORED sum");
     }
 
     function checkForfeitableEqualsAuthoredSum() external view {
         uint256 expected;
         uint256 n = handler.shadowsLength();
-        for (uint256 i; i < n; ++i) if (_forf(i)) expected += handler.authoredSubWeight(i);
+        for (uint256 i; i < n; ++i) if (_forfeitable(i)) expected += handler.authoredSubcurveWeight(i);
         vm.assertEq(expected, veHemi.forfeitableTotalVeHemiSupply(), "forfeitable subcurve != AUTHORED sum");
     }
 
     /// @notice `supplyBreakdown()` agrees with the dedicated views (no clamp
     ///         rewrites `locked_` or `forfeitable_`), and `transferable` is the
     ///         saturating complement.
-    function checkBreakdownAgreesWithDedicated() external view {
-        (uint256 bTot, uint256 bLk, uint256 bFo, uint256 bTr) = veHemi.supplyBreakdown();
-        vm.assertEq(bTot, veHemi.totalVeHemiSupply(), "breakdown.total != totalVeHemiSupply()");
-        vm.assertEq(bLk, veHemi.nonTransferableTotalVeHemiSupply(),
+    function checkBreakdownAgreesWithDedicatedViews() external view {
+        (uint256 total, uint256 locked_, uint256 forfeitable_, uint256 transferable) = veHemi.supplyBreakdown();
+        vm.assertEq(total, veHemi.totalVeHemiSupply(), "breakdown.total != totalVeHemiSupply()");
+        vm.assertEq(locked_, veHemi.nonTransferableTotalVeHemiSupply(),
             "breakdown.locked_ != nonTransferableTotalVeHemiSupply()");
-        vm.assertEq(bFo, veHemi.forfeitableTotalVeHemiSupply(),
+        vm.assertEq(forfeitable_, veHemi.forfeitableTotalVeHemiSupply(),
             "breakdown.forfeitable_ != forfeitableTotalVeHemiSupply()");
-        vm.assertLe(bFo, bLk, "breakdown forfeitable_ > locked_");
-        vm.assertEq(bTr, bTot > bLk ? bTot - bLk : 0, "breakdown.transferable is not the saturating complement");
+        vm.assertLe(forfeitable_, locked_, "breakdown forfeitable_ > locked_");
+        vm.assertEq(transferable, total > locked_ ? total - locked_ : 0,
+            "breakdown.transferable is not the saturating complement");
     }
 
     /// @notice A sampled `totalVeHemiSupplyAt(t)` never changes once `t` is in

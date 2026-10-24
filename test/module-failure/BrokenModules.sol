@@ -10,7 +10,7 @@ import {IVeHemiVoteDelegation} from "../../src/interfaces/IVeHemiVoteDelegation.
 ///         never reaches the flat-term read-back. These shapes cover the
 ///         modules VeHemi CAN read, so "a broken module cannot lock principal"
 ///         is tested as a matrix (BrokenModuleMatrixTest,
-///         WriteBrokenModuleTest, SlopeOverflowReRaiseTest,
+///         ReadableWriteRevertingModuleTest, SlopeOverflowReRaiseTest,
 ///         StarvationCeilingTest and the armed-transfer suites) rather than as
 ///         a single "broken" case:
 ///
@@ -43,21 +43,22 @@ abstract contract BrokenModuleBase is IVeHemiVoteDelegation {
 }
 
 /// B2 — READABLE, WRITE-FAILING. A paused / version-skewed / buggy proxy.
-///      Reads answer truthfully and the answer is STILL FLAT, so
-///      `_requireFlatTermRetired` reaches its `revert`, not its `catch`.
-contract HalfBrokenModule is BrokenModuleBase {
+///      Reads answer truthfully and the answer is STILL FLAT, so the
+///      read-back in `_requireFlatTermRetired` sees a still-flat record and
+///      announces `AutoRelockRetirementUnverified` (it does not revert).
+contract WriteRevertingModule is BrokenModuleBase {
     error ModuleBroken();
-    mapping(uint256 => Delegation) internal recs;
+    mapping(uint256 => Delegation) internal records;
 
     function seedFlat(uint256 id_, address delegatee_, uint96 bias_) external {
-        recs[id_] = Delegation({
+        records[id_] = Delegation({
             delegatee: delegatee_, end: uint48(block.timestamp + 365 days),
             bias: bias_, amount: 0, slope: 0
         });
     }
 
     function delegate(uint256, address) external pure override { revert ModuleBroken(); }
-    function delegation(uint256 id_) external view override returns (Delegation memory) { return recs[id_]; }
+    function delegation(uint256 id_) external view override returns (Delegation memory) { return records[id_]; }
 }
 
 /// B4 — SUCCEEDS AND RETURNS STALE. `delegate` is accepted and recorded, but
@@ -89,10 +90,10 @@ contract StaleReaderModule is BrokenModuleBase {
     }
 }
 
-/// B5 — SUCCEEDS AND LIES GLOBALLY. Never reverts on any selector; `delegate`
-///      is a silent no-op and `delegation` reports a flat-looking record for
-///      EVERY id. One `onlyOwner`, un-timelocked `updateVoteDelegation` call
-///      installs it.
+/// B5 — SUCCEEDS AND RETURNS A CONSTANT FLAT RECORD. Never reverts on any
+///      selector; `delegate` is a silent no-op and `delegation` reports a
+///      flat-looking record for EVERY id. One `onlyOwner`, un-timelocked
+///      `updateVoteDelegation` call installs it.
 contract SilentFreezeModule is BrokenModuleBase {
     function delegate(uint256, address) external override {}
     function delegation(uint256) external view override returns (Delegation memory) {
@@ -108,10 +109,10 @@ contract SilentFreezeModule is BrokenModuleBase {
 ///      handling (`_requireNotStarved`, the delegation gas ceiling) is under
 ///      test here, not the retirement read-back.
 contract GasEaterWriteModule is BrokenModuleBase {
-    mapping(uint256 => Delegation) internal recs;
+    mapping(uint256 => Delegation) internal records;
 
     function seedFlat(uint256 id_, address delegatee_, uint96 bias_) external {
-        recs[id_] = Delegation({
+        records[id_] = Delegation({
             delegatee: delegatee_, end: uint48(block.timestamp + 365 days),
             bias: bias_, amount: 0, slope: 0
         });
@@ -122,7 +123,7 @@ contract GasEaterWriteModule is BrokenModuleBase {
         while (true) { x = uint256(keccak256(abi.encode(x))); }
     }
 
-    function delegation(uint256 id_) external view override returns (Delegation memory) { return recs[id_]; }
+    function delegation(uint256 id_) external view override returns (Delegation memory) { return records[id_]; }
 }
 
 /// B7 — OUT-OF-GAS ON THE READ. `delegation` burns its whole allowance, so

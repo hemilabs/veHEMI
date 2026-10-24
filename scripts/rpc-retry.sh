@@ -17,7 +17,7 @@
 #
 # A retry that retries everything turns a real red into an intermittent green.
 # This one retries only when the failed output carries a transport signature
-# (TRANSPORT_RE below). A command that failed because a body failed, the block
+# (TRANSPORT_RE below). A command that failed because a test failed, the block
 # was below the floor, or the selection was empty is propagated at once, on
 # attempt 1, with its own exit code.
 #

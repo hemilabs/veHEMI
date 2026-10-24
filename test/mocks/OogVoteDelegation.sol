@@ -11,7 +11,7 @@ import {IVeHemiVoteDelegation} from "../../src/interfaces/IVeHemiVoteDelegation.
 contract OogVoteDelegation is IVeHemiVoteDelegation {
     function _burnAll() private view { uint256 x=1; while (gasleft() > 200) { x = uint256(keccak256(abi.encode(x))); } }
 
-    error AlwaysReverts(); // the migration and setter entry points VeHemi never calls
+    error UnsupportedEntryPoint(); // the migration and setter entry points VeHemi never calls
 
     function delegate(uint256, address) external view override {
         _burnAll();
@@ -38,7 +38,7 @@ contract OogVoteDelegation is IVeHemiVoteDelegation {
     function clearAutoDelegate() external override {}
 
     function setAutoDelegate(address) external pure override {
-        revert AlwaysReverts();
+        revert UnsupportedEntryPoint();
     }
 
     function refreshVotingPower(address) external override {}
@@ -48,17 +48,17 @@ contract OogVoteDelegation is IVeHemiVoteDelegation {
     function importDelegationsFromLegacy(
         IVeHemiVoteDelegation, uint256[] calldata
     ) external pure override {
-        revert AlwaysReverts();
+        revert UnsupportedEntryPoint();
     }
 
     function importAutoDelegatesFromLegacy(
         IVeHemiVoteDelegation, address[] calldata
     ) external pure override {
-        revert AlwaysReverts();
+        revert UnsupportedEntryPoint();
     }
 
     function finalizeMigration() external pure override {
-        revert AlwaysReverts();
+        revert UnsupportedEntryPoint();
     }
 
     function migrationFinalized() external pure override returns (bool) {

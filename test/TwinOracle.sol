@@ -71,14 +71,14 @@ abstract contract TwinOracle is Test {
     // ---------------------------------------------------------------- sampling
     struct Sample {
         uint256 ts;
-        bool atBoundary;      // ts % SIX_DAYS == 0
-        uint256 weight;       // balanceOfNFT(tokenId)
-        uint256 votes;        // delegation.getVotes(owner)
-        uint256 totalSupply;  // veHemi.totalVeHemiSupply()
-        uint256 lockedSupply; // nonTransferableTotalVeHemiSupply()
-        uint256 forfSupply;   // forfeitableTotalVeHemiSupply()
-        uint256 lockEnd;      // getLockedBalance(tokenId).end
-        int256 lockAmount;    // getLockedBalance(tokenId).amount
+        bool atBoundary;           // ts % SIX_DAYS == 0
+        uint256 weight;            // balanceOfNFT(tokenId)
+        uint256 votes;             // delegation.getVotes(owner)
+        uint256 totalSupply;       // veHemi.totalVeHemiSupply()
+        uint256 lockedSupply;      // nonTransferableTotalVeHemiSupply()
+        uint256 forfeitableSupply; // forfeitableTotalVeHemiSupply()
+        uint256 lockEnd;           // getLockedBalance(tokenId).end
+        int256 lockAmount;         // getLockedBalance(tokenId).amount
     }
 
     /// @dev series[posIndex] = chronological samples
@@ -166,16 +166,16 @@ abstract contract TwinOracle is Test {
         uint256 amount,
         uint256 N,
         Cadence candidateCadence
-    ) internal returns (uint256 mi, uint256 xi) {
-        mi = spawn(false, ownerM, amount, N, Cadence.MANUAL, false, false);
-        xi = spawn(true, ownerX, amount, N, candidateCadence, false, false);
+    ) internal returns (uint256 manualIndex, uint256 candidateIndex) {
+        manualIndex = spawn(false, ownerM, amount, N, Cadence.MANUAL, false, false);
+        candidateIndex = spawn(true, ownerX, amount, N, candidateCadence, false, false);
     }
 
     // ============================================================ driving
 
     /// @dev Override in a subclass to advance the universe-X (auto-relock)
     ///      position. Called by `step()` at every boundary AND at every
-    ///      mid-bucket probe, so implementations must be idempotent / no-op
+    ///      mid-bucket sample, so implementations must be idempotent / no-op
     ///      when nothing is due.
     function _driveCandidate(uint256 /*ts*/) internal virtual {}
 
@@ -211,7 +211,7 @@ abstract contract TwinOracle is Test {
         sm.atBoundary = (block.timestamp % SIX_DAYS == 0);
         sm.totalSupply = s.ve.totalVeHemiSupply();
         sm.lockedSupply = s.ve.nonTransferableTotalVeHemiSupply();
-        sm.forfSupply = s.ve.forfeitableTotalVeHemiSupply();
+        sm.forfeitableSupply = s.ve.forfeitableTotalVeHemiSupply();
         if (!p.withdrawn) {
             sm.weight = s.ve.balanceOfNFT(p.tokenId);
             IVeHemi.LockedBalance memory lb = s.ve.getLockedBalance(p.tokenId);
@@ -246,18 +246,18 @@ abstract contract TwinOracle is Test {
     /// @notice Walk `buckets` buckets forward. Every bucket is sampled at its
     ///         boundary, one hour in, and its last instant (the last one is
     ///         required for an exact trapezoid integral), plus
-    ///         `probesPerBucket` evenly spaced instants inside it.
-    function sweep(uint256 buckets, uint256 probesPerBucket) internal {
+    ///         `samplesPerBucket` evenly spaced instants inside it.
+    function sweep(uint256 buckets, uint256 samplesPerBucket) internal {
         require(block.timestamp % SIX_DAYS == 0, "sweep must start on a boundary");
         uint256 start = block.timestamp;
         for (uint256 b; b < buckets; ++b) {
             uint256 base = start + b * SIX_DAYS;
             step(base); // boundary, post-drive
-            // Fixed probe one hour into the bucket: the hourly delegation
+            // Fixed sample one hour into the bucket: the hourly delegation
             // checkpoint boundary (CHECKPOINT_INTERVAL = 1 hours).
             step(base + 3600);
-            for (uint256 k = 1; k <= probesPerBucket; ++k) {
-                uint256 off = (SIX_DAYS * k) / (probesPerBucket + 1);
+            for (uint256 k = 1; k <= samplesPerBucket; ++k) {
+                uint256 off = (SIX_DAYS * k) / (samplesPerBucket + 1);
                 if (off == 0 || off >= SIX_DAYS) continue;
                 step(base + off);
             }
@@ -267,20 +267,22 @@ abstract contract TwinOracle is Test {
 
     // ============================================================ comparison
 
-    function _bps(uint256 a, uint256 b) internal pure returns (int256) {
-        if (b == 0) return a == 0 ? int256(0) : type(int256).max;
-        return (int256(a) - int256(b)) * int256(BPS) / int256(b);
+    /// @dev `actual - expected` in basis points of `expected`; when `expected`
+    ///      is 0, 0 if `actual` is 0 too and `type(int256).max` otherwise.
+    function _deviationBps(uint256 actual, uint256 expected) internal pure returns (int256) {
+        if (expected == 0) return actual == 0 ? int256(0) : type(int256).max;
+        return (int256(actual) - int256(expected)) * int256(BPS) / int256(expected);
     }
 
     /// @dev Which scalar of a Sample to compare. Keeps the checker generic.
-    enum Field { WEIGHT, VOTES, TOTAL_SUPPLY, LOCKED_SUPPLY, FORF_SUPPLY, LOCK_END, LOCK_AMOUNT }
+    enum Field { WEIGHT, VOTES, TOTAL_SUPPLY, LOCKED_SUPPLY, FORFEITABLE_SUPPLY, LOCK_END, LOCK_AMOUNT }
 
     function _get(Sample memory s, Field f) internal pure returns (uint256) {
         if (f == Field.WEIGHT) return s.weight;
         if (f == Field.VOTES) return s.votes;
         if (f == Field.TOTAL_SUPPLY) return s.totalSupply;
         if (f == Field.LOCKED_SUPPLY) return s.lockedSupply;
-        if (f == Field.FORF_SUPPLY) return s.forfSupply;
+        if (f == Field.FORFEITABLE_SUPPLY) return s.forfeitableSupply;
         if (f == Field.LOCK_END) return s.lockEnd;
         return uint256(s.lockAmount < 0 ? int256(0) : s.lockAmount);
     }

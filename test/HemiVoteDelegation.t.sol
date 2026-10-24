@@ -268,7 +268,7 @@ contract TestVeHemiVoteDelegation is Test {
         );
     }
 
-    function testReDelegationWhenAmountIncreased() public {
+    function testSelfReDelegationThenOwnerTopUpRaisesOwnVotes() public {
         // Given - Bill has a lock
         (uint256 billTokenId, ) = _createLock(BILL, LOCK_AMOUNT, MAX_TIME);
 
@@ -303,11 +303,11 @@ contract TestVeHemiVoteDelegation is Test {
         assertGt(
             hemiVoteDelegation.getVotes(BILL),
             billVoteBefore,
-            "Alice should have received Bill's votes"
+            "Bill's own votes should rise after his top-up"
         );
     }
 
-    function testReDelegationWhenAmountIncreasedByDelegator() public {
+    function testOwnerTopUpRaisesDelegateeVotes() public {
         // Given - Bill has a lock
         (uint256 billTokenId, ) = _createLock(BILL, LOCK_AMOUNT, MAX_TIME);
         _createLock(ALICE, LOCK_AMOUNT, MAX_TIME);
@@ -615,11 +615,11 @@ contract TestVeHemiVoteDelegation is Test {
         hemiVoteDelegation.delegate(billTokenId, WALTER);
         vm.stopPrank();
 
-        // Then - Alice should still have delegate votes until next epoch
+        // Then - Alice should still have delegate votes until the change lands (the next second)
         assertEq(
             hemiVoteDelegation.getVotes(ALICE),
             veHemi.balanceOfNFT(aliceTokenId) + veHemi.balanceOfNFT(billTokenId),
-            "Alice should still have votes until next epoch"
+            "Alice should still have votes until the change lands"
         );
         // Walter should have his own votes but not Bill's votes yet
         uint256 walterVotes = hemiVoteDelegation.getVotes(WALTER);
@@ -629,7 +629,7 @@ contract TestVeHemiVoteDelegation is Test {
             "Walter should have his own votes but not Bill's votes yet"
         );
 
-        // When - After next epoch
+        // When - A day past the next hour boundary
         delegationStarts = ((block.timestamp / 1 hours) * 1 hours) + 1 hours;
         vm.warp(delegationStarts + 1 days);
 

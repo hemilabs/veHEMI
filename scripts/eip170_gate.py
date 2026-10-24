@@ -61,12 +61,12 @@ def discover(root):
                     a = json.load(fh)
             except Exception:
                 continue
-            md = a.get("metadata") or {}
-            tgt = ((md.get("settings") or {}).get("compilationTarget") or {})
-            if not tgt:
+            metadata = a.get("metadata") or {}
+            target = ((metadata.get("settings") or {}).get("compilationTarget") or {})
+            if not target:
                 continue
-            src = next(iter(tgt))
-            name = tgt[src]
+            src = next(iter(target))
+            name = target[src]
             if not src.startswith("src/"):
                 continue
             # Stale-artifact filter. `forge build` never prunes out/, so an
@@ -76,20 +76,20 @@ def discover(root):
             if not os.path.exists(os.path.join(root, src)):
                 stale.append(f"{src}:{name}")
                 continue
-            dep = ((a.get("deployedBytecode") or {}).get("object") or "")
-            ini = ((a.get("bytecode") or {}).get("object") or "")
-            if len(dep) <= 2:            # interface / abstract: nothing to deploy
+            runtime_hex = ((a.get("deployedBytecode") or {}).get("object") or "")
+            initcode_hex = ((a.get("bytecode") or {}).get("object") or "")
+            if len(runtime_hex) <= 2:            # interface / abstract: nothing to deploy
                 continue
-            cid = f"{src}:{name}"
-            found[cid] = {
-                "id": cid,
+            contract_id = f"{src}:{name}"
+            found[contract_id] = {
+                "id": contract_id,
                 "artifact": os.path.relpath(p, root),
-                "runtimeSize": (len(dep) - 2) // 2,
-                "initcodeSize": (len(ini) - 2) // 2,
+                "runtimeSize": (len(runtime_hex) - 2) // 2,
+                "initcodeSize": (len(initcode_hex) - 2) // 2,
                 # sha256 over the artifact's object STRING (placeholders included):
                 # deterministic for identical source+settings, and reproducible
                 # byte-for-byte inside forge test via sha256(bytes(obj)).
-                "runtimeSha256": hashlib.sha256(dep.encode()).hexdigest(),
+                "runtimeSha256": hashlib.sha256(runtime_hex.encode()).hexdigest(),
             }
     if stale:
         print(f"note: ignored {len(stale)} stale artifact(s) whose src/ file no longer exists: "
@@ -120,9 +120,9 @@ def canonical_digest(entries):
     implementations.
     """
     blob = ""
-    for cid in sorted(entries):
-        e = entries[cid]
-        blob += f"{cid}\n{e['runtimeSize']}\n0x{e['runtimeSha256']}\n"
+    for contract_id in sorted(entries):
+        e = entries[contract_id]
+        blob += f"{contract_id}\n{e['runtimeSize']}\n0x{e['runtimeSha256']}\n"
     return hashlib.sha256(blob.encode()).hexdigest(), blob
 
 
@@ -148,15 +148,15 @@ def main():
               "--update-manifest writes the very file --verify refuses to trust)")
         return 2
     root = os.path.abspath(args.root)
-    att_path = os.path.join(root, ATTESTATION)
+    attestation_path = os.path.join(root, ATTESTATION)
 
     if not args.no_build:
         r = sh("forge build", root)
         if r.returncode != 0:
             print(r.stdout[-4000:]); print(r.stderr[-4000:])
             print("EIP-170 GATE: FAIL (build failed)")
-            if os.path.exists(att_path) and not args.verify:
-                os.remove(att_path)
+            if os.path.exists(attestation_path) and not args.verify:
+                os.remove(attestation_path)
             return 1
 
     entries = discover(root)
@@ -164,37 +164,37 @@ def main():
         print("EIP-170 GATE: FAIL (no deployable src/ artifact found -- wrong root or empty out/)")
         return 1
 
-    man_path = os.path.join(root, MANIFEST)
+    manifest_path = os.path.join(root, MANIFEST)
     manifest = []
-    if os.path.exists(man_path):
-        manifest = [l.split("#")[0].strip() for l in open(man_path)]
+    if os.path.exists(manifest_path):
+        manifest = [l.split("#")[0].strip() for l in open(manifest_path)]
         manifest = [l for l in manifest if l]
 
     missing = [m for m in manifest if m not in entries]
     extra = [c for c in sorted(entries) if c not in manifest]
 
     if args.update_manifest:
-        with open(man_path, "w") as fh:
+        with open(manifest_path, "w") as fh:
             fh.write("# EIP-170 gate coverage manifest: every contract compiled from src/ with\n"
                      "# runtime code. Not all of them are deployed: VeHemiLayoutProbe is a\n"
                      "# compile-only probe for scripts/check-library-layout-mirror.sh, and\n"
                      "# VeHemiLayoutLib and VeHemiTime are internal-only libraries.\n"
                      "# Regenerate: scripts/check-eip170.sh --update-manifest\n")
-            for cid in sorted(entries):
-                fh.write(cid + "\n")
-        print(f"manifest updated: {man_path} ({len(entries)} contracts)")
+            for contract_id in sorted(entries):
+                fh.write(contract_id + "\n")
+        print(f"manifest updated: {manifest_path} ({len(entries)} contracts)")
         missing, extra = [], []
 
     over = [e for e in entries.values() if e["runtimeSize"] > EIP170]
     over_init = [e for e in entries.values() if e["initcodeSize"] > EIP3860]
 
-    w = max(len(c) for c in entries)
-    print(f"{'contract':<{w}}  {'runtime':>8}  {'margin':>8}  {'initcode':>9}  status")
-    for cid in sorted(entries):
-        e = entries[cid]
+    name_width = max(len(c) for c in entries)
+    print(f"{'contract':<{name_width}}  {'runtime':>8}  {'margin':>8}  {'initcode':>9}  status")
+    for contract_id in sorted(entries):
+        e = entries[contract_id]
         margin = EIP170 - e["runtimeSize"]
-        st = "OK" if margin >= 0 else f"OVER by {-margin} B"
-        print(f"{cid:<{w}}  {e['runtimeSize']:>8,}  {margin:>8,}  {e['initcodeSize']:>9,}  {st}")
+        status = "OK" if margin >= 0 else f"OVER by {-margin} B"
+        print(f"{contract_id:<{name_width}}  {e['runtimeSize']:>8,}  {margin:>8,}  {e['initcodeSize']:>9,}  {status}")
 
     ok = True
     for e in over:
@@ -215,15 +215,15 @@ def main():
 
     digest, blob = canonical_digest(entries)
     if not ok:
-        if os.path.exists(att_path) and not args.verify:
-            os.remove(att_path)
+        if os.path.exists(attestation_path) and not args.verify:
+            os.remove(attestation_path)
             print(f"attestation REMOVED: {ATTESTATION} (an undeployable build must not be attested)")
         print("EIP-170 GATE: FAIL")
         if args.json:
             print(json.dumps({"pass": False, "contracts": entries, "digest": digest}, indent=2))
         return 1
 
-    att = {
+    attestation = {
         "_comment": "Written ONLY by a passing scripts/check-eip170.sh. "
                     "test/deployability/EIP170Gate.t.sol recomputes `digest` from out/ and fails on any drift.",
         "limit": EIP170,
@@ -232,7 +232,7 @@ def main():
         "srcTreeSha256": "0x" + src_tree_sha(root),
         "contractCount": len(entries),
         "generatedAt": int(time.time()),
-        "contracts": {cid: entries[cid] for cid in sorted(entries)},
+        "contracts": {contract_id: entries[contract_id] for contract_id in sorted(entries)},
     }
     # Conditional write: a passing run must not rewrite the file it certifies.
     # `generatedAt` is the only field that moves on a re-cut of an unchanged tree,
@@ -240,16 +240,16 @@ def main():
     # field, keep the file (and its original `generatedAt`) and say so.
     prev = None
     try:
-        with open(att_path) as fh:
+        with open(attestation_path) as fh:
             prev = json.load(fh)
     except Exception:
         prev = None
     def _semantic(d):
         return {k: v for k, v in d.items() if k != "generatedAt"}
-    if isinstance(prev, dict) and _semantic(prev) == _semantic(att):
-        att["generatedAt"] = prev.get("generatedAt", att["generatedAt"])
+    if isinstance(prev, dict) and _semantic(prev) == _semantic(attestation):
+        attestation["generatedAt"] = prev.get("generatedAt", attestation["generatedAt"])
         print(f"attestation unchanged: {ATTESTATION}  digest=0x{digest[:16]}...  "
-              f"srcTree=0x{att['srcTreeSha256'][2:18]}...  contracts={len(entries)}"
+              f"srcTree=0x{attestation['srcTreeSha256'][2:18]}...  contracts={len(entries)}"
               f"  (identical but for generatedAt -- NOT rewritten)")
     elif args.verify:
         # --verify: report the drift, write nothing, return 1.
@@ -257,20 +257,20 @@ def main():
         if not isinstance(prev, dict):
             print(f"  {ATTESTATION} is MISSING or unreadable. Absent is NOT green.")
         else:
-            pa, na = _semantic(prev), _semantic(att)
-            for k in sorted(set(pa) | set(na)):
-                if pa.get(k) != na.get(k):
+            prev_fields, new_fields = _semantic(prev), _semantic(attestation)
+            for k in sorted(set(prev_fields) | set(new_fields)):
+                if prev_fields.get(k) != new_fields.get(k):
                     if k == "contracts":
-                        po, no = pa.get(k) or {}, na.get(k) or {}
-                        for cid in sorted(set(po) | set(no)):
-                            if po.get(cid) != no.get(cid):
-                                print(f"  contracts[{cid}]:")
-                                print(f"      on disk : {po.get(cid)}")
-                                print(f"      built   : {no.get(cid)}")
+                        prev_contracts, new_contracts = prev_fields.get(k) or {}, new_fields.get(k) or {}
+                        for contract_id in sorted(set(prev_contracts) | set(new_contracts)):
+                            if prev_contracts.get(contract_id) != new_contracts.get(contract_id):
+                                print(f"  contracts[{contract_id}]:")
+                                print(f"      on disk : {prev_contracts.get(contract_id)}")
+                                print(f"      built   : {new_contracts.get(contract_id)}")
                     else:
                         print(f"  {k}:")
-                        print(f"      on disk : {pa.get(k)}")
-                        print(f"      built   : {na.get(k)}")
+                        print(f"      on disk : {prev_fields.get(k)}")
+                        print(f"      built   : {new_fields.get(k)}")
         print("  The artifacts in out/ are NOT the ones the attestation names.")
         print(f"  Re-stamp DELIBERATELY with `./scripts/check-eip170.sh --no-build` "
               f"and say so in the commit; do NOT let a gate do it for you.")
@@ -279,12 +279,12 @@ def main():
                               "digest": digest}, indent=2))
         return 1
     else:
-        os.makedirs(os.path.dirname(att_path), exist_ok=True)
-        with open(att_path, "w") as fh:
-            json.dump(att, fh, indent=2, sort_keys=True)
+        os.makedirs(os.path.dirname(attestation_path), exist_ok=True)
+        with open(attestation_path, "w") as fh:
+            json.dump(attestation, fh, indent=2, sort_keys=True)
             fh.write("\n")
         print(f"attestation written: {ATTESTATION}  digest=0x{digest[:16]}...  "
-              f"srcTree=0x{att['srcTreeSha256'][2:18]}...  contracts={len(entries)}")
+              f"srcTree=0x{attestation['srcTreeSha256'][2:18]}...  contracts={len(entries)}")
     print(f"EIP-170 GATE: PASS ({len(entries)} deployable src/ contracts, "
           f"worst margin {min(EIP170 - e['runtimeSize'] for e in entries.values()):,} B)")
     if args.json:

@@ -43,11 +43,11 @@ contract StorageLayoutOnchainAnchorTest is Test {
         vvdCurrent = vm.readFile("test/fixtures/storage-layouts/VeHemiVoteDelegation.json");
     }
 
-    function probeEntry(string calldata json, uint256 i) external view returns (string memory) {
+    function readEntryLabel(string calldata json, uint256 i) external view returns (string memory) {
         return vm.parseJsonString(json, string.concat(".storage[", vm.toString(i), "].label"));
     }
 
-    function probeMember(string calldata json, string calldata typeKey, uint256 i)
+    function readMemberLabel(string calldata json, string calldata typeKey, uint256 i)
         external
         view
         returns (string memory)
@@ -57,16 +57,16 @@ contract StorageLayoutOnchainAnchorTest is Test {
         );
     }
 
-    function _count(string memory json) internal returns (uint256) {
+    function _countStorageEntries(string memory json) internal returns (uint256) {
         for (uint256 i; i < 256; ++i) {
-            try this.probeEntry(json, i) {} catch { return i; }
+            try this.readEntryLabel(json, i) {} catch { return i; }
         }
         revert("entry count exceeds 256");
     }
 
     function _countMembers(string memory json, string memory typeKey) internal returns (uint256) {
         for (uint256 i; i < 64; ++i) {
-            try this.probeMember(json, typeKey, i) {} catch { return i; }
+            try this.readMemberLabel(json, typeKey, i) {} catch { return i; }
         }
         revert("member count exceeds 64");
     }
@@ -78,8 +78,8 @@ contract StorageLayoutOnchainAnchorTest is Test {
     function _assertAppendOnly(string memory deployed, string memory current, string memory name)
         internal
     {
-        uint256 deployedCount = _count(deployed);
-        uint256 currentCount = _count(current);
+        uint256 deployedCount = _countStorageEntries(deployed);
+        uint256 currentCount = _countStorageEntries(current);
 
         assertGt(deployedCount, 0, string.concat(name, ": deployed anchor is empty - VACUOUS"));
         assertGe(
@@ -150,18 +150,18 @@ contract StorageLayoutOnchainAnchorTest is Test {
         string memory typeKey,
         string memory name
     ) internal {
-        string memory dPath = string.concat(".types.[\"", typeKey, "\"]");
+        string memory typePath = string.concat(".types.[\"", typeKey, "\"]");
         assertTrue(
-            vm.keyExistsJson(current, dPath),
+            vm.keyExistsJson(current, typePath),
             string.concat(name, ": struct ", typeKey, " disappeared from the current layout")
         );
 
-        uint256 dm = _countMembers(deployed, typeKey);
-        uint256 cm = _countMembers(current, typeKey);
-        assertGt(dm, 0, string.concat(name, " ", typeKey, ": deployed struct has no members - VACUOUS"));
+        uint256 deployedMembers = _countMembers(deployed, typeKey);
+        uint256 currentMembers = _countMembers(current, typeKey);
+        assertGt(deployedMembers, 0, string.concat(name, " ", typeKey, ": deployed struct has no members - VACUOUS"));
         assertGe(
-            cm,
-            dm,
+            currentMembers,
+            deployedMembers,
             string.concat(
                 name,
                 " ",
@@ -170,8 +170,8 @@ contract StorageLayoutOnchainAnchorTest is Test {
             )
         );
         assertEq(
-            cm,
-            dm,
+            currentMembers,
+            deployedMembers,
             string.concat(
                 name,
                 " ",
@@ -180,39 +180,39 @@ contract StorageLayoutOnchainAnchorTest is Test {
                 "added to a struct that the live proxy already stores. A member appended into "
                 "free padding moves neither numberOfBytes nor any existing member offset; once "
                 "the fixture is regenerated, the only layout checks that see such a change are "
-                "this test and the member-count pin in StorageLayoutGolden.t.sol."
+                "this test and the member-count assertion in StorageLayoutGolden.t.sol."
             )
         );
 
-        for (uint256 i; i < dm; ++i) {
-            string memory dm_ = string.concat(dPath, ".members[", vm.toString(i), "]");
+        for (uint256 i; i < deployedMembers; ++i) {
+            string memory memberPath = string.concat(typePath, ".members[", vm.toString(i), "]");
             string memory ctx =
                 string.concat(name, " ", typeKey, " member ", vm.toString(i), " ");
             assertEq(
-                vm.parseJsonString(current, string.concat(dm_, ".label")),
-                vm.parseJsonString(deployed, string.concat(dm_, ".label")),
+                vm.parseJsonString(current, string.concat(memberPath, ".label")),
+                vm.parseJsonString(deployed, string.concat(memberPath, ".label")),
                 string.concat(ctx, "label changed")
             );
             assertEq(
-                vm.parseJsonString(current, string.concat(dm_, ".slot")),
-                vm.parseJsonString(deployed, string.concat(dm_, ".slot")),
+                vm.parseJsonString(current, string.concat(memberPath, ".slot")),
+                vm.parseJsonString(deployed, string.concat(memberPath, ".slot")),
                 string.concat(ctx, "slot changed")
             );
             assertEq(
-                vm.parseJsonUint(current, string.concat(dm_, ".offset")),
-                vm.parseJsonUint(deployed, string.concat(dm_, ".offset")),
+                vm.parseJsonUint(current, string.concat(memberPath, ".offset")),
+                vm.parseJsonUint(deployed, string.concat(memberPath, ".offset")),
                 string.concat(ctx, "offset changed")
             );
             assertEq(
-                vm.parseJsonString(current, string.concat(dm_, ".type")),
-                vm.parseJsonString(deployed, string.concat(dm_, ".type")),
+                vm.parseJsonString(current, string.concat(memberPath, ".type")),
+                vm.parseJsonString(deployed, string.concat(memberPath, ".type")),
                 string.concat(ctx, "type changed")
             );
         }
 
         assertEq(
-            vm.parseJsonString(current, string.concat(dPath, ".numberOfBytes")),
-            vm.parseJsonString(deployed, string.concat(dPath, ".numberOfBytes")),
+            vm.parseJsonString(current, string.concat(typePath, ".numberOfBytes")),
+            vm.parseJsonString(deployed, string.concat(typePath, ".numberOfBytes")),
             string.concat(name, " ", typeKey, ": numberOfBytes changed vs the deployed implementation")
         );
     }
@@ -240,9 +240,9 @@ contract StorageLayoutOnchainAnchorTest is Test {
     ///      uses `DelegateCheckpoint.fixedBias`, but that member is already
     ///      declared in the deployed implementation, so every VVD struct shape
     ///      is unchanged.
-    function test_AutoRelockAppendsExactlyThreeVeHemiEntriesAndNothingElse() public {
-        assertEq(_count(veHemiDeployed), 26, "deployed VeHemi anchor drifted");
-        assertEq(_count(veHemiCurrent), 29, "auto-relock must append exactly 3 VeHemi entries");
+    function test_AutoRelockAppendsExactlyThreeEntriesPerLayoutAndNothingElse() public {
+        assertEq(_countStorageEntries(veHemiDeployed), 26, "deployed VeHemi anchor drifted");
+        assertEq(_countStorageEntries(veHemiCurrent), 29, "auto-relock must append exactly 3 VeHemi entries");
         assertEq(_field(veHemiCurrent, 26, "slot"), "64", "first appended entry must be at slot 64");
         assertEq(_field(veHemiCurrent, 26, "label"), "autoRelockRemaining");
         // Slot 65 is above the deployed high-water mark (the deployed layout's
@@ -257,8 +257,8 @@ contract StorageLayoutOnchainAnchorTest is Test {
         // ends at `__gapV3[49]` covering slots 51-99, so V4's first field
         // lands at absolute slot 100 and the deployed prefix (slots 0-99) is
         // untouched.
-        assertEq(_count(vvdDeployed), 9, "deployed VVD anchor drifted");
-        assertEq(_count(vvdCurrent), 12, "V4 must append exactly 3 VVD entries");
+        assertEq(_countStorageEntries(vvdDeployed), 9, "deployed VVD anchor drifted");
+        assertEq(_countStorageEntries(vvdCurrent), 12, "V4 must append exactly 3 VVD entries");
         assertEq(_field(vvdCurrent, 9, "slot"), "100", "delegationBookedAt must land at slot 100");
         assertEq(_field(vvdCurrent, 9, "label"), "delegationBookedAt");
         assertEq(_field(vvdCurrent, 10, "slot"), "101", "legacyDatingUntil must land at slot 101");
@@ -298,7 +298,7 @@ contract StorageLayoutOnchainAnchorTest is Test {
     ///      sandboxed runs are unaffected; a run that sets the variable gets the
     ///      full check against the live head. Read-only: one `eth_getStorageAt`
     ///      per proxy, no transaction is ever broadcast.
-    function test_AnchorStillDescribesTheLiveImplementation() public {
+    function test_AnchorMatchesTheLiveImplementation() public {
         string memory rpc = vm.envOr("HEMI_RPC_URL", string(""));
         if (bytes(rpc).length == 0) {
             vm.skip(true);
@@ -306,11 +306,11 @@ contract StorageLayoutOnchainAnchorTest is Test {
         }
         vm.createSelectFork("hemi");
 
-        address liveVeHemi = address(uint160(uint256(vm.load(VEHEMI_PROXY, IMPL_SLOT))));
-        address liveVvd = address(uint160(uint256(vm.load(VVD_PROXY, IMPL_SLOT))));
+        address liveVeHemiImpl = address(uint160(uint256(vm.load(VEHEMI_PROXY, IMPL_SLOT))));
+        address liveVvdImpl = address(uint160(uint256(vm.load(VVD_PROXY, IMPL_SLOT))));
 
         assertEq(
-            liveVeHemi,
+            liveVeHemiImpl,
             ANCHORED_VEHEMI_IMPL,
             "THE VeHemi ANCHOR IS STALE. Mainnet now runs a different implementation than the one "
             "test/fixtures/storage-layouts/onchain/VeHemi.deployed.json was extracted from. Every "
@@ -319,7 +319,7 @@ contract StorageLayoutOnchainAnchorTest is Test {
             "update ANCHORED_VEHEMI_IMPL - do NOT delete this assertion."
         );
         assertEq(
-            liveVvd,
+            liveVvdImpl,
             ANCHORED_VVD_IMPL,
             "THE VeHemiVoteDelegation ANCHOR IS STALE. See the VeHemi message above; the same "
             "re-extraction is required for VeHemiVoteDelegation.deployed.json."

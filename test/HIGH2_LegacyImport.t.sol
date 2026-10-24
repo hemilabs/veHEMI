@@ -25,7 +25,7 @@ import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.s
 ///           - reverts after finalize
 ///           - the end-to-end migration runbook (deploy → import → seal → swap)
 ///             produces a contract that returns correct `getVotes` for the
-///             next epoch and beyond.
+///             next hour and beyond.
 contract HIGH2_LegacyImportTest is Test {
     VeHemi public veHemi;
     VeHemiVoteDelegation public legacyVVD;
@@ -270,7 +270,7 @@ contract HIGH2_LegacyImportTest is Test {
         vm.prank(OWNER);
         veHemi.updateVoteDelegation(newVVD);
 
-        // Warp to the next epoch so newVVD's checkpoints are queryable.
+        // Warp past the next hour boundary so newVVD's checkpoints are queryable.
         vm.warp(((block.timestamp / 1 hours) * 1 hours) + 1 hours + 1);
 
         // === Verification ===
@@ -362,7 +362,7 @@ contract HIGH2_LegacyImportTest is Test {
     // ─── Expired-lock skip ───────────────────────────────────────────────
     //
     // `importDelegationsFromLegacy` pre-checks each lock against the next
-    // epoch boundary so that a single expired lock does NOT revert the
+    // hour boundary so that a single expired lock does NOT revert the
     // whole batch via `_getNormalizedLockedInfo`'s CanNotDelegateExpiredLocks.
     //
     // Pre-check formula:
@@ -405,15 +405,15 @@ contract HIGH2_LegacyImportTest is Test {
         legacyVVD.delegate(bobId, CAROL);
         uint256 bobEnd = veHemi.getLockedBalance(bobId).end;
 
-        // Warp to bobEnd + 1 hour so next-checkpoint also passes bobEnd.
+        // Warp to bobEnd + 1 hour so the next hour boundary also passes bobEnd.
         vm.warp(bobEnd + 1 hours);
 
         // Confirm gate would trip: _nextCheckpoint > bobEnd.
-        uint256 nextCheckpoint = ((block.timestamp / 1 hours) * 1 hours) + 1 hours;
+        uint256 nextHourBoundary = ((block.timestamp / 1 hours) * 1 hours) + 1 hours;
         assertGt(
-            nextCheckpoint,
+            nextHourBoundary,
             bobEnd,
-            "test setup wrong: next-checkpoint must be past bobEnd"
+            "test setup wrong: the next hour boundary must be past bobEnd"
         );
 
         uint256[] memory bobIds = new uint256[](1);
@@ -430,44 +430,44 @@ contract HIGH2_LegacyImportTest is Test {
         );
     }
 
-    // Lock ending EXACTLY at the next checkpoint must be skipped (the
+    // Lock ending at or before the next hour boundary must be skipped (the
     // revert gate is `<=`, so the pre-check must also be `<=`).
-    function test_importDelegationsFromLegacy_skipsLockEndingExactlyAtNextCheckpoint() public {
+    function test_importDelegationsFromLegacy_skipsLockEndingAtOrBeforeNextHourBoundary() public {
         uint256 bobId = _mintLock(BOB, LOCK_AMOUNT);
         vm.prank(BOB);
         legacyVVD.delegate(bobId, CAROL);
         uint256 bobEnd = veHemi.getLockedBalance(bobId).end;
 
-        // Warp so the NEXT hourly checkpoint == bobEnd EXACTLY. nextCheckpoint
+        // Warp so the NEXT hour boundary == bobEnd EXACTLY. nextHourBoundary
         // = (ts/1h)*1h + 1h. Choose ts = bobEnd - 1 so floor(ts/1h)*1h + 1h
         // = bobEnd whenever bobEnd is hour-aligned; SIX_DAYS is NOT a multiple
         // of 1 hour (YEAR = 365.25d → SIX_DAYS = 526260s), so we instead pick
         // ts so that ((ts) / 1h) * 1h + 1h == bobEnd, i.e. ts ∈ [bobEnd-1h, bobEnd).
-        // The smallest such ts that yields nextCheckpoint >= bobEnd is ts = bobEnd - 1.
-        // But because bobEnd may not be hour-aligned, choose nextCheckpoint == bobEnd
+        // The smallest such ts that yields nextHourBoundary >= bobEnd is ts = bobEnd - 1.
+        // But because bobEnd may not be hour-aligned, choose nextHourBoundary == bobEnd
         // is only possible when bobEnd is hour-aligned. Instead, prove the
         // boundary case `_lock.end == _nextCheckpoint` by constructing ts so
-        // that nextCheckpoint == bobEnd exactly: warp to (bobEnd - 1) and
+        // that nextHourBoundary == bobEnd exactly: warp to (bobEnd - 1) and
         // bump forward until (ts/1h)*1h + 1h == bobEnd OR skip if impossible.
         // For SIX_DAYS-aligned ends (not hour-aligned), the closest we can
         // achieve is _nextCheckpoint > bobEnd (also a skip case, already
         // covered by the previous test). Therefore exercise the `==` branch
-        // by warping just before bobEnd so that nextCheckpoint > bobEnd by
+        // by warping just before bobEnd so that nextHourBoundary > bobEnd by
         // less than one hour, which still satisfies `_lock.end <= _nextCheckpoint`.
         vm.warp(bobEnd - 1);
-        uint256 nextCheckpoint = ((block.timestamp / 1 hours) * 1 hours) + 1 hours;
-        assertGe(nextCheckpoint, bobEnd, "next-checkpoint must >= lock end");
+        uint256 nextHourBoundary = ((block.timestamp / 1 hours) * 1 hours) + 1 hours;
+        assertGe(nextHourBoundary, bobEnd, "the next hour boundary must be >= lock end");
 
         uint256[] memory bobIds = new uint256[](1);
         bobIds[0] = bobId;
-        // Pre-check uses `<=` so end == nextCheckpoint is skipped, matching
+        // Pre-check uses `<=` so end == nextHourBoundary is skipped, matching
         // the revert condition `_end <= checkPointTimestamp_`.
         vm.prank(OWNER);
         newVVD.importDelegationsFromLegacy(legacyVVD, bobIds);
         assertEq(
             newVVD.delegation(bobId).delegatee,
             address(0),
-            "lock ending exactly at next-checkpoint must be skipped"
+            "lock ending at or before the next hour boundary must be skipped"
         );
     }
 

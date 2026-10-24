@@ -20,7 +20,7 @@ import {IVeHemiVoteDelegation} from "../../src/interfaces/IVeHemiVoteDelegation.
 ///              the access check still runs first.
 contract CodelessModuleRefusedTest is AutoRelockTestBase {
     uint256 internal constant PRINCIPAL = 1_000 ether;
-    uint256 internal constant BIG_GAS = 30_000_000;
+    uint256 internal constant CALL_GAS_LIMIT = 30_000_000;
 
     /// @dev A codeless address. `address(0)` is EXCLUDED on purpose: it is
     ///      refused earlier by the `AddressIsNull` check, so it
@@ -31,14 +31,14 @@ contract CodelessModuleRefusedTest is AutoRelockTestBase {
 
     function _call(address who_, bytes memory data_) internal returns (bool ok) {
         vm.prank(who_);
-        (ok, ) = address(veHemi).call{gas: BIG_GAS}(data_);
+        (ok, ) = address(veHemi).call{gas: CALL_GAS_LIMIT}(data_);
     }
 
     function _disable(address who_, uint256 id_) internal returns (bool) {
         return _call(who_, abi.encodeWithSignature("disableAutoRelock(uint256)", id_));
     }
 
-    function _retire(address who_, uint256 id_) internal returns (bool) {
+    function _retireStale(address who_, uint256 id_) internal returns (bool) {
         return _call(who_, abi.encodeWithSignature("retireStaleAutoRelock(uint256)", id_));
     }
 
@@ -49,15 +49,15 @@ contract CodelessModuleRefusedTest is AutoRelockTestBase {
         if (_disable(holder_, id_) && veHemi.autoRelockRemaining(id_) == 0) return true;
         uint256 staleAt = veHemi.autoRelockStaleAt(id_);
         if (block.timestamp < staleAt) vm.warp(staleAt);
-        if (_retire(stranger, id_) && veHemi.autoRelockRemaining(id_) == 0) return true;
+        if (_retireStale(stranger, id_) && veHemi.autoRelockRemaining(id_) == 0) return true;
         return veHemi.autoRelockRemaining(id_) == 0;
     }
 
     function _recoverPrincipal(uint256 id_, address holder_) internal returns (uint256) {
         if (!_ownerIndependentExit(id_, holder_)) return 0;
-        uint256 target = uint256(veHemi.getLockedBalance(id_).end) + 1;
-        if (block.timestamp < target) vm.warp(target);
-        for (uint256 c; c < 8; ++c) { try veHemi.checkpoint() {} catch {} }
+        uint256 withdrawAt = uint256(veHemi.getLockedBalance(id_).end) + 1;
+        if (block.timestamp < withdrawAt) vm.warp(withdrawAt);
+        for (uint256 i; i < 8; ++i) { try veHemi.checkpoint() {} catch {} }
         uint256 before = hemi.balanceOf(holder_);
         for (uint256 i; i < 6; ++i) {
             if (_call(holder_, abi.encodeWithSignature("withdraw(uint256)", id_))) break;
@@ -90,7 +90,7 @@ contract CodelessModuleRefusedTest is AutoRelockTestBase {
     ///         install accepted, `disableAutoRelock`, `withdraw` and
     ///         `createLock` would all revert and `recovered` would be 0.)
     function test_R_codelessModuleInstallIsRefused_principalComesHome() public {
-        uint256 id = _flatDelegated(victim, dele);
+        uint256 id = _flatDelegated(victim, delegateeA);
         address moduleBefore = address(veHemi.voteDelegation());
 
         bool accepted = _tryInstall(EOA_MODULE);
@@ -107,16 +107,16 @@ contract CodelessModuleRefusedTest is AutoRelockTestBase {
         // 100 ether, NOT 1: `MIN_LOCK_AMOUNT` is 10 HEMI, so a 1-ether probe
         // would revert `AmountTooSmall` BEFORE it reaches `_delegate`.
         vm.prank(stranger);   // funded + approved in AutoRelockTestBase.setUp
-        (bool createOk, ) = address(veHemi).call{gas: BIG_GAS}(
+        (bool createOk, ) = address(veHemi).call{gas: CALL_GAS_LIMIT}(
             abi.encodeWithSignature("createLock(uint256,uint256)", uint256(100 ether), uint256(4 * 365 days))
         );
         emit log_named_uint("R createLock survived", createOk ? 1 : 0);
         // non-vacuity: the SAME call on a healthy module must succeed
         if (!accepted) assertTrue(createOk, "R: createLock failed on a HEALTHY module -- probe is vacuous");
 
-        uint256 got = _recoverPrincipal(id, victim);
-        emit log_named_uint("R recovered", got);
-        assertEq(got, PRINCIPAL, "R: PRINCIPAL TRAPPED behind a codeless module");
+        uint256 recovered = _recoverPrincipal(id, victim);
+        emit log_named_uint("R recovered", recovered);
+        assertEq(recovered, PRINCIPAL, "R: PRINCIPAL TRAPPED behind a codeless module");
     }
 
     // ==================================================================
@@ -148,12 +148,12 @@ contract CodelessModuleRefusedTest is AutoRelockTestBase {
     /// @notice The ONLY legitimate argument — a deployed contract — still
     ///         installs, and a position delegated through it still works.
     function test_N_contractModuleInstalls() public {
-        address real = address(delegation);
-        assertGt(real.code.length, 0, "premise: the shipped module has no code");
-        assertTrue(_tryInstall(real), "N: a REAL module was refused");
-        assertEq(address(veHemi.voteDelegation()), real, "N: pointer did not land");
-        uint256 id = _flatDelegated(victim, dele);
-        assertGt(delegation.getVotes(dele), 0, "N: delegation broken after re-install");
+        address realDelegation = address(delegation);
+        assertGt(realDelegation.code.length, 0, "premise: the real module has no code");
+        assertTrue(_tryInstall(realDelegation), "N: a REAL module was refused");
+        assertEq(address(veHemi.voteDelegation()), realDelegation, "N: pointer did not land");
+        uint256 id = _flatDelegated(victim, delegateeA);
+        assertGt(delegation.getVotes(delegateeA), 0, "N: delegation broken after re-install");
         assertEq(_recoverPrincipal(id, victim), PRINCIPAL, "N: principal lost");
     }
 

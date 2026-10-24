@@ -16,18 +16,18 @@ import "../module-failure/BrokenModules.sol";
 
 /// @dev Stores records like a module would and lets the test pre-seed a
 ///      flat record, so VeHemi's read-back sees something to judge.
-abstract contract RecordingModule is BrokenModuleBase {
-    mapping(uint256 => Delegation) internal recs;
+abstract contract SeedableRecordModule is BrokenModuleBase {
+    mapping(uint256 => Delegation) internal records;
 
     function seedFlat(uint256 id_, address delegatee_, uint96 bias_) external {
-        recs[id_] = Delegation({
+        records[id_] = Delegation({
             delegatee: delegatee_, end: uint48(block.timestamp + 365 days),
             bias: bias_, amount: 0, slope: 0
         });
     }
 
     function delegation(uint256 id_) external view virtual override returns (Delegation memory) {
-        return recs[id_];
+        return records[id_];
     }
 }
 
@@ -36,7 +36,7 @@ abstract contract RecordingModule is BrokenModuleBase {
 ///      Two caught failures in one transaction, the second SHORTER than the
 ///      first: VeHemi's bounded selector copy must clear its scratch word, or
 ///      the second `DelegationUpdateFailedReason` reports the first selector.
-contract MixedFailureModule is RecordingModule {
+contract MixedFailureModule is SeedableRecordModule {
     error MoveRefused();
 
     function delegate(uint256, address to_) external pure override {
@@ -47,38 +47,38 @@ contract MixedFailureModule is RecordingModule {
 
 /// @dev Reverts `delegate` with EXACTLY the configured bytes, whatever their
 ///      length. Drives VeHemi's catch through every revert-data shape.
-contract RawRevertModule is RecordingModule {
+contract RawRevertModule is SeedableRecordModule {
     bytes public data;
 
     function setData(bytes calldata data_) external { data = data_; }
 
     function delegate(uint256, address) external view override {
-        bytes memory d = data;
-        assembly { revert(add(d, 0x20), mload(d)) }
+        bytes memory revertData = data;
+        assembly { revert(add(revertData, 0x20), mload(revertData)) }
     }
 }
 
 /// @dev Refuses the move with the real selector and ACCEPTS the removal,
 ///      recording the gas it was handed at entry, so a test can check that
 ///      the removal is always handed the whole `DELEGATION_GAS_CEILING`.
-contract RemovalGasProbeModule is RecordingModule {
+contract RemovalGasProbeModule is SeedableRecordModule {
     error DelegationSlopeOverflow();
     uint256 public removalGasAtEntry;
     uint256 public removals;
 
     function delegate(uint256 id_, address to_) external override {
-        uint256 g = gasleft();
+        uint256 gasAtEntry = gasleft();
         if (to_ != address(0)) revert DelegationSlopeOverflow();
-        removalGasAtEntry = g;
+        removalGasAtEntry = gasAtEntry;
         removals += 1;
-        delete recs[id_];
+        delete records[id_];
     }
 }
 
 /// @dev THE LIMITATION SHAPE: refuses the move and ACCEPTS the
 ///      removal as a silent no-op, so its own record stays flat. VeHemi cannot
-///      see this from `committed_`; the test pins that it stays silent.
-contract RejectMoveNoopRemovalModule is RecordingModule {
+///      see this from `committed_`; the test asserts that it stays silent.
+contract RejectMoveNoopRemovalModule is SeedableRecordModule {
     error MoveRefused();
 
     function delegate(uint256, address to_) external pure override {
@@ -86,11 +86,11 @@ contract RejectMoveNoopRemovalModule is RecordingModule {
     }
 }
 
-/// @dev ACCEPTS every write and cannot be READ: `delegation()` reverts. On an
-///      armed transfer the move commits and the retirement read-back
-///      (`_requireFlatTermRetired`) catches the failed read: it announces and
-///      never reverts.
-contract WriteOkReadRevertsModule is BrokenModuleBase {
+/// @dev Cannot be READ: `delegation()` reverts. Accepts and ignores every
+///      write (`delegate` is a no-op). On an armed transfer the move commits
+///      and the retirement read-back (`_requireFlatTermRetired`) catches the
+///      failed read: it announces and never reverts.
+contract ReadRevertingModule is BrokenModuleBase {
     error Unreadable();
     function delegate(uint256, address) external override {}
     function delegation(uint256) external pure override returns (Delegation memory) { revert Unreadable(); }
@@ -102,7 +102,7 @@ contract WriteOkReadRevertsModule is BrokenModuleBase {
 ///      2,000,000 bytes: the module's own revert still fits its 8M ceiling, but
 ///      two full copies in VeHemi (move + removal) do not fit a 29.93M
 ///      transaction, so the size tells the bounded copy apart from a full one.
-contract RevertBombModule is RecordingModule {
+contract RevertBombModule is SeedableRecordModule {
     uint256 public size;
 
     constructor(uint256 size_) { size = size_; }
@@ -115,7 +115,7 @@ contract RevertBombModule is RecordingModule {
 
 /// @dev Burns its whole allowance on `delegate` and then REVERTS (the
 ///      burn-and-return shape is `OogVoteDelegation`).
-contract BurnAndRevertModule is RecordingModule {
+contract BurnAndRevertModule is SeedableRecordModule {
     function delegate(uint256, address) external view override {
         uint256 x = 1;
         while (gasleft() > 300) { x = uint256(keccak256(abi.encode(x))); }
@@ -126,10 +126,10 @@ contract BurnAndRevertModule is RecordingModule {
 /// @dev Raises the slope-overflow selector WITH TRAILING DATA. On the strict
 ///      `disableAutoRelock` leg VeHemi re-raises the module's revert data; it
 ///      must forward all of it, byte for byte.
-contract OverflowWithTailModule is RecordingModule {
+contract OverflowWithTailModule is SeedableRecordModule {
     function delegate(uint256, address) external pure override {
-        bytes memory d = abi.encodePacked(bytes4(0xf2b4513c), uint256(0xbeef), bytes3(0x112233));
-        assembly { revert(add(d, 0x20), mload(d)) }
+        bytes memory revertData = abi.encodePacked(bytes4(0xf2b4513c), uint256(0xbeef), bytes3(0x112233));
+        assembly { revert(add(revertData, 0x20), mload(revertData)) }
     }
 }
 
@@ -139,7 +139,7 @@ contract OverflowWithTailModule is RecordingModule {
 ///      (`FlatTermNotRetryable`: the flag is still set) and the re-anchor
 ///      notify succeeds (the {flag 0, flat record} window between
 ///      `_disarmAutoRelock` and the post-transfer move).
-contract TransferReentrantDistributor is IRewardDistributor {
+contract RetireStrandedFlatTermDistributor is IRewardDistributor {
     address public immutable vvd;
     uint256 public target;
     uint256 public attempts;
@@ -158,7 +158,7 @@ contract TransferReentrantDistributor is IRewardDistributor {
 }
 
 /// @dev A reward distributor that burns its whole allowance and returns.
-contract GasEaterDistributor is IRewardDistributor {
+contract BurnAndReturnDistributor is IRewardDistributor {
     function updateRewards(uint256) external view override {
         uint256 x = 1;
         while (gasleft() > 300) { x = uint256(keccak256(abi.encode(x))); }
@@ -182,7 +182,9 @@ contract OwnerRecordingDistributor is IRewardDistributor {
         _owners[tokenId_].push(ve.ownerOf(tokenId_));
     }
 
-    function n(uint256 tokenId_) external view returns (uint256) { return _owners[tokenId_].length; }
+    function notificationCountFor(uint256 tokenId_) external view returns (uint256) { return _owners[tokenId_].length; }
 
-    function ownerAt(uint256 tokenId_, uint256 k_) external view returns (address) { return _owners[tokenId_][k_]; }
+    function ownerAtNotification(uint256 tokenId_, uint256 index_) external view returns (address) {
+        return _owners[tokenId_][index_];
+    }
 }

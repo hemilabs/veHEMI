@@ -83,7 +83,7 @@ contract VeHemiVoteDelegationUpgradeTest is Test {
         // reads ARRAY ELEMENTS, not the length; there is no getter that
         // surfaces the length slot, so we verify via vm.load in _assertSentinels.
         // This slot's layout binding is covered statically by
-        // `test_VeHemiVoteDelegation_AllSlotsAtExpectedPositions` in Golden.
+        // `test_VeHemiVoteDelegation_SlotsThroughV3AtExpectedPositions` in Golden.
         bytes32 base1 = keccak256(abi.encode(TEST_ACCOUNT, uint256(1)));
         vm.store(proxy, base1, bytes32(uint256(0xD1)));
 

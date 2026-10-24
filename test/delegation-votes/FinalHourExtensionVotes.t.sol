@@ -8,14 +8,14 @@ import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.s
 import {MockERC20} from "../mocks/MockERC20.sol";
 
 /// @notice Votes never exceed supply at an Aragon-reachable snapshot
-///         after an `increaseUnlockTime` in a lock's final hour.
+///         after an `increaseUnlockTime` in a lock's near-expiry window.
 ///
 ///   The near-expiry window opens when `H = hourBoundary(tau) >= end`, i.e.
 ///   for the last `((end - 1) mod 3600) + 1` seconds of the lock (`end` is on
 ///   the SIX_DAYS grid, `525,960 mod 3600 = 360`, so 360 s to 3,600 s).
 contract FinalHourExtensionVotesTest is Test {
     VeHemi internal veHemi;
-    VeHemiVoteDelegation internal del;
+    VeHemiVoteDelegation internal delegation;
     MockERC20 internal hemi;
 
     address internal owner = address(this);
@@ -29,12 +29,12 @@ contract FinalHourExtensionVotesTest is Test {
     function setUp() public {
         hemi = new MockERC20("HEMI", "HEMI", 18);
         VeHemi logic = new VeHemi(address(hemi));
-        ERC1967Proxy p = new ERC1967Proxy(
+        ERC1967Proxy proxy = new ERC1967Proxy(
             address(logic), abi.encodeWithSelector(VeHemi.initialize.selector, owner)
         );
-        veHemi = VeHemi(address(p));
-        del = new VeHemiVoteDelegation(address(veHemi));
-        veHemi.updateVoteDelegation(del);
+        veHemi = VeHemi(address(proxy));
+        delegation = new VeHemiVoteDelegation(address(veHemi));
+        veHemi.updateVoteDelegation(delegation);
         vm.warp(100 * SIX_DAYS + 1800);
     }
 
@@ -47,12 +47,12 @@ contract FinalHourExtensionVotesTest is Test {
     }
 
     // ------------------------------------------------------------------
-    /// @notice Aragon's TokenVoting reads veHEMI at `S = block.timestamp - 1`
+    /// @notice Aragon's TokenVoting reads veHEMI at `snapshotAt = block.timestamp - 1`
     ///   (`snapshotTimepoint`), and Hemi blocks are 12 s apart, so after a
     ///   write at block `tau` the reachable snapshots inside `[tau+1, end)`
-    ///   are `S = tau + 12k - 1`. This body samples exactly those instants
+    ///   are `snapshotAt = tau + 12k - 1`. This body samples exactly those instants
     ///   for an extension at the first second of the window.
-    function test_aragonReachableSnapshotsInsideTheWindow() public {
+    function test_nearExpiryExtension_votesNeverExceedSupplyAtAragonReachableSnapshots() public {
         uint256 id = _mk(9 * SIX_DAYS); // bucket 9 -> window 3,240 s
         uint256 end = veHemi.getLockedBalance(id).end;
         uint256 window = ((end - 1) % 1 hours) + 1;
@@ -62,21 +62,22 @@ contract FinalHourExtensionVotesTest is Test {
         veHemi.increaseUnlockTime(id, 60 * SIX_DAYS);
         vm.warp(end + 2 hours);
 
-        uint256 reachable;
+        uint256 violatingSnapshots;
         int256 worst;
-        // Aragon snapshots: S = t_prop - 1, t_prop a block timestamp on a
+        // Aragon snapshots: snapshotAt = t_prop - 1, t_prop a block timestamp on a
         // 12 s grid anchored at `tau` (itself a block timestamp).
         for (uint256 k = 1; tau + 12 * k - 1 < end; ++k) {
-            uint256 S = tau + 12 * k - 1;
-            int256 d = int256(del.getPastVotes(alice, S)) - int256(del.getPastTotalSupply(S));
-            if (d > 0) {
-                reachable++;
-                if (d > worst) worst = d;
+            uint256 snapshotAt = tau + 12 * k - 1;
+            int256 excess = int256(delegation.getPastVotes(alice, snapshotAt))
+                - int256(delegation.getPastTotalSupply(snapshotAt));
+            if (excess > 0) {
+                violatingSnapshots++;
+                if (excess > worst) worst = excess;
             }
         }
-        emit log_named_uint("window (s)", window);
-        emit log_named_uint("Aragon-reachable snapshots with votes>supply", reachable);
+        emit log_named_uint("near-expiry window (s)", window);
+        emit log_named_uint("Aragon-reachable snapshots with votes>supply", violatingSnapshots);
         emit log_named_int("worst over-count at an Aragon snapshot (wei)", worst);
-        assertEq(reachable, 0, "the window is reachable through Aragon at the real cadence");
+        assertEq(violatingSnapshots, 0, "the near-expiry window is reachable through Aragon at the real cadence");
     }
 }

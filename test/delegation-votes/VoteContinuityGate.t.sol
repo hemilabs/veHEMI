@@ -18,17 +18,17 @@ import {VoteContinuityLaw} from "./VoteContinuityLaw.sol";
 contract VoteContinuityGateTest is LockedCurveTestBase {
     address internal constant MALLORY = address(0xBAD0);
 
-    function _mk(address o, uint256 a, uint256 d) internal returns (uint256 id) {
-        hemi.mint(o, a);
-        vm.prank(o); hemi.approve(address(veHemi), type(uint256).max);
-        vm.prank(o); id = veHemi.createLock(a, d);
+    function _mk(address owner_, uint256 amount_, uint256 duration_) internal returns (uint256 id) {
+        hemi.mint(owner_, amount_);
+        vm.prank(owner_); hemi.approve(address(veHemi), type(uint256).max);
+        vm.prank(owner_); id = veHemi.createLock(amount_, duration_);
     }
 
-    function _ids(uint256 a) internal pure returns (uint256[] memory o) {
-        o = new uint256[](1); o[0] = a;
+    function _ids(uint256 id_) internal pure returns (uint256[] memory ids_) {
+        ids_ = new uint256[](1); ids_[0] = id_;
     }
 
-    function _arm() internal returns (uint256 id) {
+    function _delegatedPositionWithFundedCallers() internal returns (uint256 id) {
         vm.warp(((block.timestamp / SIX_DAYS) + 2) * SIX_DAYS + 1);
         id = _mk(alice, 500 ether, 12 * SIX_DAYS);
         vm.prank(alice); delegation.delegate(id, bob);
@@ -40,16 +40,16 @@ contract VoteContinuityGateTest is LockedCurveTestBase {
         hemi.mint(alice, 100 ether);
     }
 
-    function _topUp(uint256 id, uint256 amt) internal pure returns (bytes memory) {
+    function _increaseAmountCalldata(uint256 id, uint256 amt) internal pure returns (bytes memory) {
         return abi.encodeWithSignature("increaseAmount(uint256,uint256)", id, amt);
     }
 
     /// A real-size top-up by a stranger is refused, after the owner's identical
     /// call is shown to move the delegatee's ledger.
     function test_C4_strangerCannotMutate_increaseAmount_realSize() public {
-        uint256 id = _arm();
+        uint256 id = _delegatedPositionWithFundedCallers();
         VoteContinuityLaw.assertOnlyOwnerCanMutate(
-            delegation, address(veHemi), _topUp(id, 10 ether),
+            delegation, address(veHemi), _increaseAmountCalldata(id, 10 ether),
             MALLORY, alice, bob, _ids(id), "increaseAmount/10e18"
         );
     }

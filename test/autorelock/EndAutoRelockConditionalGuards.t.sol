@@ -4,7 +4,7 @@ pragma solidity ^0.8.29;
 import "../AutoRelockTestBase.sol";
 import {LyingVoteDelegation} from "../mocks/LyingVoteDelegation.sol";
 
-/// @title  Detectors for guards whose necessity is conditional.
+/// @title  Tests for guards whose necessity is conditional.
 ///
 /// @notice Three bodies pin the `force_` flag `_endAutoRelock` passes to
 ///         `_reDelegate` (redundant on this build, and only because
@@ -63,7 +63,7 @@ contract EndAutoRelockConditionalGuardsTest is AutoRelockTestBase {
             for (uint256 k; k < 2; ++k) {
                 uint256 dur = k == 0 ? 4 * 365 days : 2 * SIX_DAYS;
                 (uint256 id, , ) = createLock(victim, 1_000 ether, dur);
-                delegateTo(victim, id, dele);
+                delegateTo(victim, id, delegateeA);
                 enable(victim, id);
                 uint256 r = veHemi.autoRelockRemaining(id);
                 if (r < tightestR) tightestR = r;
@@ -75,27 +75,27 @@ contract EndAutoRelockConditionalGuardsTest is AutoRelockTestBase {
 
                 // The ordinary gate, recomputed EXACTLY as `VeHemi._delegate`
                 // computes it.
-                uint256 nextHour = ((block.timestamp / 1 hours) * 1 hours) + 1 hours;
+                uint256 nextHourBoundary = ((block.timestamp / 1 hours) * 1 hours) + 1 hours;
                 uint256 end = uint256(veHemi.getLockedBalance(id).end);
 
                 assertLt(
-                    nextHour,
+                    nextHourBoundary,
                     end,
                     "the restored end is INSIDE the next hourly checkpoint -- "
                     "`force_` in _endAutoRelock IS load-bearing after all"
                 );
-                if (end - nextHour < minSlackSeconds) minSlackSeconds = end - nextHour;
+                if (end - nextHourBoundary < minSlackSeconds) minSlackSeconds = end - nextHourBoundary;
                 ++cells;
             }
         }
 
         emit log_named_uint("cells executed", cells);
         emit log_named_uint("tightest R (seconds)", tightestR);
-        emit log_named_uint("MIN slack end-nextHour (s)", minSlackSeconds);
+        emit log_named_uint("MIN slack end - nextHourBoundary (s)", minSlackSeconds);
         // NON-VACUITY FLOOR.
         assertEq(cells, 16, "VACUITY: the sweep did not execute 16 cells");
         assertEq(tightestR, 2 * SIX_DAYS, "the tightest admissible R is not 2*SIX_DAYS");
-        assertGt(minSlackSeconds, 1 hours, "slack collapsed to within one hourly epoch");
+        assertGt(minSlackSeconds, 1 hours, "slack collapsed to within one hour");
     }
 
     /// @notice Leg 2 — THE COUPLING TRIPWIRE. `force_` is redundant ONLY
@@ -105,15 +105,15 @@ contract EndAutoRelockConditionalGuardsTest is AutoRelockTestBase {
     function test_enableRefusesAOneBucketTerm_thePremiseThatMakesForceRedundant() public {
         // `_createLock` itself refuses `lockDuration_ < 2 * SIX_DAYS`, so an
         // N == 1 position cannot be MINTED — it is REACHED. Mint the shortest
-        // admissible lock (N == 2) and let one bucket of time pass: `end` is
-        // frozen, `grid(now)` advances, N falls to 1. This is the ONLY way the
+        // admissible lock (N == 2) and let one bucket of time pass: `end` does
+        // not move, `grid(now)` advances, N falls to 1. This is the ONLY way the
         // state exists, and it is an ordinary one.
         (uint256 id, , ) = createLock(victim, 1_000 ether, 2 * SIX_DAYS);
         vm.warp(block.timestamp + SIX_DAYS);
         uint256 end = uint256(veHemi.getLockedBalance(id).end);
-        uint256 n = (end - (block.timestamp / SIX_DAYS) * SIX_DAYS) / SIX_DAYS;
-        emit log_named_uint("leg 2: N at enable", n);
-        assertEq(n, 1, "leg 2 SETUP: the probe position is not N == 1");
+        uint256 bucketsLeft = (end - (block.timestamp / SIX_DAYS) * SIX_DAYS) / SIX_DAYS;
+        emit log_named_uint("leg 2: N at enable", bucketsLeft);
+        assertEq(bucketsLeft, 1, "leg 2 premise: the test position is not N == 1");
 
         vm.prank(victim);
         (bool ok, bytes memory ret) = address(veHemi).call(
@@ -122,8 +122,7 @@ contract EndAutoRelockConditionalGuardsTest is AutoRelockTestBase {
         assertFalse(
             ok,
             "leg 2: enableAutoRelock NO LONGER REFUSES N == 1. `force_` in "
-            "`_endAutoRelock` is LOAD-BEARING again -- restore a directed control "
-            "for it before shipping."
+            "`_endAutoRelock` is LOAD-BEARING again -- restore a directed test for it."
         );
         assertEq(
             bytes4(ret),
@@ -150,7 +149,7 @@ contract EndAutoRelockConditionalGuardsTest is AutoRelockTestBase {
         uint256[6] memory phases = [uint256(0), 1, 3_599, SIX_DAYS / 2, SIX_DAYS - 3_600, SIX_DAYS - 1];
         for (uint256 i; i < phases.length; ++i) {
             (uint256 id, , ) = createLock(victim, 1_000 ether, 2 * SIX_DAYS);
-            delegateTo(victim, id, dele);
+            delegateTo(victim, id, delegateeA);
             enable(victim, id);
             // NON-VACUITY (a): the enable really did book a FLAT term.
             IVeHemiVoteDelegation.Delegation memory pre = delegation.delegation(id);
@@ -170,21 +169,21 @@ contract EndAutoRelockConditionalGuardsTest is AutoRelockTestBase {
         // cell that separates `force_` from no-`force_`.
         {
             (uint256 id7, , ) = createLock(victim, 1_000 ether, 2 * SIX_DAYS);
-            delegateTo(victim, id7, dele);
+            delegateTo(victim, id7, delegateeA);
             vm.warp(block.timestamp + SIX_DAYS);
             vm.prank(victim);
             (bool ok7, ) = address(veHemi).call(
                 abi.encodeWithSignature("enableAutoRelock(uint256)", id7)
             );
             if (ok7) {
-                emit log("leg 3: N == 1 IS ENABLEABLE -- cell 7 armed");
-                IVeHemiVoteDelegation.Delegation memory p7 = delegation.delegation(id7);
-                assertTrue(p7.slope == 0 && p7.bias > 0, "leg 3 cell7 VACUITY: no flat term booked");
+                emit log("leg 3: N == 1 IS ENABLEABLE -- cell 7 runs");
+                IVeHemiVoteDelegation.Delegation memory pre7 = delegation.delegation(id7);
+                assertTrue(pre7.slope == 0 && pre7.bias > 0, "leg 3 cell7 VACUITY: no flat term booked");
                 // the worst phase: the last second of the bucket
                 vm.warp(grid() + SIX_DAYS - 1);
                 disable(victim, id7);
-                IVeHemiVoteDelegation.Delegation memory q7 = delegation.delegation(id7);
-                if (q7.slope == 0 && q7.bias > 0) ++flatSurvivors;
+                IVeHemiVoteDelegation.Delegation memory post7 = delegation.delegation(id7);
+                if (post7.slope == 0 && post7.bias > 0) ++flatSurvivors;
                 ++cells;
             }
         }
@@ -210,34 +209,34 @@ contract EndAutoRelockConditionalGuardsTest is AutoRelockTestBase {
     // restored end pass, and then tries the holder's cure.
     // =====================================================================
     function test_strandedFlatTermIsStillRetirableAfterItsEndPasses() public {
-        IVeHemiVoteDelegation good = IVeHemiVoteDelegation(address(delegation));
+        IVeHemiVoteDelegation realDelegation = IVeHemiVoteDelegation(address(delegation));
 
         // N == 2: the tightest admissible position, so the restored end is
         // ~12 days out rather than ~4 years and the expiry is REACHABLE.
         (uint256 id, , ) = createLock(victim, 1_000 ether, 2 * SIX_DAYS);
-        delegateTo(victim, id, dele);
+        delegateTo(victim, id, delegateeA);
         enable(victim, id);
         vm.warp(block.timestamp + 7200);
 
-        uint256 wFlat = delegation.getVotes(dele);
+        uint256 wFlat = delegation.getVotes(delegateeA);
         assertGt(wFlat, 0, "VACUITY: the enable booked no flat term");
 
         // STRAND IT: the module answers reads but does not perform the
         // retirement, so `delegations[id]` keeps its FLAT shape.
         veHemi.updateVoteDelegation(IVeHemiVoteDelegation(address(new LyingVoteDelegation(delegation))));
         disable(victim, id);
-        assertEq(delegation.getVotes(dele), wFlat,
-            "VACUITY: the term was not stranded -- the probe proves nothing");
-        IVeHemiVoteDelegation.Delegation memory mid = delegation.delegation(id);
-        assertTrue(mid.slope == 0 && mid.bias > 0,
+        assertEq(delegation.getVotes(delegateeA), wFlat,
+            "VACUITY: the term was not stranded -- the test proves nothing");
+        IVeHemiVoteDelegation.Delegation memory strandedRecord = delegation.delegation(id);
+        assertTrue(strandedRecord.slope == 0 && strandedRecord.bias > 0,
             "VACUITY: the stored record is not FLAT");
 
-        veHemi.updateVoteDelegation(good);          // the module is repaired...
+        veHemi.updateVoteDelegation(realDelegation); // the module is repaired...
 
         // ...but `_endAutoRelock` already ran, so `autoRelockRemaining == 0`;
         // let the restored end fall into the past.
         uint256 end = uint256(veHemi.getLockedBalance(id).end);
-        assertGt(end, block.timestamp, "SETUP: the end is already past");
+        assertGt(end, block.timestamp, "premise: the end is already past");
         vm.warp(end + 1 hours);
 
         // THE HOLDER'S CURE: the holder moves the stranded flat term away with
@@ -245,7 +244,7 @@ contract EndAutoRelockConditionalGuardsTest is AutoRelockTestBase {
         // exercised here).
         vm.prank(victim);
         (bool ok, ) = address(delegation).call(
-            abi.encodeWithSignature("delegate(uint256,address)", id, dele2)
+            abi.encodeWithSignature("delegate(uint256,address)", id, delegateeB)
         );
         assertTrue(
             ok,
@@ -261,6 +260,6 @@ contract EndAutoRelockConditionalGuardsTest is AutoRelockTestBase {
             "the call committed but the record is STILL FLAT -- "
             "the term is stranded anyway"
         );
-        emit log_named_uint("votes at dele after the cure", delegation.getVotes(dele));
+        emit log_named_uint("votes at delegateeA after the cure", delegation.getVotes(delegateeA));
     }
 }

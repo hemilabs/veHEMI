@@ -12,14 +12,14 @@ import "./BrokenModules.sol";
 ///         ADVERSARIAL shape: a broken module that CHOOSES the selector, so the
 ///         tests can check that the holder still has an owner-independent way
 ///         out (the strict re-raise and armed-transfer suites).
-///         `disarm()` makes `delegate` accept again.
+///         `stopRefusing()` makes `delegate` accept again.
 contract SlopeOverflowLiar is BrokenModuleBase {
     error DelegationSlopeOverflow();
-    mapping(uint256 => Delegation) internal recs;
-    bool public armed = true;
+    mapping(uint256 => Delegation) internal records;
+    bool public refusing = true;
 
     function seed(uint256 id_, address delegatee_, uint96 bias_, uint64 slope_) external {
-        recs[id_] = Delegation({
+        records[id_] = Delegation({
             delegatee: delegatee_,
             end: uint48(block.timestamp + 365 days),
             bias: bias_,
@@ -28,13 +28,13 @@ contract SlopeOverflowLiar is BrokenModuleBase {
         });
     }
 
-    function disarm() external { armed = false; }
+    function stopRefusing() external { refusing = false; }
 
     function delegate(uint256, address) external view override {
-        if (armed) revert DelegationSlopeOverflow();
+        if (refusing) revert DelegationSlopeOverflow();
     }
 
     function delegation(uint256 id_) external view override returns (Delegation memory) {
-        return recs[id_];
+        return records[id_];
     }
 }

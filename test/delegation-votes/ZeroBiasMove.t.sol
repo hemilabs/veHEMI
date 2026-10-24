@@ -25,18 +25,18 @@ import {IVeHemiVoteDelegation} from "../../src/interfaces/IVeHemiVoteDelegation.
 import {LyingVoteDelegation} from "../mocks/LyingVoteDelegation.sol";
 
 contract ZeroBiasMoveTest is AutoRelockTestBase {
-    uint256 private _obs;
+    uint256 private _observations;
 
-    address internal F1 = address(0x524001);
-    address internal F2 = address(0x524002);
-    address internal F3 = address(0x524003);
-    address internal X1 = address(0x524011);
-    address internal X2 = address(0x524012);
+    address internal freshDelegatee1 = address(0x2C7B41);
+    address internal freshDelegatee2 = address(0x2C7B42);
+    address internal freshDelegatee3 = address(0x2C7B43);
+    address internal movedOntoDelegatee = address(0x2C7B51);
+    address internal controlDelegatee = address(0x2C7B52);
 
     bytes4 internal constant CANNOT_DELEGATE_EXPIRED = 0xac29a81f; // CanNotDelegateExpiredLocks()
 
-    function _ok(string memory tag) internal view {
-        require(_obs > 0, string.concat("VACUOUS: ", tag, " observed nothing"));
+    function _requireObserved(string memory tag) internal view {
+        require(_observations > 0, string.concat("VACUOUS: ", tag, " observed nothing"));
     }
 
     function _isPanic11(bool ok_, bytes memory r_) internal pure returns (bool) {
@@ -51,26 +51,26 @@ contract ZeroBiasMoveTest is AutoRelockTestBase {
         return sel == bytes4(0x4e487b71) && code == 17;
     }
 
-    function _sel(bytes memory r_) internal pure returns (bytes4 s4) {
+    function _revertSelector(bytes memory r_) internal pure returns (bytes4 selector) {
         if (r_.length < 4) return bytes4(0);
-        assembly { s4 := mload(add(r_, 0x20)) }
+        assembly { selector := mload(add(r_, 0x20)) }
     }
 
     /// @dev A FLAT position whose retirement was SWALLOWED, aged past its
     ///      restored end, so the next `delegate` takes the tolerated-expiry
     ///      branch and arrives at `_moveVotingPowerToNewDelegate` with
     ///      `bias == 0`.
-    function _armFlatExpired(address owner_, uint256 amount_) internal returns (uint256 id) {
-        IVeHemiVoteDelegation good = IVeHemiVoteDelegation(address(delegation));
+    function _strandExpiredFlatTerm(address owner_, uint256 amount_) internal returns (uint256 id) {
+        IVeHemiVoteDelegation realDelegation = IVeHemiVoteDelegation(address(delegation));
         (id, , ) = createLock(owner_, amount_, 4 * 365 days);
         enable(owner_, id);
-        delegateTo(owner_, id, dele);
+        delegateTo(owner_, id, delegateeA);
         vm.warp(block.timestamp + 7200);
         veHemi.updateVoteDelegation(
             IVeHemiVoteDelegation(address(new LyingVoteDelegation(delegation)))
         );
         disable(owner_, id);
-        veHemi.updateVoteDelegation(good);
+        veHemi.updateVoteDelegation(realDelegation);
         vm.warp(uint256(veHemi.getLockedBalance(id).end) + 1 hours);
     }
 
@@ -78,15 +78,15 @@ contract ZeroBiasMoveTest is AutoRelockTestBase {
     ///      the record it carries into `_delegate` is FLAT (slope==0, bias>0)
     ///      and the lock's end is at or before the checkpoint.
     function _assertOnToleratedBranch(uint256 id_) internal {
-        IVeHemiVoteDelegation.Delegation memory p = delegation.delegation(id_);
-        assertEq(p.slope, 0, "NON-VACUOUS: previous record is not flat (slope != 0)");
-        assertGt(p.bias, 0, "NON-VACUOUS: previous record is not flat (bias == 0)");
+        IVeHemiVoteDelegation.Delegation memory previousRecord = delegation.delegation(id_);
+        assertEq(previousRecord.slope, 0, "NON-VACUOUS: previous record is not flat (slope != 0)");
+        assertGt(previousRecord.bias, 0, "NON-VACUOUS: previous record is not flat (bias == 0)");
         assertLe(
             uint256(veHemi.getLockedBalance(id_).end),
             block.timestamp,
             "NON-VACUOUS: the lock has not passed its end"
         );
-        _obs++;
+        _observations++;
     }
 
     // =====================================================================
@@ -95,19 +95,19 @@ contract ZeroBiasMoveTest is AutoRelockTestBase {
     // unwrapped `panic 0x11` on an external entry point.
     // =====================================================================
     function test_A1_nextDelegateIsARefusalNotAPanic() public {
-        _obs = 0;
-        uint256 id = _armFlatExpired(attacker, 1_000 ether);
+        _observations = 0;
+        uint256 id = _strandExpiredFlatTerm(attacker, 1_000 ether);
         _assertOnToleratedBranch(id);
 
-        delegateTo(attacker, id, F1);
-        _obs++;
+        delegateTo(attacker, id, freshDelegatee1);
+        _observations++;
 
         vm.prank(attacker);
         (bool ok, bytes memory r) = address(delegation).call(
-            abi.encodeWithSignature("delegate(uint256,address)", id, F2)
+            abi.encodeWithSignature("delegate(uint256,address)", id, freshDelegatee2)
         );
-        emit log_named_bytes32("A1 next delegate revert selector", bytes32(_sel(r)));
-        _obs++;
+        emit log_named_bytes32("A1 next delegate revert selector", bytes32(_revertSelector(r)));
+        _observations++;
 
         assertFalse(
             _isPanic11(ok, r),
@@ -115,11 +115,11 @@ contract ZeroBiasMoveTest is AutoRelockTestBase {
         );
         assertFalse(ok, "A1: the expired position must still be refused");
         assertEq(
-            _sel(r),
+            _revertSelector(r),
             CANNOT_DELEGATE_EXPIRED,
             "A1: the refusal must be the ORDINARY CanNotDelegateExpiredLocks"
         );
-        _ok("A1");
+        _requireObserved("A1");
     }
 
     // =====================================================================
@@ -128,17 +128,17 @@ contract ZeroBiasMoveTest is AutoRelockTestBase {
     // "CRITICAL: DO NOT REMOVE the address(0) branch" note exists to prevent.
     // =====================================================================
     function test_A2_theRecordIsClearedWhenTheNFTBurns() public {
-        _obs = 0;
-        uint256 id = _armFlatExpired(attacker, 1_000 ether);
+        _observations = 0;
+        uint256 id = _strandExpiredFlatTerm(attacker, 1_000 ether);
         _assertOnToleratedBranch(id);
 
-        delegateTo(attacker, id, F1);
-        assertEq(delegation.delegation(id).delegatee, F1, "A2 setup: the move was not recorded");
-        _obs++;
+        delegateTo(attacker, id, freshDelegatee1);
+        assertEq(delegation.delegation(id).delegatee, freshDelegatee1, "A2 premise: the move was not recorded");
+        _observations++;
 
         vm.prank(attacker);
         veHemi.withdraw(id);
-        _obs++;
+        _observations++;
 
         // the NFT really is gone
         vm.expectRevert();
@@ -149,7 +149,7 @@ contract ZeroBiasMoveTest is AutoRelockTestBase {
             address(0),
             "A2: `delegations[id].delegatee` survives the burn -- the record LEAKED"
         );
-        _ok("A2");
+        _requireObserved("A2");
     }
 
     // =====================================================================
@@ -159,23 +159,23 @@ contract ZeroBiasMoveTest is AutoRelockTestBase {
     // returns successfully must be visible in `delegation(id)`.
     // =====================================================================
     function test_A3_aSuccessfulDelegateIsRecorded() public {
-        _obs = 0;
-        uint256 id = _armFlatExpired(attacker, 1_000 ether);
+        _observations = 0;
+        uint256 id = _strandExpiredFlatTerm(attacker, 1_000 ether);
         _assertOnToleratedBranch(id);
 
         address before_ = delegation.delegation(id).delegatee;
-        assertEq(before_, dele, "A3 setup: the record does not start at `dele`");
-        _obs++;
+        assertEq(before_, delegateeA, "A3 premise: the record does not start at `delegateeA`");
+        _observations++;
 
-        delegateTo(attacker, id, F3); // returns successfully
-        _obs++;
+        delegateTo(attacker, id, freshDelegatee3); // returns successfully
+        _observations++;
 
         assertEq(
             delegation.delegation(id).delegatee,
-            F3,
-            "A3: `delegate(id, F3)` SUCCEEDED and the record still points somewhere else"
+            freshDelegatee3,
+            "A3: `delegate(id, freshDelegatee3)` SUCCEEDED and the record still points somewhere else"
         );
-        _ok("A3");
+        _requireObserved("A3");
     }
 
     // =====================================================================
@@ -189,20 +189,20 @@ contract ZeroBiasMoveTest is AutoRelockTestBase {
     //   one day short of it.
     // =====================================================================
     function test_A4_aNonZeroRecordImpliesANonEmptyCheckpointArray() public {
-        _obs = 0;
-        uint256 id = _armFlatExpired(attacker, 1_000 ether);
+        _observations = 0;
+        uint256 id = _strandExpiredFlatTerm(attacker, 1_000 ether);
         _assertOnToleratedBranch(id);
 
-        delegateTo(attacker, id, F1);
-        _obs++;
+        delegateTo(attacker, id, freshDelegatee1);
+        _observations++;
 
-        address rec = delegation.delegation(id).delegatee;
-        uint256 len = delegation.getDelegationCheckpointsLength(rec);
-        emit log_named_address("A4 recorded delegatee", rec);
+        address recordedDelegatee = delegation.delegation(id).delegatee;
+        uint256 len = delegation.getDelegationCheckpointsLength(recordedDelegatee);
+        emit log_named_address("A4 recorded delegatee", recordedDelegatee);
         emit log_named_uint("A4 checkpoints[recorded].length", len);
-        _obs++;
+        _observations++;
 
-        if (rec != address(0)) {
+        if (recordedDelegatee != address(0)) {
             assertGt(
                 len,
                 0,
@@ -210,27 +210,32 @@ contract ZeroBiasMoveTest is AutoRelockTestBase {
             );
         }
 
-        assertEq(delegation.getVotes(F1), 0, "A4: the bias==0 move BOOKED WEIGHT on a fresh delegatee");
+        assertEq(delegation.getVotes(freshDelegatee1), 0, "A4: the bias==0 move BOOKED WEIGHT on a fresh delegatee");
         uint256 t0 = block.timestamp;
         vm.warp(t0 + 365 days);
-        assertEq(delegation.getVotes(F1), 0, "A4: the fresh delegatee carries weight one year later");
+        assertEq(delegation.getVotes(freshDelegatee1), 0, "A4: the fresh delegatee carries weight one year later");
         vm.warp(t0 + 4 * 365 days);
-        assertEq(delegation.getVotes(F1), 0, "A4: the fresh delegatee carries weight four years later");
+        assertEq(delegation.getVotes(freshDelegatee1), 0, "A4: the fresh delegatee carries weight four years later");
 
         // The read must find a checkpoint: on an empty array `_getDelegateVotesAt`
         // returns 0 before the expiration walk. `MAX_TIME` is the contract's
         // `MAX_LOCK_DURATION`.
-        uint256 nF1 = delegation.getDelegationCheckpointsLength(F1);
-        assertGt(nF1, 0, "NON-VACUOUS: F1 has no checkpoint, so the read returns before the expiration walk");
-        uint256 lastF1 = delegation.getDelegationCheckpointsPage(F1, nF1 - 1, 1)[0].timestamp;
-        vm.warp(lastF1 + MAX_TIME + 1 hours);
+        uint256 fresh1CheckpointCount = delegation.getDelegationCheckpointsLength(freshDelegatee1);
+        assertGt(
+            fresh1CheckpointCount,
+            0,
+            "NON-VACUOUS: freshDelegatee1 has no checkpoint, so the read returns before the expiration walk"
+        );
+        uint256 fresh1LastCheckpoint =
+            delegation.getDelegationCheckpointsPage(freshDelegatee1, fresh1CheckpointCount - 1, 1)[0].timestamp;
+        vm.warp(fresh1LastCheckpoint + MAX_TIME + 1 hours);
         assertEq(
-            delegation.getVotes(F1),
+            delegation.getVotes(freshDelegatee1),
             0,
             "A4: the fresh delegatee carries weight past MAX_LOCK_DURATION"
         );
-        _obs++;
-        _ok("A4");
+        _observations++;
+        _requireObserved("A4");
     }
 
     // =====================================================================
@@ -240,36 +245,41 @@ contract ZeroBiasMoveTest is AutoRelockTestBase {
     // for years.
     // =====================================================================
     function test_A5_theBiasZeroMoveDisturbsNoThirdParty() public {
-        _obs = 0;
+        _observations = 0;
 
-        // two identical third parties on X1 and X2
-        (uint256 d1, , ) = createLock(victim, 400 ether, 3 * 365 days);
-        delegateTo(victim, d1, X1);
-        (uint256 d2, , ) = createLock(stranger, 400 ether, 3 * 365 days);
-        delegateTo(stranger, d2, X2);
+        // two identical third parties on movedOntoDelegatee and controlDelegatee
+        (uint256 movedOntoThirdPartyId, , ) = createLock(victim, 400 ether, 3 * 365 days);
+        delegateTo(victim, movedOntoThirdPartyId, movedOntoDelegatee);
+        (uint256 controlThirdPartyId, , ) = createLock(stranger, 400 ether, 3 * 365 days);
+        delegateTo(stranger, controlThirdPartyId, controlDelegatee);
 
         vm.warp(((block.timestamp / 1 hours) * 1 hours) + 1 hours + 1);
-        uint256 baseline = delegation.getVotes(X1);
-        emit log_named_uint("A5 baseline getVotes(X1)", baseline);
+        uint256 baseline = delegation.getVotes(movedOntoDelegatee);
+        emit log_named_uint("A5 baseline getVotes(movedOntoDelegatee)", baseline);
         assertGt(baseline, 0, "NON-VACUOUS: the third parties carry no weight");
-        assertEq(baseline, delegation.getVotes(X2), "A5 setup: X1 and X2 are not identical");
-        _obs++;
+        assertEq(
+            baseline,
+            delegation.getVotes(controlDelegatee),
+            "A5 premise: movedOntoDelegatee and controlDelegatee are not identical"
+        );
+        _observations++;
 
-        uint256 id = _armFlatExpired(attacker, 1_000 ether);
+        uint256 id = _strandExpiredFlatTerm(attacker, 1_000 ether);
         _assertOnToleratedBranch(id);
-        delegateTo(attacker, id, X1); // X1 receives the bias==0 move; X2 does not
-        _obs++;
+        // movedOntoDelegatee receives the bias==0 move; controlDelegatee does not
+        delegateTo(attacker, id, movedOntoDelegatee);
+        _observations++;
 
         uint256 mismatches;
         uint256 t0 = block.timestamp;
         for (uint256 i = 1; i <= 8; ++i) {
             vm.warp(t0 + (i * 220 days));
-            if (delegation.getVotes(X1) != delegation.getVotes(X2)) ++mismatches;
-            _obs++;
+            if (delegation.getVotes(movedOntoDelegatee) != delegation.getVotes(controlDelegatee)) ++mismatches;
+            _observations++;
         }
         emit log_named_uint("A5 samples", 8);
         emit log_named_uint("A5 value-mismatches", mismatches);
         assertEq(mismatches, 0, "A5: the bias==0 move DISTURBED a third party's weight");
-        _ok("A5");
+        _requireObserved("A5");
     }
 }

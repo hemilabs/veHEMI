@@ -34,6 +34,9 @@ order:
 6. `DefaultProxyAdmin.upgradeAndCall(VVD proxy, new VVD implementation, 0x62c0fe7a)`
    — `0x62c0fe7a` is `armLegacyDatingWindow()`; value 0
 
+These two legs are the **forward**: the upgrade itself, as opposed to a
+rollback (section 8). A re-forward is a forward run again after a rollback.
+
 **Never split the two legs, and never hand-build the forward batch** (the only
 hand-built transactions are the rollback of section 8 and the recovery legs of
 section 9).
@@ -42,11 +45,14 @@ section 9).
   `veHemi.autoRelockRemaining`, which the live VeHemi does not have. Every
   direct delegation write reverts, and every update the live VeHemi triggers
   (mint, increase, transfer) is dropped with `DelegationUpdateFailed`.
-- VeHemi first leaves the new VeHemi over the live VVD. The arming guard's
-  window probe fails open there, because the live VVD has no
-  `legacyDatingActive`, so holders can arm. The live VVD books such a record as
-  decaying weight with an expiry bucket while its shape is flat. Once the VVD leg
-  lands, every move of that record either reverts or takes its weight out of the
+- VeHemi first leaves the new VeHemi over the live VVD. A position is **armed**
+  when auto-relock is enabled on it (`enableAutoRelock`,
+  `createLockWithAutoRelock`). Before arming one, VeHemi calls the VVD's
+  `legacyDatingActive()` with 50,000 gas: the **window probe**. Over the live
+  VVD the probe fails open, because that VVD has no `legacyDatingActive`, so
+  holders can arm. The live VVD books an armed position's record as decaying
+  weight with an expiry bucket while its shape is flat. Once the VVD leg lands,
+  every move of that record either reverts or takes its weight out of the
   delegatee's other flat terms. The last of those terms can then never be
   removed: permanent votes with no locked HEMI behind them.
 
@@ -112,14 +118,15 @@ write in the execution hour followed the new rule, it would mis-serve records th
 live implementation booked earlier in that hour: an under-count, a `Panic(0x11)`
 on a retirement, or a double count frozen into `getPastVotes`.
 
-The VVD leg therefore arms a window. `armLegacyDatingWindow()` sets
-`legacyDatingUntil = B`, the next hour boundary after the execution block. Until
-B, every new-implementation write keeps the live dating. From B on, the new
-semantics apply. The calldata carries no time, so the batch may execute in any
-block of any hour, by any executor. No proposal veto, refresh or forfeit freeze
-is needed; the post-execution check (section 7) is still required. (A forfeit
-inside the window lowers the quorum denominator at once while its weight still
-counts in votes until B, so the forfeit admin should avoid one.)
+The VVD leg therefore arms a window (the **window arm**, not to be confused with
+arming a position). `armLegacyDatingWindow()` sets `legacyDatingUntil = B`, the
+next hour boundary after the execution block. Until B, every new-implementation
+write keeps the live dating. From B on, the new semantics apply. The calldata
+carries no time, so the batch may execute in any block of any hour, by any
+executor. No proposal veto, refresh or forfeit freeze is needed; the
+post-execution check (section 7) is still required. (A forfeit inside the window
+lowers the quorum denominator at once while its weight still counts in votes
+until B, so the forfeit admin should avoid one.)
 
 Until B (at most 3,599 seconds), users see live behaviour:
 
@@ -133,7 +140,13 @@ Executing late in the hour shortens the window, and with it the time available
 for an in-window rollback. A batch that executes at B − 1 (timestamp ≡ 3599 mod
 3600) leaves no in-window rollback at all.
 
-## 4. Before running: operator pre-flight
+The **window word** is VVD storage slot 101, `legacyDatingUntil` (a `uint64`): 0
+if the window was never armed, 1 on a freshly deployed proxy that `initialize()`
+set up with no window (`deploy/01`), and otherwise the end of the window the
+last window arm opened, an hour boundary. The live implementation does not
+declare it and has no `legacyDatingUntil()` getter: read it as storage.
+
+## 4. Before running: operator checklist
 
 - [ ] **Census.** Run the census at the block you will sign at and refuse to
       sign unless it prints `CENSUS: CLEAN` and exits 0:
@@ -160,8 +173,9 @@ for an in-window rollback. A batch that executes at B − 1 (timestamp ≡ 3599 
 - [ ] **Safe premises.** Confirm the Safe has no modules or guard you do not
       expect and no pending transaction on the nonce this proposal will use.
       Confirm the Safe SDK versions in `package.json` are the ones you reviewed.
-- [ ] **Archive RPC.** Pre-flight 5b (rollback and recovery states, and the
-      first forward) and the post-execution check (section 7) read historical
+- [ ] **Archive RPC.** `deploy/08`'s pre-flight 5b (printed as
+      `Window premises`; it covers rollback and recovery states, and the first
+      forward) and the post-execution check (section 7) read historical
       state: set `PROVIDER_URL` (the RPC `--network hemi` uses) to an
       archive-capable Hemi endpoint. `HEMI_RPC_URL` serves only the census and
       the rehearsals.
@@ -179,29 +193,30 @@ for an in-window rollback. A batch that executes at B − 1 (timestamp ≡ 3599 
       HEMI_RPC_URL=<archive RPC> AUTORELOCK_TEST_FORK_BLOCK=<signing block> forge test --match-path 'test/autorelock-upgrade/*' --threads 1 -vv
       ```
       Write the block as digits only; every forked `test/autorelock-upgrade`
-      body (all but the ten `UpgradeWindowUnit` bodies, which run without a
-      fork) logs `fork block`, which must equal the signing block. Both must
-      pass with no failure, and the forge summary of `test/autorelock-upgrade`
-      must read 0 skipped: a skip is a fork premise that did not hold at that
-      block (another chain, or a block after the upgrade). The one expected
-      exception is a signing block after an in-window rollback, where exactly
-      the two `UpgradeWindowTransition` plain-upgrade fallback bodies skip by
-      design and the deploy rehearsal's `rollback limits, control` body fails
+      test (all but the ten `UpgradeWindowUnit` tests, which run without a fork)
+      logs `fork block`, which must equal the signing block. Both must pass with
+      no failure, and the forge summary of `test/autorelock-upgrade` must read 0
+      skipped: a skip is a fork premise that did not hold at that block (another
+      chain, or a block after the upgrade). The one expected exception is a
+      signing block after an in-window rollback, where exactly the two
+      `UpgradeWindowTransition` plain-upgrade fallback tests skip by design and
+      the deploy rehearsal's `rollback limits, control` test case fails
       (pre-flight 5b counts the rolled-back forward's VeHemi `Upgraded` log as a
-      VeHemi-leg rollback). The deploy rehearsal loads the `deployments/hemi/`
-      records of the tree it runs from, so all of this holds only from a tree
-      whose records are the reviewed commit's, which name the live
-      implementations: once the proposing run's records are committed, run it
-      from a scratch clone of the reviewed commit. With the proposing run's
-      records nearly every body fails (`HALF A BATCH`), and with the
-      implementation records deleted every body fails. 5,524,738 is the default
-      pin of `test/autorelock-upgrade` (repository variable
+      VeHemi-leg rollback, section 8). The deploy rehearsal loads the
+      `deployments/hemi/` records of the tree it runs from, so all of this holds
+      only from a tree whose records are the reviewed commit's, which name the
+      live implementations: once the proposing run's records are committed, run
+      it from a scratch clone of the reviewed commit. With the proposing run's
+      records nearly every test case fails (`HALF A BATCH`), and with the
+      implementation records deleted every test case fails. 5,524,738 is the
+      default fork block of `test/autorelock-upgrade` (repository variable
       `AUTORELOCK_TEST_FORK_BLOCK`) and of the nightly deploy rehearsal
-      (repository variable `AUTORELOCK_FORK_BLOCK`, which CI passes as the
-      `HEMI_FORK_BLOCK` environment variable of the command above; the
-      repository variable `HEMI_FORK_BLOCK` pins only the V2-history step, at or
-      below 4,458,622). The deploy rehearsal must also report no pending body:
-      without an RPC every body is pending and mocha still exits 0.
+      (repository variable `AUTORELOCK_REHEARSAL_FORK_BLOCK`, which CI passes as
+      the `HEMI_FORK_BLOCK` environment variable of the command above; the
+      repository variable `HEMI_FORK_BLOCK` sets the fork block of the
+      V2-history step only, at or below 4,458,622). The deploy rehearsal must
+      also report no pending test case: without an RPC every test case is
+      pending and mocha still exits 0.
 
 ## 5. Running it
 
@@ -220,7 +235,10 @@ overwrites the deployment records. The `AutoRelockUpgrade` tag selects
   `--network hemi`, pre-flight 5d refuses uncommitted changes in any file that
   decides the proposed bytes. It then prints
   `PROPOSING FROM COMMIT <sha>; attestation digest <digest>, srcTree <hash>`.
-  Paste that line where the signers will see it.
+  Paste that line where the signers will see it. `srcTree` is the attestation's
+  `srcTreeSha256`, a sha256 over the path and content of every `src/**/*.sol`
+  file; signers compare only the commit and the digest (section 6, item 4), and
+  the commit already determines `src/`.
 - Pre-flight 7 rebuilds and verifies the build against the committed
   `test/fixtures/eip170-attestation.json` (`check-eip170.sh --verify`). It
   writes nothing, and any drift aborts the run.
@@ -306,16 +324,17 @@ the batch. It deploys, queues and proposes nothing. It checks:
 
 It refuses in these cases:
 
-- any `AutoRelockEnabled` from the VeHemi proxy before the arm (searched from
-  block 5,524,738, where the proxy was still on the live implementation);
+- any `AutoRelockEnabled` from the VeHemi proxy before the window arm (searched
+  from block 5,524,738, where the proxy was still on the live implementation);
 - a later, separate VeHemi upgrade with `DelegationUpdateFailed` in between;
-- any upgrade of the VeHemi proxy *away* from this build after the arm.
+- any upgrade of the VeHemi proxy *away* from this build after the window arm.
 
-A separate earlier VeHemi upgrade with no arm, or a later one with no dropped
-update, is a warning. The run then ends `POST-EXECUTION CHECK: PASS WITH
-WARNINGS`: treat that as not the expected one-MultiSend shape. After a pass
-(with or without warnings) the check refreshes `deployments/hemi/VeHemi.json`
-and `VeHemiVoteDelegation.json` (local files only). Commit the refreshed files.
+A separate earlier VeHemi upgrade with no position armed in the gap, or a later
+one with no dropped update, is a warning. The run then ends
+`POST-EXECUTION CHECK: PASS WITH WARNINGS`: treat that as not the expected
+one-MultiSend shape. After a pass (with or without warnings) the check refreshes
+`deployments/hemi/VeHemi.json` and `VeHemiVoteDelegation.json` (local files
+only). Commit the refreshed files.
 
 - The check needs an **archive RPC**. It reads the VeHemi implementation slot at
   the audit start block, and `AUTORELOCK_LOGS_FROM` cannot avoid that read.
@@ -332,8 +351,8 @@ and `VeHemiVoteDelegation.json` (local files only). Commit the refreshed files.
 **Follow-up PR.** Re-extract
 `test/fixtures/storage-layouts/onchain/{VeHemi,VeHemiVoteDelegation}.deployed.json`
 from the new `*_Implementation.json` records, normalized as the working-tree
-fixtures are (a raw copy keeps AST ids in its type names and fails the anchor's
-type check):
+fixtures are (a raw copy keeps AST ids in its type names and fails the type
+check in `test/StorageLayoutOnchainAnchor.t.sol`):
 
 ```
 source scripts/_normalize-storage-layout.sh
@@ -346,17 +365,17 @@ done
 Then set `ANCHORED_VEHEMI_IMPL` / `ANCHORED_VVD_IMPL` in
 `test/StorageLayoutOnchainAnchor.t.sol` to the new implementations, and
 re-baseline its append assertions
-(`test_AutoRelockAppendsExactlyThreeVeHemiEntriesAndNothingElse` counts 26
+(`test_AutoRelockAppendsExactlyThreeEntriesPerLayoutAndNothingElse` counts 26
 deployed / 29 current VeHemi entries and 9 / 12 VVD entries; the re-extracted
 deployed fixtures hold 29 and 12). Land it promptly: until it lands no frozen
 fixture covers VeHemi V3 or VVD V4, and only the hard-coded pins
 (`StorageLayoutGolden.t.sol`, the anchor's append test, and the slot-65 runtime
 test in `StaleRetireZeroesVotes.t.sol`) guard against deleting or reordering one
 of their declarations, which would move live state (VeHemi slots 64 and 65, VVD
-slots 100 and 101). Until it lands, CI's Hemi-fork step fails at
-`test_AnchorStillDescribesTheLiveImplementation`, by design. In the same pull
-request retire the nightly deploy rehearsal, or point it at a scratch clone of
-the reviewed commit: once the proposing run's records (section 5) reach the
+slots 100 and 101). Until it lands, CI's `Hemi-fork tests, auto-relock upgrade`
+step fails at `test_AnchorMatchesTheLiveImplementation`, by design. In the same
+pull request retire the nightly deploy rehearsal, or point it at a scratch clone
+of the reviewed commit: once the proposing run's records (section 5) reach the
 default branch it fails every night (section 4); if they reach it before this
 pull request, retire or repoint it then.
 
@@ -395,7 +414,7 @@ upgrade(0x371d3718D5b7F75EAb050FAe6Da7DF3092031c89, 0xf1e3AA617E5011793F759092b5
 emitted**, and unsupported for history otherwise. Over an armed position the live
 code:
 
-- returns principal at the frozen `end`;
+- returns principal at the stored `end`;
 - never debits the flat aggregate in the global `Point.amount`;
 - drops `fixedBias` on its checkpoint writes;
 - lets anyone rewrite the armed point as decaying (live `increaseAmount` is
@@ -403,27 +422,29 @@ code:
 
 After any re-forward, one owner `delegate()` then books a permanent phantom
 `fixedBias` of about `slope * end`. After B the emergency response is a
-**forward fix only**.
+**corrective upgrade (a new implementation) only**.
 
 **Re-forward.** Any re-forward over the live implementation must again be
 `upgradeAndCall(…, 0x62c0fe7a)`. A plain re-forward over a past non-zero window
-word reproduces the double count for that hour. Produce it with this script:
+word reproduces the double count for that hour. Produce it with `deploy/08`:
 delete both `*_Implementation.json` records and re-run. This is allowed **only
 if no `AutoRelockEnabled` was ever emitted**. Pre-flight 5b refuses otherwise,
-and it also refuses a VeHemi-only rollback: a VeHemi proxy that was on this
-build and is back on the live implementation while the VVD stays on this build,
-or that armed positions while the VVD never left the live implementation. None
-of these states is repaired by re-running this script; each needs a dedicated
-repair. After an in-window rollback, re-forward only with the one MultiSend this
-script proposes: its pre-flight cannot yet tell a split that follows a rollback
-from the states it refuses (section 9 gives the manual legs).
+and it also refuses the two states in which VeHemi moved alone: a VeHemi-leg
+rollback (VeHemi returned from this build to the live implementation while the
+VVD stays on this build), and a VeHemi-only forward rolled back over armed
+positions (VeHemi upgraded alone, positions armed, then VeHemi returned to the
+live implementation, while the VVD never left it). None of these states is
+repaired by re-running `deploy/08`; each needs a dedicated repair. After an
+in-window rollback, re-forward only with the one MultiSend `deploy/08`
+proposes: its pre-flight cannot yet tell a split that follows a rollback from
+the states it refuses (section 9 gives the manual legs).
 
 After an in-window rollback and a re-forward, `delegationBookedAt(id)` can still
-hold a stamp written before the rollback for an id the live implementation
-rebooked or burned in between (that implementation never writes the slot). It
-feeds no vote, and it is exact again from the id's next booking.
+hold a booking stamp written before the rollback for an id the live
+implementation rebooked or burned in between (that implementation never writes
+the slot). It feeds no vote, and it is exact again from the id's next booking.
 
-## 9. Recovery from a split batch
+## 9. Recovery from a lost or split batch
 
 `deploy/08` names each recovery state it detects and prints what to do. In short:
 
@@ -431,11 +452,12 @@ feeds no vote, and it is exact again from the id's next booking.
   forward batch `deploy/99` proposed is pending there, get it executed and run
   the post-execution check; redeploy nothing (a pending rollback follows section
   8, never this advice). Otherwise restore a preserved `.stale-*` batch that
-  this script printed `ORDER ASSERTED` for, or delete both implementation
+  `deploy/08` printed `ORDER ASSERTED` for, or delete both implementation
   records and re-run in one process.
-- **VVD already on this build, VeHemi never upgraded.** Direct delegation writes
-  revert and VeHemi-driven updates are dropped. Propose `upgrade(VeHemi, impl)`
-  alone, immediately, and do not re-arm. The leg is
+- **VVD already on this build, VeHemi never upgraded (the VVD-first
+  recovery).** Direct delegation writes revert and VeHemi-driven updates are
+  dropped. Propose `upgrade(VeHemi, impl)` alone, immediately, and do not
+  re-arm the window. The leg is
   `upgrade(0x371d3718D5b7F75EAb050FAe6Da7DF3092031c89, <the VeHemi implementation in deployments/hemi/VeHemi_Implementation.json>)`
   on the DefaultProxyAdmin (operation CALL, value 0). Signers check it with
   items 1, 3 and 7 (for that implementation), 4, 5, 6 (the safeTxHash is the one
@@ -444,8 +466,8 @@ feeds no vote, and it is exact again from the id's next booking.
   VVD slot reads the VVD implementation in
   `deployments/hemi/VeHemiVoteDelegation_Implementation.json`, not
   `0xAcAA0d96121C035fC21345551317d66921394128`), instead of item 2; the census
-  does not apply (the VVD is no longer the live writer). Then run the
-  post-execution check, which lists the dropped updates. If any update was
+  does not apply (the VVD is no longer on the live implementation). Then run
+  the post-execution check, which lists the dropped updates. If any update was
   dropped the check refuses for good, by design: record the listed ids as an
   incident and refresh `deployments/hemi/VeHemi.json` and
   `VeHemiVoteDelegation.json` by hand (implementation, merged ABI, and for the
@@ -470,17 +492,17 @@ feeds no vote, and it is exact again from the id's next booking.
   of section 8). Second, the VeHemi proxy emitted no `AutoRelockEnabled` since
   block 5,524,738. Otherwise the state is a VeHemi-leg rollback (or a breached
   rollback precondition), which this leg does not repair.
-- **VeHemi already on this build, VVD not (a split forward).** If VVD storage
-  slot 101 is not 0 (read it as storage: the live implementation has no
-  `legacyDatingUntil()` getter) and the VeHemi proxy emitted any
-  `AutoRelockEnabled` since block 5,524,738, delete no record and follow the
-  window-word case at the end of this item. Otherwise re-run with only the VVD
-  implementation record deleted. That gets the split-forward audit, and the
-  completion is one hand-built armed VVD leg. That re-run deploys a NEW VVD
-  implementation and records it; the hand-built leg must name that address,
-  which must be explorer-verified. The leg is one Safe transaction to the
-  DefaultProxyAdmin `0x7e4D4FB40449A56377fD54fC6Dd800fa202c0f0F` (operation
-  CALL, value 0) with data
+- **VeHemi already on this build, VVD not (a VeHemi-first split; `deploy/08`
+  prints SPLIT FORWARD).** If VVD storage slot 101 is not 0 (read it as storage:
+  the live implementation has no `legacyDatingUntil()` getter) and the VeHemi
+  proxy emitted any `AutoRelockEnabled` since block 5,524,738, delete no record
+  and follow the window-word case at the end of this item. Otherwise re-run with
+  only the VVD implementation record deleted. That gets the split-forward audit,
+  and the completion is one hand-built window-arming VVD leg. That re-run
+  deploys a NEW VVD implementation and records it; the hand-built leg must name
+  that address, which must be explorer-verified. The leg is one Safe transaction
+  to the DefaultProxyAdmin `0x7e4D4FB40449A56377fD54fC6Dd800fa202c0f0F`
+  (operation CALL, value 0) with data
   `upgradeAndCall(0xBF5b2f370370494B8A4575962512dd3ea7c29e2d, <that implementation>, 0x62c0fe7a)`,
   built in the Safe UI. Signers check it with items 1, 3 and 7 (for that
   implementation), 4, 5, 6 (the safeTxHash is the Safe UI's; `deploy/99` prints
@@ -514,8 +536,8 @@ feeds no vote, and it is exact again from the id's next booking.
   5,524,738 ('a re-forward over a rollback with armed positions'). Do not delete
   any record (if the VVD record was already deleted, restore
   `deployments/hemi/VeHemiVoteDelegation_Implementation.json` from the commit
-  made right after the proposing run): build the armed VVD leg by hand, naming
-  the implementation in
+  made right after the proposing run): build the window-arming VVD leg by hand,
+  naming the implementation in
   `deployments/hemi/VeHemiVoteDelegation_Implementation.json` (deployed by the
   proposing run of the forward that split), list the gap's ids by hand
   (`AutoRelockEnabled` from the VeHemi proxy since its latest
@@ -575,10 +597,10 @@ feeds no vote, and it is exact again from the id's next booking.
   `DelegationCallStarved` (`0xce31767f`), so an `eth_estimateGas` of a
   transaction that calls VeHemi directly accounts for it; a caller that catches
   the revert (a try/catch loop, Multicall3 with `allowFailure`, a Safe
-  transaction with `safeTxGas != 0`, an action allowed to fail) must forward
+  transaction with `safeTxGas != 0`, an action allowed to fail) must pass on
   that much gas explicitly and check the result. Keepers: call
   `retireStaleAutoRelock` directly, or call `VeHemi.checkpoint()` first and then
-  forward at least 9 million gas per id, plus the distributor's per-call cost if
+  pass on at least 9 million gas per id, plus the distributor's per-call cost if
   one is installed, and treat the `DelegationCallStarved` selector as fatal.
 - **Global catch-up.** Every VeHemi write first catches the global point up, one
   SIX_DAYS bucket at a time, at most 300 buckets per call. After a very long

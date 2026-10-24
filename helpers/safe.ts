@@ -143,10 +143,10 @@ if (fs.existsSync(MULTI_SIG_TXS_FILE) && PROPOSE_EXISTING) {
             `WHAT TO DO\n` +
             `  * Inspect ${kept}. Restore it ONLY if (a) deploy/08 printed ORDER ASSERTED\n` +
             `    for it, it holds BOTH legs, and both proxies are still on their\n` +
-            `    pre-upgrade implementations, or (b) it is the VVD-first recovery leg\n` +
+            `    live implementations, or (b) it is the VVD-first recovery leg\n` +
             `    (deploy/08 printed "ORDER: only the VeHemi upgrade is in this batch"),\n` +
             `    the VVD proxy is still on that build and VeHemi is still on its\n` +
-            `    pre-upgrade implementation. deploy/99 re-checks it against the chain,\n` +
+            `    live implementation. deploy/99 re-checks it against the chain,\n` +
             `    including both proxies' current implementations; never restore a\n` +
             `    .refused-* file. Then restore it with\n` +
             `        mv ${kept} ${MULTI_SIG_TXS_FILE}\n` +

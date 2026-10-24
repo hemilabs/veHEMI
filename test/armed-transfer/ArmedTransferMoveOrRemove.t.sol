@@ -24,7 +24,7 @@ import {VeHemiAragonAdapter} from "../../src/adapter/VeHemiAragonAdapter.sol";
 ///         THE LAW (behind an honest module, e.g. the real VVD): after any
 ///         committed armed transfer the position is never flat while its flag
 ///         is clear. Votes may be UNDER-counted (the recipient's delegate
-///         refused the weight) but never PHANTOM. T4 pins the hostile
+///         refused the weight) but never PHANTOM. T4 asserts the hostile
 ///         exceptions (both writes refused -> announced; no-op removal ->
 ///         silent).
 ///
@@ -32,33 +32,46 @@ import {VeHemiAragonAdapter} from "../../src/adapter/VeHemiAragonAdapter.sol";
 ///           T0  vacuity          T1  outcome matrix (real VVD, saturation)
 ///           T2  fuzz law         T3  whale        T4  broken / hostile modules
 ///           T5  29.93M frame     T6  proxied-VVD starvation sweep
-///           T7  call counts      T8  event stream   T9 edges   T10 unchanged paths
+///           T7  call counts and reward notifications
+///           T7b reward notifications on the refused-move branches
+///           T7c reward notifications see the seller
+///           T8  event stream     T9  edges
+///           T10 transfers that do not disarm (self and unarmed)
 ///           T11 the removal is always handed the whole ceiling
 ///           T12 bounded selector copy and strict re-raise
+///
+///         Names: the seller's delegatee is the position's delegatee before
+///         the transfer; the recipient's delegate is the recipient's
+///         auto-delegate, or the recipient itself when it has none; `SELF` is
+///         a recipient with no auto-delegate, and `SAT` means slope-saturated.
+///         grid(t) = floor(t / SIX_DAYS) * SIX_DAYS, the start of t's bucket;
+///         R = `autoRelockRemaining(id)`.
 contract ArmedTransferMoveOrRemoveTest is AutoRelockTestBase {
     uint256 internal constant PRINCIPAL = 1_000 ether;
     uint256 internal constant HEADROOM = (PRINCIPAL / MAX_TIME) / 2;
     uint256 internal constant HEMI_TX_CAP = 29_930_000;
-    uint256 internal constant CEILING = 8_000_000;
-    bytes4 internal constant SEL_DSO = 0xf2b4513c;
+    uint256 internal constant DELEGATION_GAS_CEILING = 8_000_000;
+    bytes4 internal constant SEL_SLOPE_OVERFLOW = 0xf2b4513c;
 
-    bytes32 internal constant T_DUF = keccak256("DelegationUpdateFailed(uint256)");
-    bytes32 internal constant T_DUFR = keccak256("DelegationUpdateFailedReason(uint256,bytes4)");
-    bytes32 internal constant T_UNVERIFIED = keccak256("AutoRelockRetirementUnverified(uint256)");
-    bytes32 internal constant T_DISABLED = keccak256("AutoRelockDisabled(uint256,uint64)");
-    bytes32 internal constant T_TRANSFER = keccak256("Transfer(address,address,uint256)");
-    bytes32 internal constant T_DC = keccak256("DelegateChanged(uint256,address,address)");
+    bytes32 internal constant TOPIC_DELEGATION_UPDATE_FAILED = keccak256("DelegationUpdateFailed(uint256)");
+    bytes32 internal constant TOPIC_DELEGATION_UPDATE_FAILED_REASON =
+        keccak256("DelegationUpdateFailedReason(uint256,bytes4)");
+    bytes32 internal constant TOPIC_AUTO_RELOCK_RETIREMENT_UNVERIFIED =
+        keccak256("AutoRelockRetirementUnverified(uint256)");
+    bytes32 internal constant TOPIC_AUTO_RELOCK_DISABLED = keccak256("AutoRelockDisabled(uint256,uint64)");
+    bytes32 internal constant TOPIC_TRANSFER = keccak256("Transfer(address,address,uint256)");
+    bytes32 internal constant TOPIC_DELEGATE_CHANGED = keccak256("DelegateChanged(uint256,address,address)");
 
     // Recipient columns of the outcome matrix.
-    uint8 internal constant SAME = 0;          // recipient's autoDelegate == D_old
-    uint8 internal constant DIFF_HEALTHY = 1;  // autoDelegate == dele2 (healthy)
-    uint8 internal constant DIFF_SAT = 2;      // autoDelegate == dele3 (saturated)
-    uint8 internal constant SELF_HEALTHY = 3;  // no autoDelegate: D_new == recipient
+    uint8 internal constant SAME = 0;          // recipient's autoDelegate == the seller's delegatee
+    uint8 internal constant DIFF_HEALTHY = 1;  // autoDelegate == delegateeB (healthy)
+    uint8 internal constant DIFF_SAT = 2;      // autoDelegate == delegateeC (saturated)
+    uint8 internal constant SELF_HEALTHY = 3;  // no autoDelegate: the recipient's delegate is the recipient
     uint8 internal constant SELF_SAT = 4;      // no autoDelegate, recipient saturated
 
     address internal recipient = address(0xB0B0B0);
     address internal operator = address(0x0BE7A7);
-    address internal dele3 = address(0xDE1E63);
+    address internal delegateeC = address(0xDE1E63);
 
     // Non-vacuity counters. `_row` bumps the cell counters AFTER each cell's
     // snapshot is reverted, so they survive it. NOTE: the cell counters count
@@ -70,54 +83,57 @@ contract ArmedTransferMoveOrRemoveTest is AutoRelockTestBase {
 
     // ------------------------------------------------------------------ rig --
 
-    function _whaleOwner(address d_) internal pure returns (address) {
-        return address(uint160(uint256(keccak256(abi.encode("saturating-whale", d_)))));
+    function _whaleOwner(address delegatee_) internal pure returns (address) {
+        return address(uint160(uint256(keccak256(abi.encode("saturating-whale", delegatee_)))));
     }
 
-    /// @dev Park `d_` HEADROOM below the uint64 aggregate-slope ceiling with an
-    ///      ordinary decaying whale, then PROVE from outside VeHemi that the
-    ///      victim's slope no longer fits.
-    function _saturate(address d_) internal {
-        address w = _whaleOwner(d_);
-        (uint256 whaleId, , ) = createLock(w, (uint256(type(uint64).max) - HEADROOM) * MAX_TIME, 3 * 365 days);
-        delegateTo(w, whaleId, d_);
-        (uint256 probeId, , ) = createLock(w, PRINCIPAL, 4 * 365 days);
-        vm.prank(w);
+    /// @dev Park `delegatee_` HEADROOM below the uint64 aggregate-slope ceiling
+    ///      with an ordinary decaying whale, then PROVE from outside VeHemi that
+    ///      the victim's slope no longer fits.
+    function _saturate(address delegatee_) internal {
+        address whale = _whaleOwner(delegatee_);
+        (uint256 whaleId, , ) = createLock(whale, (uint256(type(uint64).max) - HEADROOM) * MAX_TIME, 3 * 365 days);
+        delegateTo(whale, whaleId, delegatee_);
+        (uint256 saturationCheckId, , ) = createLock(whale, PRINCIPAL, 4 * 365 days);
+        vm.prank(whale);
         (bool ok, bytes memory ret) = address(delegation).call(
-            abi.encodeWithSignature("delegate(uint256,address)", probeId, d_)
+            abi.encodeWithSignature("delegate(uint256,address)", saturationCheckId, delegatee_)
         );
-        require(!ok && bytes4(ret) == SEL_DSO, "saturation premise gone");
+        require(!ok && bytes4(ret) == SEL_SLOPE_OVERFLOW, "saturation premise gone");
         ++saturations;
     }
 
-    /// @dev An armed (flat) victim position booked at `dOld_`.
-    function _armedOn(address dOld_) internal returns (uint256 id) {
+    /// @dev An armed (flat) victim position booked at `sellerDelegatee_`.
+    function _armedOn(address sellerDelegatee_) internal returns (uint256 id) {
         (id, , ) = createLock(victim, PRINCIPAL, 4 * 365 days);
         enable(victim, id);
-        delegateTo(victim, id, dOld_);
+        delegateTo(victim, id, sellerDelegatee_);
         vm.warp(block.timestamp + 7200);
     }
 
-    function _setAuto(address who_, address to_) internal {
+    function _setAutoDelegate(address who_, address to_) internal {
         vm.prank(who_);
         delegation.setAutoDelegate(to_);
     }
 
     /// @dev Configure the recipient for column `col_`; returns the delegate the
     ///      position should land on and whether it is saturated.
-    function _column(uint8 col_, address dOld_, bool oldSat_) internal returns (address target, bool targetSat) {
+    function _column(uint8 col_, address sellerDelegatee_, bool sellerDelegateeSaturated_)
+        internal
+        returns (address target, bool targetSaturated)
+    {
         if (col_ == SAME) {
-            _setAuto(recipient, dOld_);
-            return (dOld_, oldSat_);
+            _setAutoDelegate(recipient, sellerDelegatee_);
+            return (sellerDelegatee_, sellerDelegateeSaturated_);
         }
         if (col_ == DIFF_HEALTHY) {
-            _setAuto(recipient, dele2);
-            return (dele2, false);
+            _setAutoDelegate(recipient, delegateeB);
+            return (delegateeB, false);
         }
         if (col_ == DIFF_SAT) {
-            _saturate(dele3);
-            _setAuto(recipient, dele3);
-            return (dele3, true);
+            _saturate(delegateeC);
+            _setAutoDelegate(recipient, delegateeC);
+            return (delegateeC, true);
         }
         if (col_ == SELF_HEALTHY) return (recipient, false);
         _saturate(recipient);
@@ -154,81 +170,80 @@ contract ArmedTransferMoveOrRemoveTest is AutoRelockTestBase {
     }
 
     function _reasons(Vm.Log[] memory logs_) internal view returns (bytes4[] memory out) {
-        out = new bytes4[](_count(logs_, address(veHemi), T_DUFR));
+        out = new bytes4[](_count(logs_, address(veHemi), TOPIC_DELEGATION_UPDATE_FAILED_REASON));
         uint256 k;
         for (uint256 i; i < logs_.length; ++i) {
-            if (logs_[i].emitter == address(veHemi) && logs_[i].topics[0] == T_DUFR) {
+            if (logs_[i].emitter == address(veHemi) && logs_[i].topics[0] == TOPIC_DELEGATION_UPDATE_FAILED_REASON) {
                 out[k++] = abi.decode(logs_[i].data, (bytes4));
             }
         }
     }
 
-    function _isFlat(IVeHemiVoteDelegation.Delegation memory d_) internal pure returns (bool) {
-        return d_.slope == 0 && d_.bias > 0;
-    }
-
-    function _rec(uint256 id_) internal view returns (IVeHemiVoteDelegation.Delegation memory) {
-        return IVeHemiVoteDelegation(address(veHemi.voteDelegation())).delegation(id_);
+    function _isFlat(IVeHemiVoteDelegation.Delegation memory record_) internal pure returns (bool) {
+        return record_.slope == 0 && record_.bias > 0;
     }
 
     /// @dev Far future: every lock in the rig has expired, so any vote left on
-    ///      `d_` can only be a flat term with no position behind it.
-    function _assertNoPhantomFarFuture(address d_, string memory tag_) internal {
+    ///      `delegatee_` can only be a flat term with no position behind it.
+    function _assertNoPhantomFarFuture(address delegatee_, string memory tag_) internal {
         uint256 snap = vm.snapshotState();
         vm.warp(block.timestamp + MAX_TIME + 4 * SIX_DAYS);
-        assertEq(delegation.getVotes(d_), 0, tag_);
+        assertEq(delegation.getVotes(delegatee_), 0, tag_);
         vm.revertToState(snap);
     }
 
     // ===================================================================
     // T1 -- THE OUTCOME MATRIX (real VVD; saturation reached, not mocked).
-    //   D_old in {healthy, saturated} x 5 recipient columns
+    //   the seller's delegatee in {healthy, saturated} x 5 recipient columns
     //   x caller {owner, approved operator} x 4 sub-bucket phases.
     //   CORRECT iff the recipient's delegate can take the weight; otherwise
     //   UNDER-COUNT (record removed). Never phantom, never refused.
     // ===================================================================
 
     struct Cell {
-        address dOld;
+        address sellerDelegatee;
         address target;
-        bool targetSat;
+        bool targetSaturated;
         uint256 id;
-        uint256 t0;
-        uint64 r0;
-        uint256 flatW;
-        uint256 oldNo;
-        uint256 newNo;
-        uint256 oldAfter;
-        uint256 newAfter;
-        uint256 w;
-        uint256 supplyNo;
-        uint256 wFlatNo;
+        uint256 transferAt;
+        uint64 remainingAtTransfer;
+        uint256 flatBias;
+        uint256 sellerDelegateeVotesWithoutTransfer;
+        uint256 targetVotesWithoutTransfer;
+        uint256 sellerDelegateeVotesAfter;
+        uint256 targetVotesAfter;
+        uint256 weightAfter;
+        uint256 supplyWithoutTransfer;
+        uint256 flatWeightWithoutTransfer;
     }
 
     /// @return correct_ true for a CORRECT cell, false for an UNDER-COUNT cell.
     ///         (Storage counters would be rolled back with the snapshot.)
-    function _cell(bool oldSat_, uint8 col_, bool byOperator_, uint256 phase_) internal returns (bool correct_) {
+    function _cell(bool sellerDelegateeSaturated_, uint8 col_, bool byOperator_, uint256 phase_)
+        internal
+        returns (bool correct_)
+    {
         uint256 snap = vm.snapshotState();
         Cell memory c;
-        c.dOld = dele;
-        if (oldSat_) _saturate(c.dOld);
-        (c.target, c.targetSat) = _column(col_, c.dOld, oldSat_);
-        c.id = _armedOn(c.dOld);
+        c.sellerDelegatee = delegateeA;
+        if (sellerDelegateeSaturated_) _saturate(c.sellerDelegatee);
+        (c.target, c.targetSaturated) = _column(col_, c.sellerDelegatee, sellerDelegateeSaturated_);
+        c.id = _armedOn(c.sellerDelegatee);
         warpToPhase(phase_);
 
-        c.t0 = block.timestamp;
-        c.r0 = veHemi.autoRelockRemaining(c.id);
+        c.transferAt = block.timestamp;
+        c.remainingAtTransfer = veHemi.autoRelockRemaining(c.id);
         IVeHemiVoteDelegation.Delegation memory pre = delegation.delegation(c.id);
-        require(_isFlat(pre) && pre.delegatee == c.dOld, "victim is not flat at D_old");
-        c.flatW = pre.bias;
+        require(_isFlat(pre) && pre.delegatee == c.sellerDelegatee, "victim is not flat at the seller's delegatee");
+        c.flatBias = pre.bias;
 
-        // Votes at t0+1 in the world WITHOUT the transfer.
+        // Votes at transferAt+1 in the world WITHOUT the transfer.
         uint256 s1 = vm.snapshotState();
-        vm.warp(c.t0 + 1);
-        c.oldNo = delegation.getVotes(c.dOld);
-        c.newNo = delegation.getVotes(c.target);
-        c.supplyNo = veHemi.totalVeHemiSupply();
-        c.wFlatNo = veHemi.balanceOfNFT(c.id);
+        vm.warp(c.transferAt + 1);
+        c.sellerDelegateeVotesWithoutTransfer = delegation.getVotes(c.sellerDelegatee);
+        c.targetVotesWithoutTransfer = delegation.getVotes(c.target);
+        c.supplyWithoutTransfer = veHemi.totalVeHemiSupply();
+        c.flatWeightWithoutTransfer = veHemi.balanceOfNFT(c.id);
         vm.revertToState(s1);
 
         vm.recordLogs();
@@ -240,48 +255,56 @@ contract ArmedTransferMoveOrRemoveTest is AutoRelockTestBase {
         assertEq(veHemi.autoRelockRemaining(c.id), 0, "T1: flag survived");
         assertEq(
             uint256(veHemi.getLockedBalance(c.id).end),
-            ((c.t0 / SIX_DAYS) + uint256(c.r0) / SIX_DAYS) * SIX_DAYS,
-            "T1: end != grid(t0) + R"
+            ((c.transferAt / SIX_DAYS) + uint256(c.remainingAtTransfer) / SIX_DAYS) * SIX_DAYS,
+            "T1: end != grid(transferAt) + R"
         );
         // Oracles that do not go through VeHemi's own user point (a disarm
         // that scaled `amount` would pass every check that reads only the
         // point), and the two disarm side effects shared with the other
-        // disarm doors: the stamp cleared and the `AutoRelockDisabled` payload.
+        // disarm entry points (`disableAutoRelock`, `retireStaleAutoRelock`):
+        // the refresh stamp cleared and the `AutoRelockDisabled` payload.
         assertEq(uint256(int256(veHemi.getLockedBalance(c.id).amount)), PRINCIPAL, "T1: principal changed");
         assertEq(uint256(veHemi.autoRelockRefreshedAt(c.id)), 0, "T1: refreshedAt not cleared");
         {
-            uint256 iDis = _firstIndex(logs, address(veHemi), T_DISABLED);
-            require(iDis != type(uint256).max, "T1: no AutoRelockDisabled");
+            uint256 disabledIndex = _firstIndex(logs, address(veHemi), TOPIC_AUTO_RELOCK_DISABLED);
+            require(disabledIndex != type(uint256).max, "T1: no AutoRelockDisabled");
             assertEq(
-                uint256(abi.decode(logs[iDis].data, (uint64))),
+                uint256(abi.decode(logs[disabledIndex].data, (uint64))),
                 uint256(veHemi.getLockedBalance(c.id).end),
                 "T1: AutoRelockDisabled payload != end"
             );
         }
         IVeHemiVoteDelegation.Delegation memory d = delegation.delegation(c.id);
         assertFalse(_isFlat(d), "T1: PHANTOM -- flat record survived a committed disarm");
-        assertEq(_count(logs, address(veHemi), T_UNVERIFIED), 0, "T1: Unverified on an honest VVD");
+        assertEq(_count(logs, address(veHemi), TOPIC_AUTO_RELOCK_RETIREMENT_UNVERIFIED), 0,
+            "T1: Unverified on an honest VVD");
         assertEq(
             veHemi.getUserPoint(c.id, veHemi.userPointEpoch(c.id)).owner,
             recipient,
             "T1: point-history owner is not the recipient"
         );
 
-        vm.warp(c.t0 + 1);
-        c.oldAfter = delegation.getVotes(c.dOld);
-        c.newAfter = delegation.getVotes(c.target);
-        c.w = veHemi.balanceOfNFT(c.id);
+        vm.warp(c.transferAt + 1);
+        c.sellerDelegateeVotesAfter = delegation.getVotes(c.sellerDelegatee);
+        c.targetVotesAfter = delegation.getVotes(c.target);
+        c.weightAfter = veHemi.balanceOfNFT(c.id);
         {
-            uint256 endCF = ((c.t0 / SIX_DAYS) + uint256(c.r0) / SIX_DAYS) * SIX_DAYS;
-            uint256 tolW = 2 * (PRINCIPAL / MAX_TIME) + 2;
-            assertApproxEqAbs(c.w, (PRINCIPAL / MAX_TIME) * (endCF - (c.t0 + 1)), tolW, "T1: weight is not the closed-form decaying weight");
-            assertApproxEqAbs(veHemi.totalVeHemiSupply(), c.supplyNo - c.wFlatNo + c.w, tolW, "T1: supply delta != w - wFlat");
+            uint256 closedFormEnd = ((c.transferAt / SIX_DAYS) + uint256(c.remainingAtTransfer) / SIX_DAYS) * SIX_DAYS;
+            uint256 weightTolerance = 2 * (PRINCIPAL / MAX_TIME) + 2;
+            assertApproxEqAbs(
+                c.weightAfter, (PRINCIPAL / MAX_TIME) * (closedFormEnd - (c.transferAt + 1)), weightTolerance,
+                "T1: weight is not the closed-form decaying weight"
+            );
+            assertApproxEqAbs(
+                veHemi.totalVeHemiSupply(), c.supplyWithoutTransfer - c.flatWeightWithoutTransfer + c.weightAfter,
+                weightTolerance, "T1: supply delta != the post-transfer weight - the flat weight"
+            );
         }
-        correct_ = !c.targetSat;
+        correct_ = !c.targetSaturated;
         if (correct_) _assertCorrect(c, d, logs);
         else _assertUnderCount(c, d, logs);
-        _assertNoPhantomFarFuture(c.dOld, "T1: phantom on D_old far future");
-        _assertNoPhantomFarFuture(c.target, "T1: phantom on D_new far future");
+        _assertNoPhantomFarFuture(c.sellerDelegatee, "T1: phantom on the seller's delegatee far future");
+        _assertNoPhantomFarFuture(c.target, "T1: phantom on the recipient's delegate far future");
         vm.revertToState(snap);
     }
 
@@ -290,12 +313,18 @@ contract ArmedTransferMoveOrRemoveTest is AutoRelockTestBase {
         assertEq(d.delegatee, c.target, "T1: not moved to the recipient's delegate");
         assertGt(d.slope, 0, "T1: moved record is not decaying");
         assertEq(uint256(d.end), uint256(veHemi.getLockedBalance(c.id).end), "T1: moved record end != lock end");
-        assertEq(_count(logs, address(veHemi), T_DUF), 0, "T1: DUF in a correct cell");
-        if (c.target == c.dOld) {
-            assertApproxEqAbs(c.oldAfter, c.oldNo - c.flatW + c.w, tol, "T1: same-delegate votes");
+        assertEq(_count(logs, address(veHemi), TOPIC_DELEGATION_UPDATE_FAILED), 0,
+            "T1: DelegationUpdateFailed in a correct cell");
+        if (c.target == c.sellerDelegatee) {
+            assertApproxEqAbs(
+                c.sellerDelegateeVotesAfter, c.sellerDelegateeVotesWithoutTransfer - c.flatBias + c.weightAfter, tol,
+                "T1: same-delegate votes"
+            );
         } else {
-            assertEq(c.oldAfter, c.oldNo - c.flatW, "T1: D_old kept part of the flat term");
-            assertApproxEqAbs(c.newAfter, c.newNo + c.w, tol, "T1: D_new did not gain the weight");
+            assertEq(c.sellerDelegateeVotesAfter, c.sellerDelegateeVotesWithoutTransfer - c.flatBias,
+                "T1: the seller's delegatee kept part of the flat term");
+            assertApproxEqAbs(c.targetVotesAfter, c.targetVotesWithoutTransfer + c.weightAfter, tol,
+                "T1: the recipient's delegate did not gain the weight");
         }
     }
 
@@ -303,48 +332,52 @@ contract ArmedTransferMoveOrRemoveTest is AutoRelockTestBase {
         assertEq(d.delegatee, address(0), "T1: under-count cell kept a delegatee");
         assertEq(d.bias, 0, "T1: under-count cell kept bias");
         assertEq(d.slope, 0, "T1: under-count cell kept slope");
-        assertEq(_count(logs, address(veHemi), T_DUF), 1, "T1: exactly one DUF");
-        bytes4[] memory rs = _reasons(logs);
-        assertEq(rs.length, 1, "T1: exactly one DUFR");
-        assertEq(rs[0], SEL_DSO, "T1: DUFR is not the overflow selector");
-        assertEq(c.oldAfter, c.oldNo - c.flatW, "T1: D_old kept part of the flat term");
-        if (c.target != c.dOld) assertEq(c.newAfter, c.newNo, "T1: saturated D_new changed");
+        assertEq(_count(logs, address(veHemi), TOPIC_DELEGATION_UPDATE_FAILED), 1,
+            "T1: exactly one DelegationUpdateFailed");
+        bytes4[] memory reasons = _reasons(logs);
+        assertEq(reasons.length, 1, "T1: exactly one DelegationUpdateFailedReason");
+        assertEq(reasons[0], SEL_SLOPE_OVERFLOW, "T1: DelegationUpdateFailedReason is not the overflow selector");
+        assertEq(c.sellerDelegateeVotesAfter, c.sellerDelegateeVotesWithoutTransfer - c.flatBias,
+            "T1: the seller's delegatee kept part of the flat term");
+        if (c.target != c.sellerDelegatee) {
+            assertEq(c.targetVotesAfter, c.targetVotesWithoutTransfer, "T1: the saturated recipient's delegate changed");
+        }
     }
 
-    function _row(bool oldSat_, uint8 col_) internal {
+    function _row(bool sellerDelegateeSaturated_, uint8 col_) internal {
         uint256[4] memory phases = [uint256(0), 1, SIX_DAYS / 2, SIX_DAYS - 1];
         for (uint256 p; p < 4; ++p) {
             for (uint256 k; k < 2; ++k) {
-                if (_cell(oldSat_, col_, k == 1, phases[p])) ++correctCells;
+                if (_cell(sellerDelegateeSaturated_, col_, k == 1, phases[p])) ++correctCells;
                 else ++underCountCells;
             }
         }
     }
 
-    function test_T1_oldHealthy_same() public { _row(false, SAME); assertEq(correctCells, 8); }
-    function test_T1_oldHealthy_diffHealthy() public { _row(false, DIFF_HEALTHY); assertEq(correctCells, 8); }
-    function test_T1_oldHealthy_diffSaturated() public { _row(false, DIFF_SAT); assertEq(underCountCells, 8); }
-    function test_T1_oldHealthy_selfHealthy() public { _row(false, SELF_HEALTHY); assertEq(correctCells, 8); }
-    function test_T1_oldHealthy_selfSaturated() public { _row(false, SELF_SAT); assertEq(underCountCells, 8); }
-    function test_T1_oldSaturated_same() public { _row(true, SAME); assertEq(underCountCells, 8); }
-    function test_T1_oldSaturated_diffHealthy() public { _row(true, DIFF_HEALTHY); assertEq(correctCells, 8); }
-    function test_T1_oldSaturated_diffSaturated() public { _row(true, DIFF_SAT); assertEq(underCountCells, 8); }
-    function test_T1_oldSaturated_selfHealthy() public { _row(true, SELF_HEALTHY); assertEq(correctCells, 8); }
-    function test_T1_oldSaturated_selfSaturated() public { _row(true, SELF_SAT); assertEq(underCountCells, 8); }
+    function test_T1_sellerDelegateeHealthy_same() public { _row(false, SAME); assertEq(correctCells, 8); }
+    function test_T1_sellerDelegateeHealthy_diffHealthy() public { _row(false, DIFF_HEALTHY); assertEq(correctCells, 8); }
+    function test_T1_sellerDelegateeHealthy_diffSaturated() public { _row(false, DIFF_SAT); assertEq(underCountCells, 8); }
+    function test_T1_sellerDelegateeHealthy_selfHealthy() public { _row(false, SELF_HEALTHY); assertEq(correctCells, 8); }
+    function test_T1_sellerDelegateeHealthy_selfSaturated() public { _row(false, SELF_SAT); assertEq(underCountCells, 8); }
+    function test_T1_sellerDelegateeSaturated_same() public { _row(true, SAME); assertEq(underCountCells, 8); }
+    function test_T1_sellerDelegateeSaturated_diffHealthy() public { _row(true, DIFF_HEALTHY); assertEq(correctCells, 8); }
+    function test_T1_sellerDelegateeSaturated_diffSaturated() public { _row(true, DIFF_SAT); assertEq(underCountCells, 8); }
+    function test_T1_sellerDelegateeSaturated_selfHealthy() public { _row(true, SELF_HEALTHY); assertEq(correctCells, 8); }
+    function test_T1_sellerDelegateeSaturated_selfSaturated() public { _row(true, SELF_SAT); assertEq(underCountCells, 8); }
 
     // ===================================================================
     // T0 -- VACUITY: the premises the matrix depends on are really reached.
     // ===================================================================
 
     function test_T0_outcomeMatrixPremises() public {
-        _saturate(dele);
-        _saturate(dele3);
+        _saturate(delegateeA);
+        _saturate(delegateeC);
         assertEq(saturations, 2, "T0: saturation not reached");
         // An armed victim on a saturated delegate is still FLAT there: the
         // flat booking adds no slope.
-        uint256 id = _armedOn(dele);
+        uint256 id = _armedOn(delegateeA);
         assertTrue(_isFlat(delegation.delegation(id)), "T0: armed victim not flat");
-        assertEq(delegation.delegation(id).delegatee, dele, "T0: victim not at D_old");
+        assertEq(delegation.delegation(id).delegatee, delegateeA, "T0: victim not at the seller's delegatee");
         // And disableAutoRelock (strict) REFUSES on the same state -- the
         // contrast with the transfer leg, which never refuses.
         vm.prank(victim);
@@ -362,28 +395,28 @@ contract ArmedTransferMoveOrRemoveTest is AutoRelockTestBase {
     ///      the `AutoRelockDurationTooShort` floor admits every draw.
     /// forge-config: default.fuzz.runs = 96
     function testFuzz_T2_neverFlatWhileFlagClear(
-        uint256 phase_, uint256 dur_, uint8 col_, bool oldSat_, bool byOp_
+        uint256 phase_, uint256 dur_, uint8 col_, bool sellerDelegateeSaturated_, bool byOperator_
     ) public {
         phase_ = bound(phase_, 0, SIX_DAYS - 1);
         dur_ = bound(dur_, 2 * SIX_DAYS, MAX_TIME);
         col_ = uint8(bound(col_, 0, 4));
-        address dOld = dele;
-        if (oldSat_) _saturate(dOld);
-        (address target, bool targetSat) = _column(col_, dOld, oldSat_);
+        address sellerDelegatee = delegateeA;
+        if (sellerDelegateeSaturated_) _saturate(sellerDelegatee);
+        (address target, bool targetSaturated) = _column(col_, sellerDelegatee, sellerDelegateeSaturated_);
         (uint256 id, , ) = createLock(victim, PRINCIPAL, dur_);
         enable(victim, id);
-        delegateTo(victim, id, dOld);
+        delegateTo(victim, id, sellerDelegatee);
         warpToPhase(phase_);
 
-        (bool ok, ) = _transfer(id, victim, recipient, byOp_, HEMI_TX_CAP);
+        (bool ok, ) = _transfer(id, victim, recipient, byOperator_, HEMI_TX_CAP);
         assertTrue(ok, "T2: armed transfer refused");
         assertEq(veHemi.autoRelockRemaining(id), 0, "T2: flag survived");
         IVeHemiVoteDelegation.Delegation memory d = delegation.delegation(id);
         assertFalse(_isFlat(d), "T2: PHANTOM");
-        if (targetSat) assertEq(d.delegatee, address(0), "T2: saturated target, record not removed");
+        if (targetSaturated) assertEq(d.delegatee, address(0), "T2: saturated target, record not removed");
         else assertEq(d.delegatee, target, "T2: healthy target under-counted");
-        _assertNoPhantomFarFuture(dOld, "T2: phantom on D_old");
-        _assertNoPhantomFarFuture(target, "T2: phantom on D_new");
+        _assertNoPhantomFarFuture(sellerDelegatee, "T2: phantom on the seller's delegatee");
+        _assertNoPhantomFarFuture(target, "T2: phantom on the recipient's delegate");
     }
 
     // ===================================================================
@@ -397,10 +430,10 @@ contract ArmedTransferMoveOrRemoveTest is AutoRelockTestBase {
         assertEq(delegation.delegation(id).delegatee, address(0), "T3: premise -- mint booking not empty");
         enable(victim, id);
         // The owner books it FLAT (a flat booking adds no slope).
-        delegateTo(victim, id, dele);
-        assertTrue(_isFlat(delegation.delegation(id)), "T3: premise -- whale not flat at dele");
+        delegateTo(victim, id, delegateeA);
+        assertTrue(_isFlat(delegation.delegation(id)), "T3: premise -- whale not flat at delegateeA");
         vm.warp(block.timestamp + 7200);
-        _setAuto(recipient, dele2);
+        _setAutoDelegate(recipient, delegateeB);
 
         vm.recordLogs();
         (bool ok, ) = _transfer(id, victim, recipient, false, HEMI_TX_CAP);
@@ -410,11 +443,11 @@ contract ArmedTransferMoveOrRemoveTest is AutoRelockTestBase {
         IVeHemiVoteDelegation.Delegation memory d = delegation.delegation(id);
         assertEq(d.delegatee, address(0), "T3: whale record not removed");
         assertEq(d.bias, 0, "T3: whale record kept bias");
-        bytes4[] memory rs = _reasons(logs);
-        assertEq(rs.length, 1, "T3: one DUFR");
-        assertEq(rs[0], SEL_DSO, "T3: whale move refused with an unexpected reason");
-        assertEq(_count(logs, address(veHemi), T_UNVERIFIED), 0, "T3: Unverified");
-        _assertNoPhantomFarFuture(dele, "T3: phantom on dele");
+        bytes4[] memory reasons = _reasons(logs);
+        assertEq(reasons.length, 1, "T3: one DelegationUpdateFailedReason");
+        assertEq(reasons[0], SEL_SLOPE_OVERFLOW, "T3: whale move refused with an unexpected reason");
+        assertEq(_count(logs, address(veHemi), TOPIC_AUTO_RELOCK_RETIREMENT_UNVERIFIED), 0, "T3: Unverified");
+        _assertNoPhantomFarFuture(delegateeA, "T3: phantom on delegateeA");
     }
 
     // ===================================================================
@@ -422,7 +455,7 @@ contract ArmedTransferMoveOrRemoveTest is AutoRelockTestBase {
     // ===================================================================
 
     function _armedFlat() internal returns (uint256 id) {
-        id = _armedOn(dele);
+        id = _armedOn(delegateeA);
     }
 
     function test_T4_revertingModule_bothRefused_announced() public {
@@ -433,8 +466,10 @@ contract ArmedTransferMoveOrRemoveTest is AutoRelockTestBase {
         Vm.Log[] memory logs = vm.getRecordedLogs();
         assertTrue(ok, "T4: principal-carrying transfer refused behind a broken module");
         assertEq(veHemi.autoRelockRemaining(id), 0, "T4: flag survived");
-        assertEq(_count(logs, address(veHemi), T_DUF), 2, "T4: move and removal both swallowed");
-        assertEq(_count(logs, address(veHemi), T_UNVERIFIED), 1, "T4: both-refused not announced");
+        assertEq(_count(logs, address(veHemi), TOPIC_DELEGATION_UPDATE_FAILED), 2,
+            "T4: move and removal both swallowed");
+        assertEq(_count(logs, address(veHemi), TOPIC_AUTO_RELOCK_RETIREMENT_UNVERIFIED), 1,
+            "T4: both-refused not announced");
     }
 
     function test_T4_lyingModule_readBackAnnounces() public {
@@ -444,48 +479,54 @@ contract ArmedTransferMoveOrRemoveTest is AutoRelockTestBase {
         (bool ok, ) = _transfer(id, victim, recipient, false, HEMI_TX_CAP);
         Vm.Log[] memory logs = vm.getRecordedLogs();
         assertTrue(ok, "T4: transfer refused");
-        assertEq(_count(logs, address(veHemi), T_DUF), 0, "T4: the lie was not accepted");
-        assertEq(_count(logs, address(veHemi), T_UNVERIFIED), 1, "T4: read-back did not announce the lie");
+        assertEq(_count(logs, address(veHemi), TOPIC_DELEGATION_UPDATE_FAILED), 0, "T4: the lie was not accepted");
+        assertEq(_count(logs, address(veHemi), TOPIC_AUTO_RELOCK_RETIREMENT_UNVERIFIED), 1,
+            "T4: read-back did not announce the lie");
     }
 
-    /// @dev DISARM the liar so the move COMMITS, then let the read-back judge
-    ///      a seeded record: a flat one is announced, a decaying one is not.
+    /// @dev Stop the liar refusing so the move COMMITS, then let the read-back
+    ///      judge a seeded record: a flat one is announced, a decaying one is
+    ///      not.
     function test_T4_committedMove_readBackJudgesTheRecord() public {
         uint256 id = _armedFlat();
-        SlopeOverflowLiar m = new SlopeOverflowLiar();
-        m.disarm();
-        m.seed(id, dele, uint96(PRINCIPAL / 2), 0); // FLAT
-        veHemi.updateVoteDelegation(m);
+        SlopeOverflowLiar liar = new SlopeOverflowLiar();
+        liar.stopRefusing();
+        liar.seed(id, delegateeA, uint96(PRINCIPAL / 2), 0); // FLAT
+        veHemi.updateVoteDelegation(liar);
         uint256 snap = vm.snapshotState();
         vm.recordLogs();
         (bool ok, ) = _transfer(id, victim, recipient, false, HEMI_TX_CAP);
         Vm.Log[] memory logs = vm.getRecordedLogs();
         assertTrue(ok);
-        assertEq(_count(logs, address(veHemi), T_UNVERIFIED), 1, "T4: flat read-back not announced");
+        assertEq(_count(logs, address(veHemi), TOPIC_AUTO_RELOCK_RETIREMENT_UNVERIFIED), 1,
+            "T4: flat read-back not announced");
         vm.revertToState(snap);
-        m.seed(id, dele, uint96(PRINCIPAL / 2), uint64(PRINCIPAL / MAX_TIME)); // DECAYING
+        liar.seed(id, delegateeA, uint96(PRINCIPAL / 2), uint64(PRINCIPAL / MAX_TIME)); // DECAYING
         vm.recordLogs();
         (ok, ) = _transfer(id, victim, recipient, false, HEMI_TX_CAP);
         logs = vm.getRecordedLogs();
         assertTrue(ok);
-        assertEq(_count(logs, address(veHemi), T_UNVERIFIED), 0, "T4: decaying read-back falsely announced");
+        assertEq(_count(logs, address(veHemi), TOPIC_AUTO_RELOCK_RETIREMENT_UNVERIFIED), 0,
+            "T4: decaying read-back falsely announced");
     }
 
-    /// @dev A known limitation, PINNED: a module that refuses the move and
+    /// @dev A known limitation, asserted: a module that refuses the move and
     ///      accepts the removal as a silent no-op leaves ITS OWN record flat,
     ///      and VeHemi cannot see it (the removal "committed"). Expected-silent.
     function test_T4_knownLimitation_rejectMoveNoopRemoval_isSilent() public {
         uint256 id = _armedFlat();
-        RejectMoveNoopRemovalModule m = new RejectMoveNoopRemovalModule();
-        m.seedFlat(id, dele, uint96(PRINCIPAL / 2));
-        veHemi.updateVoteDelegation(m);
+        RejectMoveNoopRemovalModule module = new RejectMoveNoopRemovalModule();
+        module.seedFlat(id, delegateeA, uint96(PRINCIPAL / 2));
+        veHemi.updateVoteDelegation(module);
         vm.recordLogs();
         (bool ok, ) = _transfer(id, victim, recipient, false, HEMI_TX_CAP);
         Vm.Log[] memory logs = vm.getRecordedLogs();
         assertTrue(ok);
-        assertEq(_count(logs, address(veHemi), T_DUF), 1, "T4/known limitation: move refusal not reported");
-        assertEq(_count(logs, address(veHemi), T_UNVERIFIED), 0, "T4/known limitation: (pinned) silent");
-        assertTrue(_isFlat(m.delegation(id)), "T4/known limitation: premise -- module record flat");
+        assertEq(_count(logs, address(veHemi), TOPIC_DELEGATION_UPDATE_FAILED), 1,
+            "T4/known limitation: move refusal not reported");
+        assertEq(_count(logs, address(veHemi), TOPIC_AUTO_RELOCK_RETIREMENT_UNVERIFIED), 0,
+            "T4/known limitation: silent");
+        assertTrue(_isFlat(module.delegation(id)), "T4/known limitation: premise -- module record flat");
     }
 
     /// @dev Conservative announcement: an EMPTY record behind a module that
@@ -493,22 +534,23 @@ contract ArmedTransferMoveOrRemoveTest is AutoRelockTestBase {
     function test_T4_emptyRecordBehindRevertingModule_conservativeAnnounce() public {
         // Mint while VeHemi points at a reverting module: the real VVD never
         // books the position, so its record there is empty.
-        RevertingVoteDelegation bad = new RevertingVoteDelegation();
-        IVeHemiVoteDelegation real = IVeHemiVoteDelegation(address(delegation));
-        veHemi.updateVoteDelegation(bad);
+        RevertingVoteDelegation revertingModule = new RevertingVoteDelegation();
+        IVeHemiVoteDelegation realDelegation = IVeHemiVoteDelegation(address(delegation));
+        veHemi.updateVoteDelegation(revertingModule);
         (uint256 id, , ) = createLock(victim, PRINCIPAL, 4 * 365 days);
-        veHemi.updateVoteDelegation(real);
+        veHemi.updateVoteDelegation(realDelegation);
         enable(victim, id);
         assertEq(delegation.delegation(id).delegatee, address(0), "T4: premise -- record not empty");
-        veHemi.updateVoteDelegation(bad);
+        veHemi.updateVoteDelegation(revertingModule);
         vm.recordLogs();
         (bool ok, ) = _transfer(id, victim, recipient, false, HEMI_TX_CAP);
         Vm.Log[] memory logs = vm.getRecordedLogs();
         assertTrue(ok);
-        assertEq(_count(logs, address(veHemi), T_UNVERIFIED), 1, "T4: conservative announcement missing");
+        assertEq(_count(logs, address(veHemi), TOPIC_AUTO_RELOCK_RETIREMENT_UNVERIFIED), 1,
+            "T4: conservative announcement missing");
     }
 
-    /// @dev PINNED: a module whose `delegation()` returns undecodable data
+    /// @dev Asserted: a module whose `delegation()` returns undecodable data
     ///      (`GarbageModule`, whose `delegate()` returns) makes the read-back
     ///      revert (an ABI decode failure is not caught by try/catch), so an
     ///      ARMED transfer is refused while an UNARMED one -- which never
@@ -519,7 +561,7 @@ contract ArmedTransferMoveOrRemoveTest is AutoRelockTestBase {
         veHemi.updateVoteDelegation(new GarbageModule());
         (bool okArmed, ) = _transfer(id, victim, recipient, false, HEMI_TX_CAP);
         (bool okPlain, ) = _transfer(plain, victim, recipient, false, HEMI_TX_CAP);
-        assertFalse(okArmed, "T4: (pinned) armed transfer behind garbage reads");
+        assertFalse(okArmed, "T4: armed transfer behind garbage reads");
         assertTrue(okPlain, "T4: unarmed transfer must not read");
     }
 
@@ -527,7 +569,7 @@ contract ArmedTransferMoveOrRemoveTest is AutoRelockTestBase {
     // T5 -- THE 29.93M PER-TX FRAME (owner and approved operator).
     // ===================================================================
 
-    function test_T5_burnAndReturnModule_executes() public {
+    function test_T5_gasExhaustingModule_executes() public {
         for (uint256 k; k < 2; ++k) {
             uint256 snap = vm.snapshotState();
             uint256 id = _armedFlat();
@@ -548,7 +590,7 @@ contract ArmedTransferMoveOrRemoveTest is AutoRelockTestBase {
             (bool ok, ) = _transfer(id, victim, recipient, k == 1, HEMI_TX_CAP);
             Vm.Log[] memory logs = vm.getRecordedLogs();
             assertTrue(ok, "T5: burn-and-revert armed transfer does not fit 29.93M");
-            assertEq(_count(logs, address(veHemi), T_UNVERIFIED), 1);
+            assertEq(_count(logs, address(veHemi), TOPIC_AUTO_RELOCK_RETIREMENT_UNVERIFIED), 1);
             vm.revertToState(snap);
         }
     }
@@ -560,29 +602,29 @@ contract ArmedTransferMoveOrRemoveTest is AutoRelockTestBase {
         (bool ok, ) = _transfer(id, victim, recipient, false, HEMI_TX_CAP);
         Vm.Log[] memory logs = vm.getRecordedLogs();
         assertTrue(ok, "T5: returndata bomb blocked the armed transfer");
-        bytes4[] memory rs = _reasons(logs);
-        assertEq(rs.length, 2, "T5: two swallowed calls");
-        assertEq(rs[0], bytes4(0), "T5: zero-filled bomb selector");
+        bytes4[] memory reasons = _reasons(logs);
+        assertEq(reasons.length, 2, "T5: two swallowed calls");
+        assertEq(reasons[0], bytes4(0), "T5: zero-filled bomb selector");
     }
 
-    function test_T5_gasEatingDistributor_executes() public {
+    function test_T5_burnAndReturnDistributor_executes() public {
         uint256 id = _armedFlat();
-        veHemi.updateRewardDistributor(new GasEaterDistributor());
+        veHemi.updateRewardDistributor(new BurnAndReturnDistributor());
         (bool ok, ) = _transfer(id, victim, recipient, false, HEMI_TX_CAP);
         assertTrue(ok, "T5: distributor-hostile armed transfer does not fit 29.93M");
         assertEq(delegation.delegation(id).delegatee, recipient, "T5: not moved");
     }
 
-    /// @dev A known limitation, PINNED: both hostile -> the armed transfer
+    /// @dev A known limitation, asserted: both hostile -> the armed transfer
     ///      cannot execute at 29.93M; the unarmed twin can.
     function test_T5_bothHostile_armedReverts_unarmedExecutes() public {
         uint256 id = _armedFlat();
         (uint256 plain, , ) = createLock(victim, PRINCIPAL, 4 * 365 days);
         veHemi.updateVoteDelegation(new OogVoteDelegation());
-        veHemi.updateRewardDistributor(new GasEaterDistributor());
+        veHemi.updateRewardDistributor(new BurnAndReturnDistributor());
         (bool okArmed, ) = _transfer(id, victim, recipient, false, HEMI_TX_CAP);
         (bool okPlain, ) = _transfer(plain, victim, recipient, false, HEMI_TX_CAP);
-        assertFalse(okArmed, "T5: (pinned known limitation) both-hostile armed transfer");
+        assertFalse(okArmed, "T5: (known limitation) both-hostile armed transfer");
         assertTrue(okPlain, "T5: unarmed twin must execute");
     }
 
@@ -595,14 +637,14 @@ contract ArmedTransferMoveOrRemoveTest is AutoRelockTestBase {
 
     function _sweepRemovalGas(address module_, uint256 minEntry_) internal {
         uint256 id = _armedFlat();
-        RemovalGasProbeModule(module_).seedFlat(id, dele, uint96(PRINCIPAL / 2));
+        RemovalGasProbeModule(module_).seedFlat(id, delegateeA, uint96(PRINCIPAL / 2));
         veHemi.updateVoteDelegation(IVeHemiVoteDelegation(module_));
         uint256 commits;
         uint256 starvedReverts;
         bool seenCommit;
-        for (uint256 g = 150_000; g <= 10_000_000; g += 50_000) {
+        for (uint256 gasLimit = 150_000; gasLimit <= 10_000_000; gasLimit += 50_000) {
             uint256 snap = vm.snapshotState();
-            (bool ok, bytes memory ret) = _transfer(id, victim, recipient, false, g);
+            (bool ok, bytes memory ret) = _transfer(id, victim, recipient, false, gasLimit);
             if (ok) {
                 ++commits;
                 seenCommit = true;
@@ -619,7 +661,7 @@ contract ArmedTransferMoveOrRemoveTest is AutoRelockTestBase {
     }
 
     function test_T11_directModule_removalGetsFullCeiling() public {
-        _sweepRemovalGas(address(new RemovalGasProbeModule()), CEILING - 2_000);
+        _sweepRemovalGas(address(new RemovalGasProbeModule()), DELEGATION_GAS_CEILING - 2_000);
     }
 
     /// @dev `ERC1967Proxy` stands in for the live VVD's proxy, an OZ
@@ -632,13 +674,13 @@ contract ArmedTransferMoveOrRemoveTest is AutoRelockTestBase {
     ///      neither proxy changes.
     function test_T11_proxiedModule_removalGetsFullCeiling() public {
         RemovalGasProbeModule impl = new RemovalGasProbeModule();
-        ERC1967Proxy p = new ERC1967Proxy(address(impl), "");
+        ERC1967Proxy proxy = new ERC1967Proxy(address(impl), "");
         // Behind a delegatecall proxy the module keeps 63/64 of the ceiling.
-        _sweepRemovalGas(address(p), (CEILING * 63) / 64 - 8_000);
+        _sweepRemovalGas(address(proxy), (DELEGATION_GAS_CEILING * 63) / 64 - 8_000);
     }
 
     // ===================================================================
-    // T6 -- PROXIED REAL VVD, DORMANT D_old: sweep the caller's gas limit.
+    // T6 -- PROXIED REAL VVD, DORMANT SELLER'S DELEGATEE: sweep the caller's gas limit.
     //   Behind a proxy `_requireNotStarved` cannot fire (an OOG callee hands
     //   back ~1/32). Whatever the gas limit: either the transfer reverts, or
     //   it commits with no flat record -- and a HEALTHY recipient is never
@@ -647,31 +689,31 @@ contract ArmedTransferMoveOrRemoveTest is AutoRelockTestBase {
 
     function _useProxiedVVD() internal {
         VeHemiVoteDelegation impl = new VeHemiVoteDelegation(address(veHemi));
-        ERC1967Proxy p = new ERC1967Proxy(address(impl), abi.encodeWithSignature("initialize()"));
-        delegation = VeHemiVoteDelegation(address(p));
-        veHemi.updateVoteDelegation(IVeHemiVoteDelegation(address(p)));
+        ERC1967Proxy proxy = new ERC1967Proxy(address(impl), abi.encodeWithSignature("initialize()"));
+        delegation = VeHemiVoteDelegation(address(proxy));
+        veHemi.updateVoteDelegation(IVeHemiVoteDelegation(address(proxy)));
     }
 
-    function _dormantSweep(bool targetSat_, uint256 lo_, uint256 hi_, uint256 step_, bool mustCommit_)
+    function _dormantSweep(bool targetSaturated_, uint256 minGas_, uint256 maxGas_, uint256 gasStep_, bool mustCommit_)
         internal
         returns (uint256 commits)
     {
         _useProxiedVVD();
-        uint256 id = _armedOn(dele);
-        vm.warp(block.timestamp + 200 * SIX_DAYS); // D_old untouched for 200 buckets
+        uint256 id = _armedOn(delegateeA);
+        vm.warp(block.timestamp + 200 * SIX_DAYS); // the seller's delegatee untouched for 200 buckets
         veHemi.checkpoint();
-        address target = targetSat_ ? dele3 : dele2;
-        if (targetSat_) _saturate(dele3);
-        _setAuto(recipient, target);
-        for (uint256 g = lo_; g <= hi_; g += step_) {
+        address target = targetSaturated_ ? delegateeC : delegateeB;
+        if (targetSaturated_) _saturate(delegateeC);
+        _setAutoDelegate(recipient, target);
+        for (uint256 gasLimit = minGas_; gasLimit <= maxGas_; gasLimit += gasStep_) {
             uint256 snap = vm.snapshotState();
-            (bool ok, ) = _transfer(id, victim, recipient, false, g);
+            (bool ok, ) = _transfer(id, victim, recipient, false, gasLimit);
             if (ok) {
                 ++commits;
                 IVeHemiVoteDelegation.Delegation memory d = delegation.delegation(id);
                 assertEq(veHemi.autoRelockRemaining(id), 0, "T6: flag survived a commit");
                 assertFalse(_isFlat(d), "T6: PHANTOM committed at a chosen gas limit");
-                if (targetSat_) assertEq(d.delegatee, address(0), "T6: saturated cell landed somewhere");
+                if (targetSaturated_) assertEq(d.delegatee, address(0), "T6: saturated cell landed somewhere");
                 else assertEq(d.delegatee, target, "T6: HEALTHY recipient under-counted by gas choice");
             }
             vm.revertToState(snap);
@@ -679,28 +721,34 @@ contract ArmedTransferMoveOrRemoveTest is AutoRelockTestBase {
         if (mustCommit_) assertGt(commits, 0, "T6: vacuous -- never committed");
     }
 
-    function test_T6_proxied_dormant_healthyRecipient_lo() public { _dormantSweep(false, 100_000, 3_000_000, 10_000, true); }
-    function test_T6_proxied_dormant_healthyRecipient_hi() public { _dormantSweep(false, 3_000_000, 12_000_000, 100_000, true); }
+    function test_T6_proxied_dormant_healthyRecipient_gas100kTo3M() public {
+        _dormantSweep(false, 100_000, 3_000_000, 10_000, true);
+    }
+    function test_T6_proxied_dormant_healthyRecipient_gas3MTo12M() public {
+        _dormantSweep(false, 3_000_000, 12_000_000, 100_000, true);
+    }
     /// @dev Below the removal gas floor the fallback removal cannot
     ///      run, so nothing in this band may commit; the law is checked on
     ///      whatever does.
-    function test_T6_proxied_dormant_saturatedRecipient_lo() public {
+    function test_T6_proxied_dormant_saturatedRecipient_noCommitBelowRemovalFloor() public {
         assertEq(_dormantSweep(true, 100_000, 3_000_000, 10_000, false), 0, "T6: commit below the removal gas floor");
     }
-    function test_T6_proxied_dormant_saturatedRecipient_hi() public { _dormantSweep(true, 3_000_000, 12_000_000, 25_000, true); }
+    function test_T6_proxied_dormant_saturatedRecipient_gas3MTo12M() public {
+        _dormantSweep(true, 3_000_000, 12_000_000, 25_000, true);
+    }
 
     /// @dev The same sweep against the DIRECT (unproxied) VVD, where the
     ///      tripwire is live: same law.
     function test_T6_direct_dormant_saturatedRecipient() public {
-        uint256 id = _armedOn(dele);
+        uint256 id = _armedOn(delegateeA);
         vm.warp(block.timestamp + 200 * SIX_DAYS);
         veHemi.checkpoint();
-        _saturate(dele3);
-        _setAuto(recipient, dele3);
+        _saturate(delegateeC);
+        _setAutoDelegate(recipient, delegateeC);
         uint256 commits;
-        for (uint256 g = 100_000; g <= 12_000_000; g += 50_000) {
+        for (uint256 gasLimit = 100_000; gasLimit <= 12_000_000; gasLimit += 50_000) {
             uint256 snap = vm.snapshotState();
-            (bool ok, ) = _transfer(id, victim, recipient, false, g);
+            (bool ok, ) = _transfer(id, victim, recipient, false, gasLimit);
             if (ok) {
                 ++commits;
                 assertFalse(_isFlat(delegation.delegation(id)), "T6: PHANTOM (direct)");
@@ -714,24 +762,28 @@ contract ArmedTransferMoveOrRemoveTest is AutoRelockTestBase {
     // T7 -- CALL COUNTS (no trusted adapter: the adapter reads delegation()).
     // ===================================================================
 
-    function _expectModuleCalls(uint64 autoDel_, uint64 del_, uint64 read_) internal {
-        vm.expectCall(address(delegation), abi.encodeWithSelector(IVeHemiVoteDelegation.autoDelegate.selector), autoDel_);
-        vm.expectCall(address(delegation), abi.encodeWithSelector(IVeHemiVoteDelegation.delegate.selector), del_);
-        vm.expectCall(address(delegation), abi.encodeWithSelector(IVeHemiVoteDelegation.delegation.selector), read_);
+    function _expectModuleCalls(uint64 autoDelegateReads_, uint64 delegateCalls_, uint64 delegationReads_) internal {
+        vm.expectCall(
+            address(delegation), abi.encodeWithSelector(IVeHemiVoteDelegation.autoDelegate.selector), autoDelegateReads_
+        );
+        vm.expectCall(address(delegation), abi.encodeWithSelector(IVeHemiVoteDelegation.delegate.selector), delegateCalls_);
+        vm.expectCall(
+            address(delegation), abi.encodeWithSelector(IVeHemiVoteDelegation.delegation.selector), delegationReads_
+        );
     }
 
     function test_T7_counts_armedHappy() public {
         uint256 id = _armedFlat();
-        _setAuto(recipient, dele2);
+        _setAutoDelegate(recipient, delegateeB);
         _expectModuleCalls(1, 1, 1);
         (bool ok, ) = _transfer(id, victim, recipient, false, HEMI_TX_CAP);
         assertTrue(ok);
     }
 
     function test_T7_counts_armedSaturated() public {
-        _saturate(dele3);
+        _saturate(delegateeC);
         uint256 id = _armedFlat();
-        _setAuto(recipient, dele3);
+        _setAutoDelegate(recipient, delegateeC);
         _expectModuleCalls(1, 2, 0);
         (bool ok, ) = _transfer(id, victim, recipient, false, HEMI_TX_CAP);
         assertTrue(ok);
@@ -758,33 +810,35 @@ contract ArmedTransferMoveOrRemoveTest is AutoRelockTestBase {
     function test_T7_rewardNotifications_bracketTheDisarm() public {
         uint256 id = _armedFlat();
         (uint256 plain, , ) = createLock(victim, PRINCIPAL, 4 * 365 days);
-        CountingDistributor c = new CountingDistributor(address(veHemi));
-        veHemi.updateRewardDistributor(c);
+        CountingDistributor distributor = new CountingDistributor(address(veHemi));
+        veHemi.updateRewardDistributor(distributor);
         uint256 wFlat = veHemi.balanceOfNFT(id);
 
         (bool ok, ) = _transfer(id, victim, recipient, false, HEMI_TX_CAP);
         assertTrue(ok);
-        assertEq(c.nSeenFor(id), 2, "T7: armed transfer must notify exactly twice");
-        assertEq(c.weightAt(id, 0), wFlat, "T7: notify-before did not see the flat weight");
-        assertEq(c.weightAt(id, 1), veHemi.balanceOfNFT(id), "T7: re-anchor did not see the new weight");
-        assertTrue(c.weightAt(id, 1) != wFlat, "T7: premise -- disarm moved no weight");
+        assertEq(distributor.notificationCountFor(id), 2, "T7: armed transfer must notify exactly twice");
+        assertEq(distributor.weightAtNotification(id, 0), wFlat, "T7: notify-before did not see the flat weight");
+        assertEq(
+            distributor.weightAtNotification(id, 1), veHemi.balanceOfNFT(id), "T7: re-anchor did not see the new weight"
+        );
+        assertTrue(distributor.weightAtNotification(id, 1) != wFlat, "T7: premise -- disarm moved no weight");
 
         (ok, ) = _transfer(plain, victim, recipient, false, HEMI_TX_CAP);
         assertTrue(ok);
-        assertEq(c.nSeenFor(plain), 1, "T7: unarmed transfer must notify once");
+        assertEq(distributor.notificationCountFor(plain), 1, "T7: unarmed transfer must notify once");
 
         uint256 id2 = _armedFlat();
-        uint256 before2 = c.nSeenFor(id2); // mint + arm notifications
+        uint256 before2 = distributor.notificationCountFor(id2); // mint + arm notifications
         (ok, ) = _transfer(id2, victim, victim, false, HEMI_TX_CAP);
         assertTrue(ok);
-        assertEq(c.nSeenFor(id2) - before2, 1, "T7: self-transfer must notify once");
+        assertEq(distributor.notificationCountFor(id2) - before2, 1, "T7: self-transfer must notify once");
     }
 
     // ===================================================================
     // T8 -- EVENT STREAM (no adapter; emitter-filtered).
     // ===================================================================
 
-    function _dcArgs(Vm.Log memory l_) internal pure returns (uint256 id, address from, address to) {
+    function _delegateChangedArgs(Vm.Log memory l_) internal pure returns (uint256 id, address from, address to) {
         id = uint256(l_.topics[1]);
         from = address(uint160(uint256(l_.topics[2])));
         to = address(uint160(uint256(l_.topics[3])));
@@ -792,63 +846,66 @@ contract ArmedTransferMoveOrRemoveTest is AutoRelockTestBase {
 
     function test_T8_stream_happyPath() public {
         uint256 id = _armedFlat();
-        _setAuto(recipient, dele2);
+        _setAutoDelegate(recipient, delegateeB);
         vm.recordLogs();
         (bool ok, ) = _transfer(id, victim, recipient, false, HEMI_TX_CAP);
         Vm.Log[] memory logs = vm.getRecordedLogs();
         assertTrue(ok);
-        uint256 iDis = _firstIndex(logs, address(veHemi), T_DISABLED);
-        uint256 iTr = _firstIndex(logs, address(veHemi), T_TRANSFER);
-        uint256 iDc = _firstIndex(logs, address(delegation), T_DC);
-        assertLt(iDis, iTr, "T8: AutoRelockDisabled must precede Transfer");
-        assertLt(iTr, iDc, "T8: every delegation write must follow Transfer");
-        assertEq(_count(logs, address(delegation), T_DC), 1, "T8: exactly one DelegateChanged");
-        (uint256 dId, address from, address to) = _dcArgs(logs[iDc]);
-        assertEq(dId, id);
-        assertEq(from, dele, "T8: from != D_old");
-        assertEq(to, dele2, "T8: to != D_new");
-        assertEq(_count(logs, address(veHemi), T_DUF), 0);
-        assertEq(_count(logs, address(veHemi), T_UNVERIFIED), 0);
+        uint256 disabledIndex = _firstIndex(logs, address(veHemi), TOPIC_AUTO_RELOCK_DISABLED);
+        uint256 transferIndex = _firstIndex(logs, address(veHemi), TOPIC_TRANSFER);
+        uint256 delegateChangedIndex = _firstIndex(logs, address(delegation), TOPIC_DELEGATE_CHANGED);
+        assertLt(disabledIndex, transferIndex, "T8: AutoRelockDisabled must precede Transfer");
+        assertLt(transferIndex, delegateChangedIndex, "T8: every delegation write must follow Transfer");
+        assertEq(_count(logs, address(delegation), TOPIC_DELEGATE_CHANGED), 1, "T8: exactly one DelegateChanged");
+        (uint256 eventTokenId, address from, address to) = _delegateChangedArgs(logs[delegateChangedIndex]);
+        assertEq(eventTokenId, id);
+        assertEq(from, delegateeA, "T8: from != the seller's delegatee");
+        assertEq(to, delegateeB, "T8: to != the recipient's delegate");
+        assertEq(_count(logs, address(veHemi), TOPIC_DELEGATION_UPDATE_FAILED), 0);
+        assertEq(_count(logs, address(veHemi), TOPIC_AUTO_RELOCK_RETIREMENT_UNVERIFIED), 0);
     }
 
     function test_T8_stream_sameDelegate() public {
         uint256 id = _armedFlat();
-        _setAuto(recipient, dele);
+        _setAutoDelegate(recipient, delegateeA);
         vm.recordLogs();
         (bool ok, ) = _transfer(id, victim, recipient, false, HEMI_TX_CAP);
         Vm.Log[] memory logs = vm.getRecordedLogs();
         assertTrue(ok);
-        assertEq(_count(logs, address(delegation), T_DC), 1, "T8: exactly one DelegateChanged (same column)");
-        (, address from, address to) = _dcArgs(logs[_firstIndex(logs, address(delegation), T_DC)]);
-        assertEq(from, dele);
-        assertEq(to, dele);
+        assertEq(_count(logs, address(delegation), TOPIC_DELEGATE_CHANGED), 1,
+            "T8: exactly one DelegateChanged (same column)");
+        (, address from, address to) =
+            _delegateChangedArgs(logs[_firstIndex(logs, address(delegation), TOPIC_DELEGATE_CHANGED)]);
+        assertEq(from, delegateeA);
+        assertEq(to, delegateeA);
     }
 
     function test_T8_stream_underCount() public {
-        _saturate(dele3);
+        _saturate(delegateeC);
         uint256 id = _armedFlat();
-        _setAuto(recipient, dele3);
+        _setAutoDelegate(recipient, delegateeC);
         vm.recordLogs();
         (bool ok, ) = _transfer(id, victim, recipient, false, HEMI_TX_CAP);
         Vm.Log[] memory logs = vm.getRecordedLogs();
         assertTrue(ok);
-        uint256 iTr = _firstIndex(logs, address(veHemi), T_TRANSFER);
-        uint256 iDc = _firstIndex(logs, address(delegation), T_DC);
-        assertLt(iTr, iDc, "T8: a delegation write before Transfer");
+        uint256 transferIndex = _firstIndex(logs, address(veHemi), TOPIC_TRANSFER);
+        uint256 delegateChangedIndex = _firstIndex(logs, address(delegation), TOPIC_DELEGATE_CHANGED);
+        assertLt(transferIndex, delegateChangedIndex, "T8: a delegation write before Transfer");
         // NOTE: `vm.recordLogs` also returns logs emitted inside the REVERTED
-        // move frame (DelegateChanged(id, D_old, D_new)); a real receipt does
-        // not contain them. The committed write is the removal.
+        // move frame (DelegateChanged from the seller's delegatee to the
+        // recipient's delegate); a real receipt does not contain them. The
+        // committed write is the removal.
         uint256 removals;
         for (uint256 i; i < logs.length; ++i) {
-            if (logs[i].emitter == address(delegation) && logs[i].topics[0] == T_DC) {
-                (, address from, address to) = _dcArgs(logs[i]);
-                assertEq(from, dele, "T8: from != D_old");
+            if (logs[i].emitter == address(delegation) && logs[i].topics[0] == TOPIC_DELEGATE_CHANGED) {
+                (, address from, address to) = _delegateChangedArgs(logs[i]);
+                assertEq(from, delegateeA, "T8: from != the seller's delegatee");
                 if (to == address(0)) ++removals;
-                else assertEq(to, dele3, "T8: unexpected move target");
+                else assertEq(to, delegateeC, "T8: unexpected move target");
             }
         }
         assertEq(removals, 1, "T8: exactly one removal");
-        assertEq(_count(logs, address(veHemi), T_DUF), 1);
+        assertEq(_count(logs, address(veHemi), TOPIC_DELEGATION_UPDATE_FAILED), 1);
     }
 
     // ===================================================================
@@ -856,25 +913,25 @@ contract ArmedTransferMoveOrRemoveTest is AutoRelockTestBase {
     // ===================================================================
 
     function test_T9_armedWithEmptyRecord_movesCleanly() public {
-        RevertingVoteDelegation bad = new RevertingVoteDelegation();
-        IVeHemiVoteDelegation real = IVeHemiVoteDelegation(address(delegation));
-        veHemi.updateVoteDelegation(bad);
+        RevertingVoteDelegation revertingModule = new RevertingVoteDelegation();
+        IVeHemiVoteDelegation realDelegation = IVeHemiVoteDelegation(address(delegation));
+        veHemi.updateVoteDelegation(revertingModule);
         (uint256 id, , ) = createLock(victim, PRINCIPAL, 4 * 365 days);
-        veHemi.updateVoteDelegation(real);
+        veHemi.updateVoteDelegation(realDelegation);
         enable(victim, id);
         assertEq(delegation.delegation(id).delegatee, address(0), "T9: premise");
-        _setAuto(recipient, dele2);
+        _setAutoDelegate(recipient, delegateeB);
         vm.recordLogs();
         (bool ok, ) = _transfer(id, victim, recipient, false, HEMI_TX_CAP);
         Vm.Log[] memory logs = vm.getRecordedLogs();
         assertTrue(ok);
-        assertEq(delegation.delegation(id).delegatee, dele2, "T9: empty record not booked at the target");
-        assertEq(_count(logs, address(veHemi), T_UNVERIFIED), 0);
+        assertEq(delegation.delegation(id).delegatee, delegateeB, "T9: empty record not booked at the target");
+        assertEq(_count(logs, address(veHemi), TOPIC_AUTO_RELOCK_RETIREMENT_UNVERIFIED), 0);
     }
 
     function test_T9_twoTransfersSameHour() public {
         uint256 id = _armedFlat();
-        _setAuto(recipient, dele2);
+        _setAutoDelegate(recipient, delegateeB);
         (bool ok, ) = _transfer(id, victim, recipient, false, HEMI_TX_CAP);
         assertTrue(ok);
         vm.warp(block.timestamp + 60);
@@ -883,8 +940,8 @@ contract ArmedTransferMoveOrRemoveTest is AutoRelockTestBase {
         IVeHemiVoteDelegation.Delegation memory d = delegation.delegation(id);
         assertEq(d.delegatee, charlie, "T9: second hop");
         assertFalse(_isFlat(d));
-        _assertNoPhantomFarFuture(dele, "T9: phantom on the first delegate");
-        _assertNoPhantomFarFuture(dele2, "T9: phantom on the second delegate");
+        _assertNoPhantomFarFuture(delegateeA, "T9: phantom on the first delegate");
+        _assertNoPhantomFarFuture(delegateeB, "T9: phantom on the second delegate");
     }
 
     /// @dev A known limitation: a distributor re-entering the delegation
@@ -892,87 +949,90 @@ contract ArmedTransferMoveOrRemoveTest is AutoRelockTestBase {
     ///      re-anchor (flag clear, record still flat) changes nothing final.
     function test_T9_reentrantDistributor_sameFinalState() public {
         uint256 id = _armedFlat();
-        _setAuto(recipient, dele2);
+        _setAutoDelegate(recipient, delegateeB);
         uint256 snap = vm.snapshotState();
         (bool ok, ) = _transfer(id, victim, recipient, false, HEMI_TX_CAP);
         assertTrue(ok);
-        IVeHemiVoteDelegation.Delegation memory plainRec = delegation.delegation(id);
+        IVeHemiVoteDelegation.Delegation memory recordWithoutReentry = delegation.delegation(id);
         vm.warp(block.timestamp + 1);
-        uint256 v1 = delegation.getVotes(dele);
-        uint256 v2 = delegation.getVotes(dele2);
+        uint256 delegateeAVotesWithoutReentry = delegation.getVotes(delegateeA);
+        uint256 delegateeBVotesWithoutReentry = delegation.getVotes(delegateeB);
         vm.revertToState(snap);
 
-        TransferReentrantDistributor r = new TransferReentrantDistributor(address(delegation));
-        r.setTarget(id);
-        veHemi.updateRewardDistributor(r);
+        RetireStrandedFlatTermDistributor distributor = new RetireStrandedFlatTermDistributor(address(delegation));
+        distributor.setTarget(id);
+        veHemi.updateRewardDistributor(distributor);
         (ok, ) = _transfer(id, victim, recipient, false, HEMI_TX_CAP);
         assertTrue(ok);
-        assertEq(r.attempts(), 2, "T9: premise -- notify-before + re-anchor");
-        assertEq(r.successes(), 1, "T9: premise -- the re-entry did not retire anything");
-        IVeHemiVoteDelegation.Delegation memory reRec = delegation.delegation(id);
-        assertEq(reRec.delegatee, plainRec.delegatee);
-        assertEq(reRec.bias, plainRec.bias);
-        assertEq(reRec.slope, plainRec.slope);
+        assertEq(distributor.attempts(), 2, "T9: premise -- notify-before + re-anchor");
+        assertEq(distributor.successes(), 1, "T9: premise -- the re-entry did not retire anything");
+        IVeHemiVoteDelegation.Delegation memory recordWithReentry = delegation.delegation(id);
+        assertEq(recordWithReentry.delegatee, recordWithoutReentry.delegatee);
+        assertEq(recordWithReentry.bias, recordWithoutReentry.bias);
+        assertEq(recordWithReentry.slope, recordWithoutReentry.slope);
         vm.warp(block.timestamp + 1);
-        assertEq(delegation.getVotes(dele), v1, "T9: D_old votes differ under re-entry");
-        assertEq(delegation.getVotes(dele2), v2, "T9: D_new votes differ under re-entry");
+        assertEq(delegation.getVotes(delegateeA), delegateeAVotesWithoutReentry,
+            "T9: the seller's delegatee's votes differ under re-entry");
+        assertEq(delegation.getVotes(delegateeB), delegateeBVotesWithoutReentry,
+            "T9: the recipient's delegate's votes differ under re-entry");
     }
 
     // ===================================================================
-    // T10 -- UNCHANGED PATHS.
+    // T10 -- TRANSFERS THAT DO NOT DISARM (SELF AND UNARMED).
     // ===================================================================
 
     /// @dev An owner's armed SELF-transfer into a saturated autoDelegate stays
     ///      armed and flat: the flat booking adds no slope, so it moves.
     function test_T10_armedSelfTransfer_staysArmedAndFlat() public {
-        _saturate(dele3);
+        _saturate(delegateeC);
         uint256 id = _armedFlat();
-        uint64 r0 = veHemi.autoRelockRemaining(id);
-        _setAuto(victim, dele3);
+        uint64 remainingBefore = veHemi.autoRelockRemaining(id);
+        _setAutoDelegate(victim, delegateeC);
         vm.recordLogs();
         (bool ok, ) = _transfer(id, victim, victim, false, HEMI_TX_CAP);
         Vm.Log[] memory logs = vm.getRecordedLogs();
         assertTrue(ok);
-        assertEq(veHemi.autoRelockRemaining(id), r0, "T10: self-transfer changed the arm");
+        assertEq(veHemi.autoRelockRemaining(id), remainingBefore, "T10: self-transfer changed the arm");
         IVeHemiVoteDelegation.Delegation memory d = delegation.delegation(id);
         assertTrue(_isFlat(d), "T10: armed self-transfer is no longer flat");
-        assertEq(d.delegatee, dele3);
-        assertEq(_count(logs, address(veHemi), T_DUF), 0);
-        assertEq(_count(logs, address(veHemi), T_DISABLED), 0);
+        assertEq(d.delegatee, delegateeC);
+        assertEq(_count(logs, address(veHemi), TOPIC_DELEGATION_UPDATE_FAILED), 0);
+        assertEq(_count(logs, address(veHemi), TOPIC_AUTO_RELOCK_DISABLED), 0);
     }
 
-    function test_T10_unarmedTransfer_unchanged() public {
+    function test_T10_unarmedTransferMovesToRecipientDelegateWithoutDisarm() public {
         (uint256 id, , ) = createLock(victim, PRINCIPAL, 4 * 365 days);
-        _setAuto(recipient, dele2);
+        _setAutoDelegate(recipient, delegateeB);
         vm.recordLogs();
         (bool ok, ) = _transfer(id, victim, recipient, false, HEMI_TX_CAP);
         Vm.Log[] memory logs = vm.getRecordedLogs();
         assertTrue(ok);
-        assertEq(delegation.delegation(id).delegatee, dele2);
-        assertEq(_count(logs, address(veHemi), T_DISABLED), 0);
-        assertEq(_count(logs, address(delegation), T_DC), 1);
+        assertEq(delegation.delegation(id).delegatee, delegateeB);
+        assertEq(_count(logs, address(veHemi), TOPIC_AUTO_RELOCK_DISABLED), 0);
+        assertEq(_count(logs, address(delegation), TOPIC_DELEGATE_CHANGED), 1);
     }
 
     /// @dev An UNARMED transfer into a saturated delegate keeps the BASE
     ///      behaviour: the refused write leaves the decaying record where it
     ///      was (misattributed, weight-correct). The armed/unarmed divergence
     ///      is deliberate: only an ARMED transfer removes the record on a
-    ///      refused move (normally flat; a stale decaying record left by a
-    ///      swallowed enable is removed too -- see T9).
+    ///      refused move (normally flat; a decaying record that a swallowed
+    ///      enable left on an armed position is removed too -- see T9).
     function test_T10_unarmedIntoSaturated_keepsDecayingRecord() public {
-        _saturate(dele3);
+        _saturate(delegateeC);
         (uint256 id, , ) = createLock(victim, PRINCIPAL, 4 * 365 days);
-        delegateTo(victim, id, dele);
-        _setAuto(recipient, dele3);
+        delegateTo(victim, id, delegateeA);
+        _setAutoDelegate(recipient, delegateeC);
         (bool ok, ) = _transfer(id, victim, recipient, false, HEMI_TX_CAP);
         assertTrue(ok);
         IVeHemiVoteDelegation.Delegation memory d = delegation.delegation(id);
-        assertEq(d.delegatee, dele, "T10: unarmed record moved");
+        assertEq(d.delegatee, delegateeA, "T10: unarmed record moved");
         assertGt(d.slope, 0);
     }
 
     // ===================================================================
-    // FURTHER CASES (T4, T7b, T7c, T9, T10).
+    // DOUBLE REFUSALS, ARMED DECAYING, STALE-RETIRED AND UNREADABLE RECORDS,
+    // NOTIFICATION ORDER (T4, T7b, T7c, T9, T10).
     // ===================================================================
 
     /// @dev The fallback removal must be non-strict (`strict_ = false`): a module that
@@ -980,133 +1040,143 @@ contract ArmedTransferMoveOrRemoveTest is AutoRelockTestBase {
     ///      armed transfer commit (and announce), never revert.
     function test_T4_bothRefusedWithOverflowSelector_stillCommits() public {
         uint256 id = _armedFlat();
-        SlopeOverflowLiar m = new SlopeOverflowLiar(); // armed: every delegate() raises 0xf2b4513c
-        m.seed(id, dele, uint96(PRINCIPAL / 2), 0);
-        veHemi.updateVoteDelegation(m);
+        SlopeOverflowLiar liar = new SlopeOverflowLiar(); // refusing: every delegate() raises 0xf2b4513c
+        liar.seed(id, delegateeA, uint96(PRINCIPAL / 2), 0);
+        veHemi.updateVoteDelegation(liar);
         vm.recordLogs();
         (bool ok, ) = _transfer(id, victim, recipient, false, HEMI_TX_CAP);
         Vm.Log[] memory logs = vm.getRecordedLogs();
         assertTrue(ok, "T4: transfer reverted on the overflow selector (removal must be non-strict)");
-        bytes4[] memory rs = _reasons(logs);
-        assertEq(rs.length, 2);
-        assertEq(rs[0], SEL_DSO);
-        assertEq(rs[1], SEL_DSO);
-        assertEq(_count(logs, address(veHemi), T_UNVERIFIED), 1);
+        bytes4[] memory reasons = _reasons(logs);
+        assertEq(reasons.length, 2);
+        assertEq(reasons[0], SEL_SLOPE_OVERFLOW);
+        assertEq(reasons[1], SEL_SLOPE_OVERFLOW);
+        assertEq(_count(logs, address(veHemi), TOPIC_AUTO_RELOCK_RETIREMENT_UNVERIFIED), 1);
     }
 
     /// @dev Reward notifications on the REFUSED-move branches: still exactly two,
     ///      the first on the flat weight, the last on the post-transfer weight.
-    function _assertTwoNotifies(uint256 id_, CountingDistributor c_, uint256 wFlat_) internal view {
-        assertEq(c_.nSeenFor(id_), 2, "T7b: armed transfer must notify exactly twice");
-        assertEq(c_.weightAt(id_, 0), wFlat_, "T7b: notify-before did not see the flat weight");
-        assertEq(c_.weightAt(id_, 1), veHemi.balanceOfNFT(id_), "T7b: re-anchor did not see the new weight");
+    function _assertTwoNotifies(uint256 id_, CountingDistributor distributor_, uint256 wFlat_) internal view {
+        assertEq(distributor_.notificationCountFor(id_), 2, "T7b: armed transfer must notify exactly twice");
+        assertEq(distributor_.weightAtNotification(id_, 0), wFlat_, "T7b: notify-before did not see the flat weight");
+        assertEq(
+            distributor_.weightAtNotification(id_, 1),
+            veHemi.balanceOfNFT(id_),
+            "T7b: re-anchor did not see the new weight"
+        );
     }
 
     function test_T7b_rewardNotifications_refusedMoveBranches() public {
         // (a) real VVD, saturated recipient delegate: move refused, removal accepted.
         uint256 snap = vm.snapshotState();
-        _saturate(dele3);
+        _saturate(delegateeC);
         uint256 id = _armedFlat();
-        _setAuto(recipient, dele3);
-        CountingDistributor c = new CountingDistributor(address(veHemi));
-        veHemi.updateRewardDistributor(c);
+        _setAutoDelegate(recipient, delegateeC);
+        CountingDistributor distributor = new CountingDistributor(address(veHemi));
+        veHemi.updateRewardDistributor(distributor);
         uint256 wFlat = veHemi.balanceOfNFT(id);
         (bool ok, ) = _transfer(id, victim, recipient, false, HEMI_TX_CAP);
         assertTrue(ok);
         assertEq(delegation.delegation(id).delegatee, address(0), "T7b: premise -- not the removal branch");
-        _assertTwoNotifies(id, c, wFlat);
+        _assertTwoNotifies(id, distributor, wFlat);
         vm.revertToState(snap);
 
         // (b) a module refusing both writes.
         id = _armedFlat();
-        MixedFailureModule m = new MixedFailureModule();
-        m.seedFlat(id, dele, uint96(PRINCIPAL / 2));
-        veHemi.updateVoteDelegation(m);
-        c = new CountingDistributor(address(veHemi));
-        veHemi.updateRewardDistributor(c);
+        MixedFailureModule module = new MixedFailureModule();
+        module.seedFlat(id, delegateeA, uint96(PRINCIPAL / 2));
+        veHemi.updateVoteDelegation(module);
+        distributor = new CountingDistributor(address(veHemi));
+        veHemi.updateRewardDistributor(distributor);
         wFlat = veHemi.balanceOfNFT(id);
         vm.recordLogs();
         (ok, ) = _transfer(id, victim, recipient, false, HEMI_TX_CAP);
         Vm.Log[] memory logs = vm.getRecordedLogs();
         assertTrue(ok);
-        assertEq(_count(logs, address(veHemi), T_UNVERIFIED), 1, "T7b: premise -- not the both-refused branch");
-        _assertTwoNotifies(id, c, wFlat);
+        assertEq(_count(logs, address(veHemi), TOPIC_AUTO_RELOCK_RETIREMENT_UNVERIFIED), 1,
+            "T7b: premise -- not the both-refused branch");
+        _assertTwoNotifies(id, distributor, wFlat);
     }
 
     /// @dev An armed position whose VVD record is still DECAYING (the enable's
     ///      re-book was swallowed behind a broken module, then the module was
     ///      repaired): the transfer moves it like any record, or removes it
     ///      when the recipient's delegate refuses -- unlike an UNARMED transfer.
-    function _armedWithStaleDecayingRecord() internal returns (uint256 id) {
+    function _armedWithDecayingRecord() internal returns (uint256 id) {
         (id, , ) = createLock(victim, PRINCIPAL, 4 * 365 days);
-        delegateTo(victim, id, dele);
-        IVeHemiVoteDelegation real = IVeHemiVoteDelegation(address(delegation));
+        delegateTo(victim, id, delegateeA);
+        IVeHemiVoteDelegation realDelegation = IVeHemiVoteDelegation(address(delegation));
         veHemi.updateVoteDelegation(new RevertingVoteDelegation());
         enable(victim, id);
-        veHemi.updateVoteDelegation(real);
+        veHemi.updateVoteDelegation(realDelegation);
         IVeHemiVoteDelegation.Delegation memory d = delegation.delegation(id);
-        require(d.delegatee == dele && d.slope > 0 && veHemi.autoRelockRemaining(id) != 0, "stale-decaying premise");
+        require(d.delegatee == delegateeA && d.slope > 0 && veHemi.autoRelockRemaining(id) != 0,
+            "T9: premise -- not an armed decaying record");
         vm.warp(block.timestamp + 7200);
     }
 
     /// @dev Votes at t0+1 with and without the transfer (snapshot
-    ///      counterfactual, as in T1): the stale DECAYING record's weight leaves
-    ///      D_old exactly, and lands on the target when it is healthy.
-    function _staleDecayingCell(bool targetSat_) internal {
-        address target = targetSat_ ? dele3 : dele2;
-        if (targetSat_) _saturate(dele3);
-        uint256 id = _armedWithStaleDecayingRecord();
-        _setAuto(recipient, target);
+    ///      counterfactual, as in T1): the armed DECAYING record's weight leaves
+    ///      the seller's delegatee exactly, and lands on the target when it is
+    ///      healthy.
+    function _armedDecayingRecordCell(bool targetSaturated_) internal {
+        address target = targetSaturated_ ? delegateeC : delegateeB;
+        if (targetSaturated_) _saturate(delegateeC);
+        uint256 id = _armedWithDecayingRecord();
+        _setAutoDelegate(recipient, target);
         uint256 t0 = block.timestamp;
         IVeHemiVoteDelegation.Delegation memory pre = delegation.delegation(id);
 
         uint256 s1 = vm.snapshotState();
         vm.warp(t0 + 1);
-        uint256 oldNo = delegation.getVotes(dele);
-        uint256 newNo = delegation.getVotes(target);
+        uint256 sellerDelegateeVotesWithoutTransfer = delegation.getVotes(delegateeA);
+        uint256 targetVotesWithoutTransfer = delegation.getVotes(target);
         vm.revertToState(s1);
 
         vm.recordLogs();
         (bool ok, ) = _transfer(id, victim, recipient, false, HEMI_TX_CAP);
         Vm.Log[] memory logs = vm.getRecordedLogs();
         assertTrue(ok);
-        assertEq(_count(logs, address(veHemi), T_UNVERIFIED), 0);
+        assertEq(_count(logs, address(veHemi), TOPIC_AUTO_RELOCK_RETIREMENT_UNVERIFIED), 0);
         assertEq(uint256(int256(veHemi.getLockedBalance(id).amount)), PRINCIPAL, "T9: principal changed");
         IVeHemiVoteDelegation.Delegation memory d = delegation.delegation(id);
 
         vm.warp(t0 + 1);
-        // D_old holds ONLY the victim's stale record in this rig, so the
-        // whole of its weight must leave: positive without the transfer,
-        // exactly zero with it.
-        require(pre.delegatee == dele && oldNo > 0, "stale-decaying premise (D_old weight)");
+        // The seller's delegatee holds ONLY the victim's decaying record in this
+        // rig, so the whole of its weight must leave: positive without the
+        // transfer, exactly zero with it.
+        require(pre.delegatee == delegateeA && sellerDelegateeVotesWithoutTransfer > 0,
+            "T9: premise -- the seller's delegatee holds no weight");
         uint256 tol = 2 * (PRINCIPAL / MAX_TIME) + 2;
-        assertEq(delegation.getVotes(dele), 0, "T9: stale weight did not leave D_old");
-        if (targetSat_) {
+        assertEq(delegation.getVotes(delegateeA), 0, "T9: decaying weight did not leave the seller's delegatee");
+        if (targetSaturated_) {
             assertEq(d.delegatee, address(0), "T9: armed refused move must remove the record");
-            assertEq(_count(logs, address(veHemi), T_DUF), 1);
-            assertEq(delegation.getVotes(target), newNo, "T9: saturated target changed");
+            assertEq(_count(logs, address(veHemi), TOPIC_DELEGATION_UPDATE_FAILED), 1);
+            assertEq(delegation.getVotes(target), targetVotesWithoutTransfer, "T9: saturated target changed");
         } else {
-            assertEq(d.delegatee, dele2, "T9: stale decaying record not moved");
+            assertEq(d.delegatee, delegateeB, "T9: armed decaying record not moved");
             assertEq(uint256(d.end), uint256(veHemi.getLockedBalance(id).end), "T9: moved record end");
-            assertApproxEqAbs(delegation.getVotes(dele2), newNo + veHemi.balanceOfNFT(id), tol, "T9: target did not gain the weight");
+            assertApproxEqAbs(delegation.getVotes(delegateeB), targetVotesWithoutTransfer + veHemi.balanceOfNFT(id), tol,
+                "T9: target did not gain the weight");
         }
     }
 
-    function test_T9_staleDecayingRecord_healthyTarget_moves() public { _staleDecayingCell(false); }
+    function test_T9_armedDecayingRecord_healthyTarget_moves() public { _armedDecayingRecordCell(false); }
 
-    function test_T9_staleDecayingRecord_saturatedTarget_removed() public { _staleDecayingCell(true); }
+    function test_T9_armedDecayingRecord_saturatedTarget_removed() public { _armedDecayingRecordCell(true); }
 
     /// @dev The move commits and the record cannot be READ (the read-back's
     ///      catch): the transfer commits and announces once.
     function test_T4_committedMove_unreadableRecord_announces() public {
         uint256 id = _armedFlat();
-        veHemi.updateVoteDelegation(new WriteOkReadRevertsModule());
+        veHemi.updateVoteDelegation(new ReadRevertingModule());
         vm.recordLogs();
         (bool ok, ) = _transfer(id, victim, recipient, false, HEMI_TX_CAP);
         Vm.Log[] memory logs = vm.getRecordedLogs();
         assertTrue(ok, "T4: unreadable module refused the armed transfer");
-        assertEq(_count(logs, address(veHemi), T_DUF), 0);
-        assertEq(_count(logs, address(veHemi), T_UNVERIFIED), 1, "T4: unreadable read-back not announced");
+        assertEq(_count(logs, address(veHemi), TOPIC_DELEGATION_UPDATE_FAILED), 0);
+        assertEq(_count(logs, address(veHemi), TOPIC_AUTO_RELOCK_RETIREMENT_UNVERIFIED), 1,
+            "T4: unreadable read-back not announced");
     }
 
     /// @dev Mint-and-arm, then transfer in the SAME block.
@@ -1115,34 +1185,35 @@ contract ArmedTransferMoveOrRemoveTest is AutoRelockTestBase {
         vm.prank(victim);
         uint256 id = veHemi.createLockWithAutoRelock(PRINCIPAL, 4 * 365 days, true, false);
         assertGt(veHemi.autoRelockRemaining(id), 0, "T9: premise -- not armed");
-        _setAuto(recipient, dele2);
+        _setAutoDelegate(recipient, delegateeB);
         (bool ok, ) = _transfer(id, victim, recipient, false, HEMI_TX_CAP);
         assertTrue(ok);
         assertEq(veHemi.autoRelockRemaining(id), 0);
         IVeHemiVoteDelegation.Delegation memory d = delegation.delegation(id);
         assertFalse(_isFlat(d), "T9: PHANTOM after same-block mint+arm+transfer");
-        assertEq(d.delegatee, dele2);
+        assertEq(d.delegatee, delegateeB);
         _assertNoPhantomFarFuture(victim, "T9: phantom on the minter's self-delegation");
     }
 
-    /// @dev PINNED: a position disarmed EARLIER by the permissionless
-    ///      stale-retire on a saturated D_old keeps its flat record; a later
-    ///      transfer is UNARMED and into a saturated target leaves that record
-    ///      where it was. The armed-transfer leg does not touch this path.
-    function test_T10_staleRetiredPhantom_thenTransfer_pinned() public {
-        _saturate(dele);
-        _saturate(dele3);
-        uint256 id = _armedOn(dele);
+    /// @dev Asserted: a position disarmed EARLIER by the permissionless
+    ///      stale-retire on the seller's saturated delegatee keeps its flat
+    ///      record; a later transfer is UNARMED and into a saturated target
+    ///      leaves that record where it was. The armed-transfer leg does not
+    ///      touch this path.
+    function test_T10_staleRetiredFlatRecord_staysOnUnarmedTransferIntoASaturatedDelegate() public {
+        _saturate(delegateeA);
+        _saturate(delegateeC);
+        uint256 id = _armedOn(delegateeA);
         vm.warp(veHemi.autoRelockStaleAt(id));
         vm.prank(stranger);
         veHemi.retireStaleAutoRelock(id);
         assertEq(veHemi.autoRelockRemaining(id), 0);
         assertTrue(_isFlat(delegation.delegation(id)), "T10: premise -- the stale retire did not leave the flat record");
-        _setAuto(recipient, dele3);
+        _setAutoDelegate(recipient, delegateeC);
         (bool ok, ) = _transfer(id, victim, recipient, false, HEMI_TX_CAP);
         assertTrue(ok);
         IVeHemiVoteDelegation.Delegation memory d = delegation.delegation(id);
-        assertTrue(_isFlat(d) && d.delegatee == dele, "T10: (pinned) stale-retired flat record unchanged by an unarmed transfer");
+        assertTrue(_isFlat(d) && d.delegatee == delegateeA, "T10: stale-retired flat record unchanged by an unarmed transfer");
     }
 
     /// @dev The transfer's reward notifications settle the SELLER's segment:
@@ -1153,36 +1224,37 @@ contract ArmedTransferMoveOrRemoveTest is AutoRelockTestBase {
     function test_T7c_rewardNotificationsSeeTheSeller() public {
         uint256 id = _armedFlat();
         (uint256 plain, , ) = createLock(victim, PRINCIPAL, 4 * 365 days);
-        OwnerRecordingDistributor r = new OwnerRecordingDistributor(address(veHemi));
-        veHemi.updateRewardDistributor(r);
+        OwnerRecordingDistributor distributor = new OwnerRecordingDistributor(address(veHemi));
+        veHemi.updateRewardDistributor(distributor);
         (bool ok, ) = _transfer(id, victim, recipient, false, HEMI_TX_CAP);
         assertTrue(ok);
-        assertEq(r.n(id), 2, "T7c: armed transfer must notify twice");
-        assertEq(r.ownerAt(id, 0), victim, "T7c: notify-before did not see the seller");
-        assertEq(r.ownerAt(id, 1), victim, "T7c: re-anchor ran after the ownership change");
+        assertEq(distributor.notificationCountFor(id), 2, "T7c: armed transfer must notify twice");
+        assertEq(distributor.ownerAtNotification(id, 0), victim, "T7c: notify-before did not see the seller");
+        assertEq(distributor.ownerAtNotification(id, 1), victim, "T7c: re-anchor ran after the ownership change");
         (ok, ) = _transfer(plain, victim, recipient, true, HEMI_TX_CAP);
         assertTrue(ok);
-        assertEq(r.n(plain), 1, "T7c: unarmed transfer must notify once");
-        assertEq(r.ownerAt(plain, 0), victim, "T7c: unarmed notify did not see the seller");
+        assertEq(distributor.notificationCountFor(plain), 1, "T7c: unarmed transfer must notify once");
+        assertEq(distributor.ownerAtNotification(plain, 0), victim, "T7c: unarmed notify did not see the seller");
     }
 
     // ---- T8 with the REAL Aragon adapter wired --------------------------
 
-    bytes32 internal constant T_ADAPTER_DC = keccak256("DelegateChanged(address,address,address)");
+    bytes32 internal constant TOPIC_ADAPTER_DELEGATE_CHANGED = keccak256("DelegateChanged(address,address,address)");
 
     function _wireAdapter() internal returns (address) {
-        VeHemiAragonAdapter ad = new VeHemiAragonAdapter(address(veHemi));
-        delegation.setTrustedAdapter(address(ad));
-        return address(ad);
+        VeHemiAragonAdapter adapter = new VeHemiAragonAdapter(address(veHemi));
+        delegation.setTrustedAdapter(address(adapter));
+        return address(adapter);
     }
 
-    function _adapterDCs(Vm.Log[] memory logs_, address adapter_, address delegator_)
+    function _adapterDelegateChanged(Vm.Log[] memory logs_, address adapter_, address delegator_)
         internal
         pure
         returns (uint256 n, address from, address to)
     {
         for (uint256 i; i < logs_.length; ++i) {
-            if (logs_[i].emitter == adapter_ && logs_[i].topics.length == 4 && logs_[i].topics[0] == T_ADAPTER_DC
+            if (logs_[i].emitter == adapter_ && logs_[i].topics.length == 4
+                && logs_[i].topics[0] == TOPIC_ADAPTER_DELEGATE_CHANGED
                 && address(uint160(uint256(logs_[i].topics[1]))) == delegator_) {
                 ++n;
                 from = address(uint160(uint256(logs_[i].topics[2])));
@@ -1192,52 +1264,52 @@ contract ArmedTransferMoveOrRemoveTest is AutoRelockTestBase {
     }
 
     function test_T8_adapter_happyPath_singlePositionRecipient() public {
-        address ad = _wireAdapter();
+        address adapter = _wireAdapter();
         uint256 id = _armedFlat();
-        _setAuto(recipient, dele2);
+        _setAutoDelegate(recipient, delegateeB);
         vm.recordLogs();
         (bool ok, ) = _transfer(id, victim, recipient, false, HEMI_TX_CAP);
         Vm.Log[] memory logs = vm.getRecordedLogs();
         assertTrue(ok);
-        (uint256 n, address from, address to) = _adapterDCs(logs, ad, recipient);
-        assertEq(n, 1, "T8/adapter: one relay for the recipient");
-        assertEq(from, dele);
-        assertEq(to, dele2);
-        (uint256 nSeller, , ) = _adapterDCs(logs, ad, victim);
-        assertEq(nSeller, 0, "T8/adapter: a relay attributed to the SELLER");
+        (uint256 recipientRelays, address from, address to) = _adapterDelegateChanged(logs, adapter, recipient);
+        assertEq(recipientRelays, 1, "T8/adapter: one relay for the recipient");
+        assertEq(from, delegateeA);
+        assertEq(to, delegateeB);
+        (uint256 sellerRelays, , ) = _adapterDelegateChanged(logs, adapter, victim);
+        assertEq(sellerRelays, 0, "T8/adapter: a relay attributed to the SELLER");
     }
 
     function test_T8_adapter_underCount_singlePositionRecipient() public {
-        address ad = _wireAdapter();
-        _saturate(dele3);
+        address adapter = _wireAdapter();
+        _saturate(delegateeC);
         uint256 id = _armedFlat();
-        _setAuto(recipient, dele3);
+        _setAutoDelegate(recipient, delegateeC);
         vm.recordLogs();
         (bool ok, ) = _transfer(id, victim, recipient, false, HEMI_TX_CAP);
         Vm.Log[] memory logs = vm.getRecordedLogs();
         assertTrue(ok);
-        (uint256 n, address from, address to) = _adapterDCs(logs, ad, recipient);
-        assertEq(n, 1, "T8/adapter: one relay for the recipient");
-        assertEq(from, dele);
-        assertEq(to, address(0), "T8/adapter: under-count relay must read (recipient, D_old, 0)");
-        (uint256 nSeller, , ) = _adapterDCs(logs, ad, victim);
-        assertEq(nSeller, 0, "T8/adapter: a relay attributed to the SELLER");
+        (uint256 recipientRelays, address from, address to) = _adapterDelegateChanged(logs, adapter, recipient);
+        assertEq(recipientRelays, 1, "T8/adapter: one relay for the recipient");
+        assertEq(from, delegateeA);
+        assertEq(to, address(0), "T8/adapter: under-count relay must read (recipient, the seller's delegatee, 0)");
+        (uint256 sellerRelays, , ) = _adapterDelegateChanged(logs, adapter, victim);
+        assertEq(sellerRelays, 0, "T8/adapter: a relay attributed to the SELLER");
     }
 
-    /// @dev PINNED (the adapter's own mixed-state suppression): a recipient
+    /// @dev Asserted (the adapter's own mixed-state suppression): a recipient
     ///      whose positions end up with DIFFERENT delegates gets no relay.
     function test_T8_adapter_mixedRecipient_isSilent() public {
-        address ad = _wireAdapter();
+        address adapter = _wireAdapter();
         createLock(recipient, PRINCIPAL, 4 * 365 days); // self-delegated
         uint256 id = _armedFlat();
-        _setAuto(recipient, dele2);
+        _setAutoDelegate(recipient, delegateeB);
         vm.recordLogs();
         (bool ok, ) = _transfer(id, victim, recipient, false, HEMI_TX_CAP);
         Vm.Log[] memory logs = vm.getRecordedLogs();
         assertTrue(ok);
-        assertEq(delegation.delegation(id).delegatee, dele2, "T8/adapter: premise -- moved");
-        (uint256 n, , ) = _adapterDCs(logs, ad, recipient);
-        assertEq(n, 0, "T8/adapter: (pinned) mixed recipient relays nothing");
+        assertEq(delegation.delegation(id).delegatee, delegateeB, "T8/adapter: premise -- moved");
+        (uint256 recipientRelays, , ) = _adapterDelegateChanged(logs, adapter, recipient);
+        assertEq(recipientRelays, 0, "T8/adapter: mixed recipient relays nothing");
     }
 
     // ---- T11, fine-grained at the boundary ------------------------------
@@ -1247,22 +1319,26 @@ contract ArmedTransferMoveOrRemoveTest is AutoRelockTestBase {
     ///      and at the boundary the removal still gets (nearly) the whole ceiling.
     function test_T11_removalGasBoundary_fineSweep() public {
         uint256 id = _armedFlat();
-        RemovalGasProbeModule m = new RemovalGasProbeModule();
-        m.seedFlat(id, dele, uint96(PRINCIPAL / 2));
-        veHemi.updateVoteDelegation(m);
-        uint256 gFirst;
-        for (uint256 g = 8_000_000; g <= 10_000_000; g += 10_000) {
+        RemovalGasProbeModule module = new RemovalGasProbeModule();
+        module.seedFlat(id, delegateeA, uint96(PRINCIPAL / 2));
+        veHemi.updateVoteDelegation(module);
+        uint256 firstCommittingGas;
+        for (uint256 gasLimit = 8_000_000; gasLimit <= 10_000_000; gasLimit += 10_000) {
             uint256 snap = vm.snapshotState();
-            (bool ok, ) = _transfer(id, victim, recipient, false, g);
+            (bool ok, ) = _transfer(id, victim, recipient, false, gasLimit);
             vm.revertToState(snap);
-            if (ok) { gFirst = g; break; }
+            if (ok) { firstCommittingGas = gasLimit; break; }
         }
-        assertGt(gFirst, 0, "T11: vacuous -- no commit in range");
-        for (uint256 g = gFirst - 60_000; g <= gFirst; g += 1_000) {
+        assertGt(firstCommittingGas, 0, "T11: vacuous -- no commit in range");
+        for (uint256 gasLimit = firstCommittingGas - 60_000; gasLimit <= firstCommittingGas; gasLimit += 1_000) {
             uint256 snap = vm.snapshotState();
-            (bool ok, bytes memory ret) = _transfer(id, victim, recipient, false, g);
+            (bool ok, bytes memory ret) = _transfer(id, victim, recipient, false, gasLimit);
             if (ok) {
-                assertGe(m.removalGasAtEntry(), CEILING - 2_000, "T11: boundary commit with a short removal");
+                assertGe(
+                    module.removalGasAtEntry(),
+                    DELEGATION_GAS_CEILING - 2_000,
+                    "T11: boundary commit with a short removal"
+                );
             } else {
                 assertEq(bytes4(ret), VeHemi.DelegationCallStarved.selector, "T11: below the floor must be DelegationCallStarved");
             }
@@ -1275,66 +1351,67 @@ contract ArmedTransferMoveOrRemoveTest is AutoRelockTestBase {
     // ===================================================================
 
     function _expectedSelector(bytes memory data_) internal pure returns (bytes4 r) {
-        bytes memory w = new bytes(4);
-        for (uint256 i; i < 4 && i < data_.length; ++i) w[i] = data_[i];
-        r = bytes4(w);
+        bytes memory selectorBytes = new bytes(4);
+        for (uint256 i; i < 4 && i < data_.length; ++i) selectorBytes[i] = data_[i];
+        r = bytes4(selectorBytes);
     }
 
     function test_T12_failureReasonForEveryRevertLength() public {
-        uint256[7] memory lens = [uint256(0), 1, 3, 4, 5, 68, 200];
-        for (uint256 k; k < lens.length; ++k) {
+        uint256[7] memory revertLengths = [uint256(0), 1, 3, 4, 5, 68, 200];
+        for (uint256 k; k < revertLengths.length; ++k) {
             uint256 snap = vm.snapshotState();
             (uint256 id, , ) = createLock(victim, PRINCIPAL, 4 * 365 days);
-            bytes memory data = new bytes(lens[k]);
+            bytes memory data = new bytes(revertLengths[k]);
             for (uint256 i; i < data.length; ++i) data[i] = bytes1(uint8(0xA1 + i));
-            RawRevertModule m = new RawRevertModule();
-            m.setData(data);
-            veHemi.updateVoteDelegation(m);
+            RawRevertModule module = new RawRevertModule();
+            module.setData(data);
+            veHemi.updateVoteDelegation(module);
             vm.recordLogs();
             (bool ok, ) = _transfer(id, victim, recipient, false, HEMI_TX_CAP);
             Vm.Log[] memory logs = vm.getRecordedLogs();
             assertTrue(ok);
-            bytes4[] memory rs = _reasons(logs);
-            assertEq(rs.length, 1);
-            assertEq(rs[0], _expectedSelector(data), "T12: DUFR differs from bytes4(revert data)");
+            bytes4[] memory reasons = _reasons(logs);
+            assertEq(reasons.length, 1);
+            assertEq(reasons[0], _expectedSelector(data),
+                "T12: DelegationUpdateFailedReason differs from bytes4(revert data)");
             vm.revertToState(snap);
         }
     }
 
-    /// @dev Pins the scratch-word clear (`mstore(0x00, 0)`) in the bounded
+    /// @dev Covers the scratch-word clear (`mstore(0x00, 0)`) in the bounded
     ///      selector copy: the second, SHORTER revert must not report the
     ///      first one's selector.
     function test_T12_failureReason_secondShorterRevertReportsZero() public {
         uint256 id = _armedFlat();
-        MixedFailureModule m = new MixedFailureModule();
-        m.seedFlat(id, dele, uint96(PRINCIPAL / 2));
-        veHemi.updateVoteDelegation(m);
+        MixedFailureModule module = new MixedFailureModule();
+        module.seedFlat(id, delegateeA, uint96(PRINCIPAL / 2));
+        veHemi.updateVoteDelegation(module);
         vm.recordLogs();
         (bool ok, ) = _transfer(id, victim, recipient, false, HEMI_TX_CAP);
         Vm.Log[] memory logs = vm.getRecordedLogs();
         assertTrue(ok);
-        bytes4[] memory rs = _reasons(logs);
-        assertEq(rs.length, 2);
-        assertEq(rs[0], MixedFailureModule.MoveRefused.selector);
-        assertEq(rs[1], bytes4(0), "T12: stale scratch word reported for an empty revert");
+        bytes4[] memory reasons = _reasons(logs);
+        assertEq(reasons.length, 2);
+        assertEq(reasons[0], MixedFailureModule.MoveRefused.selector);
+        assertEq(reasons[1], bytes4(0), "T12: stale scratch word reported for an empty revert");
     }
 
     /// @dev Strict leg on the REAL module: exactly the 4-byte selector.
     function test_T12_strictReraise_realModule_exactBytes() public {
-        _saturate(dele);
-        uint256 id = _armedOn(dele);
+        _saturate(delegateeA);
+        uint256 id = _armedOn(delegateeA);
         vm.prank(victim);
         (bool ok, bytes memory ret) = address(veHemi).call(abi.encodeWithSignature("disableAutoRelock(uint256)", id));
         assertFalse(ok);
-        assertEq(ret, abi.encodeWithSelector(SEL_DSO), "T12: strict re-raise bytes differ");
+        assertEq(ret, abi.encodeWithSelector(SEL_SLOPE_OVERFLOW), "T12: strict re-raise bytes differ");
     }
 
     /// @dev Strict leg with TRAILING DATA: forwarded byte for byte.
     function test_T12_strictReraise_forwardsWholePayload() public {
         uint256 id = _armedFlat();
-        OverflowWithTailModule m = new OverflowWithTailModule();
-        m.seedFlat(id, dele, uint96(PRINCIPAL / 2));
-        veHemi.updateVoteDelegation(m);
+        OverflowWithTailModule module = new OverflowWithTailModule();
+        module.seedFlat(id, delegateeA, uint96(PRINCIPAL / 2));
+        veHemi.updateVoteDelegation(module);
         vm.prank(victim);
         (bool ok, bytes memory ret) = address(veHemi).call(abi.encodeWithSignature("disableAutoRelock(uint256)", id));
         assertFalse(ok);

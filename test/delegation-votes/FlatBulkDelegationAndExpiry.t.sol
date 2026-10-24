@@ -15,10 +15,10 @@ import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.s
  *
  *        test_H1_* `delegateAllFor` x auto-relock, through the REAL Aragon
  *                  adapter (the user-facing `adapter.delegate(X)`). A FLAT
- *                  position's stored `end` is frozen and falls into the past,
- *                  so a liveness test on `end` alone would skip exactly the
- *                  positions the flag keeps alive; every body here consults
- *                  the flag.
+ *                  position's stored `end` does not move and falls into the
+ *                  past, so a liveness test on `end` alone would skip exactly
+ *                  the positions the flag keeps alive; every body here
+ *                  consults the flag.
  *        test_H2_* the `fixedBias` carry in
  *                  `VeHemiVoteDelegation::calculateExpiredDelegations` (pushed
  *                  verbatim by the permissionless
@@ -82,33 +82,33 @@ contract FlatBulkDelegationAndExpiryTest is Test {
         return delegation.delegation(id).delegatee;
     }
 
-    /// @dev Move to the next hourly checkpoint boundary so a delegation
-    ///      written in this epoch becomes live.
-    function _crossEpoch() internal {
+    /// @dev Warp to the next hour boundary (every booking made in this hour
+    ///      is live by then).
+    function _warpToNextHourBoundary() internal {
         vm.warp(((block.timestamp / HOUR) * HOUR) + HOUR);
     }
 
     // =================================================================== H1
 
-    /// @notice H1-A. A FLAT position whose `end` has fallen into the past is
-    ///         delegated by the Aragon bulk flow, not skipped.
+    /// @notice H1-A. A FLAT position whose stored `end` has fallen into the
+    ///         past is delegated by the Aragon bulk flow, not skipped.
     /// @dev    Without the `veHemi.autoRelockRemaining(tokenId) != 0 ||` clause
     ///         of `VeHemiVoteDelegation::delegateAllFor`'s skip guard, only
     ///         `end > checkpointTs` would remain -- which is FALSE here.
-    function test_H1_A_flatPastEndIsDelegatedByBulkFlow() public {
+    function test_H1_A_flatPositionWithPastStoredEndIsDelegatedByBulkFlow() public {
         uint256 id = _lock(ALICE, 100e18, 2 * YEAR);
         _enable(ALICE, id);
 
-        // The flag is the liveness predicate; `end` is frozen and falls
-        // into the past. Warp well past it and assert BOTH halves of that,
-        // so the body cannot silently stop testing what it claims to test.
+        // The flag is the liveness predicate; the stored `end` does not move
+        // and falls into the past. Warp well past it and assert BOTH halves of
+        // that, so the body cannot silently stop testing what it claims to test.
         vm.warp(block.timestamp + 3 * YEAR);
         veHemi.checkpoint();
-        assertGt(veHemi.autoRelockRemaining(id), 0, "fixture: position is not flat");
+        assertGt(veHemi.autoRelockRemaining(id), 0, "premise: position is not flat");
         assertLt(
             uint256(veHemi.getLockedBalance(id).end),
             block.timestamp,
-            "fixture: end is not in the past, the body would be vacuous"
+            "premise: end is not in the past, the body would be vacuous"
         );
 
         vm.prank(ALICE);
@@ -135,8 +135,8 @@ contract FlatBulkDelegationAndExpiryTest is Test {
     }
 
     /// @notice H1-C. The WEIGHT moves, not merely the cached delegatee.
-    /// @dev    The nearest existing law, `ARLChecks::checkFlatPositionsStayDelegated`
-    ///         (run by `invariant_arl_core`), asserts
+    /// @dev    The nearest existing law, `AutoRelockLedgerChecks::checkFlatRecordAmountMatchesLedger`
+    ///         (run by `invariant_autoRelockLedgerLaws`), asserts
     ///         `delegation.delegation(id).amount == shadow.amount` -- it
     ///         watches the cached AMOUNT. H1 corrupts the cached DELEGATEE, and
     ///         what a holder actually loses is governance weight, so this body
@@ -149,13 +149,13 @@ contract FlatBulkDelegationAndExpiryTest is Test {
 
         vm.prank(ALICE);
         adapter.delegate(BOB);
-        _crossEpoch();
+        _warpToNextHourBoundary();
         uint256 bobVotes = delegation.getVotes(BOB);
         assertGt(bobVotes, 0, "H1: the flat weight never reached BOB");
 
         vm.prank(ALICE);
         adapter.delegate(CAROL);
-        _crossEpoch();
+        _warpToNextHourBoundary();
         assertEq(delegation.getVotes(BOB), 0, "H1: weight STRANDED on the old delegatee");
         assertEq(delegation.getVotes(CAROL), bobVotes, "H1: weight did not arrive at the new delegatee");
         assertEq(adapter.delegates(ALICE), CAROL, "H1: adapter view did not follow the move");
@@ -184,15 +184,19 @@ contract FlatBulkDelegationAndExpiryTest is Test {
         adapter.delegate(BOB);
 
         assertEq(_delegateeOf(flatId), BOB, "H1: flat position skipped alongside an expired one");
-        assertEq(_delegateeOf(shortId), DAVE, "fixture: the expired position was not skipped");
+        assertEq(_delegateeOf(shortId), DAVE, "premise: the expired position was not skipped");
         assertEq(adapter.delegates(ALICE), address(0), "the mixed post-state must read as address(0)");
 
-        // The documented remediation, executed.
+        // The remediation `VeHemiAragonAdapter::delegate`'s NatSpec documents, executed.
         vm.prank(ALICE);
         veHemi.withdraw(shortId);
         vm.prank(ALICE);
         adapter.delegate(BOB);
-        assertEq(adapter.delegates(ALICE), BOB, "documented remediation did not restore the account-wide view");
+        assertEq(
+            adapter.delegates(ALICE),
+            BOB,
+            "the remediation in VeHemiAragonAdapter::delegate's NatSpec did not restore the account-wide view"
+        );
     }
 
     /// @notice H1-E. WHY THE FLAG CLAUSE IN `delegateAllFor`'s GUARD MUST
@@ -209,7 +213,7 @@ contract FlatBulkDelegationAndExpiryTest is Test {
         _enable(ALICE, id);
         vm.warp(block.timestamp + 3 * YEAR);
         veHemi.checkpoint();
-        assertLt(uint256(veHemi.getLockedBalance(id).end), block.timestamp, "fixture: end not in the past");
+        assertLt(uint256(veHemi.getLockedBalance(id).end), block.timestamp, "premise: end not in the past");
 
         vm.prank(ALICE);
         vm.expectRevert(VeHemi.LockNotExpired.selector);
@@ -249,14 +253,14 @@ contract FlatBulkDelegationAndExpiryTest is Test {
         vm.prank(BOB);
         delegation.delegate(shortId, DAVE);
 
-        _crossEpoch();
+        _warpToNextHourBoundary();
         uint256 flatWeight = delegation.getVotes(DAVE);
-        assertGt(flatWeight, 0, "fixture: DAVE has no votes at all");
+        assertGt(flatWeight, 0, "premise: DAVE has no votes at all");
 
         vm.warp(block.timestamp + 3 * SIX_DAYS);
         veHemi.checkpoint();
         uint256 before = delegation.getVotes(DAVE);
-        assertGt(before, 0, "fixture: the flat term is not carrying DAVE's votes");
+        assertGt(before, 0, "premise: the flat term is not carrying DAVE's votes");
 
         // The permissionless call, made by a total stranger.
         vm.prank(CAROL);
@@ -287,7 +291,7 @@ contract FlatBulkDelegationAndExpiryTest is Test {
         uint256 shortId = _lock(BOB, 50e18, 2 * SIX_DAYS);
         vm.prank(BOB);
         delegation.delegate(shortId, DAVE);
-        _crossEpoch();
+        _warpToNextHourBoundary();
         vm.warp(block.timestamp + 3 * SIX_DAYS);
         veHemi.checkpoint();
 
@@ -299,7 +303,7 @@ contract FlatBulkDelegationAndExpiryTest is Test {
         vm.prank(ALICE);
         delegation.delegate(flatId, CAROL);
         assertEq(_delegateeOf(flatId), CAROL, "H2: the flat delegation could not be moved away");
-        _crossEpoch();
+        _warpToNextHourBoundary();
         assertGt(delegation.getVotes(CAROL), 0, "H2: the flat weight did not arrive at the new delegatee");
     }
 
@@ -315,7 +319,7 @@ contract FlatBulkDelegationAndExpiryTest is Test {
         uint256 shortId = _lock(BOB, 50e18, 2 * SIX_DAYS);
         vm.prank(BOB);
         delegation.delegate(shortId, DAVE);
-        _crossEpoch();
+        _warpToNextHourBoundary();
 
         IVeHemiVoteDelegation.DelegateCheckpoint[] memory before =
             delegation.getDelegationCheckpoints(DAVE);
@@ -329,8 +333,8 @@ contract FlatBulkDelegationAndExpiryTest is Test {
         IVeHemiVoteDelegation.DelegateCheckpoint memory calc =
             delegation.calculateExpiredDelegations(DAVE);
 
-        assertGt(last.fixedBias, 0, "fixture: no flat delegator, the fixedBias assertion below would be vacuous");
-        assertGt(last.normalizedBias, 0, "fixture: no decaying delegator, the netting assertions would be vacuous");
+        assertGt(last.fixedBias, 0, "premise: no flat delegator, the fixedBias assertion below would be vacuous");
+        assertGt(last.normalizedBias, 0, "premise: no decaying delegator, the netting assertions would be vacuous");
 
         assertGt(calc.timestamp, last.timestamp, "timestamp did not advance");
         assertEq(calc.fixedBias, last.fixedBias, "fixedBias was not carried forward verbatim");
@@ -367,17 +371,17 @@ contract FlatBulkDelegationAndExpiryTest is Test {
         delegation.writeNewCheckpointForExpiredDelegations(DAVE);
         IVeHemiVoteDelegation.DelegateCheckpoint[] memory after_ =
             delegation.getDelegationCheckpoints(DAVE);
-        IVeHemiVoteDelegation.DelegateCheckpoint memory w = after_[after_.length - 1];
-        assertEq(w.normalizedBias, calc.normalizedBias, "writer did not push the view's normalizedBias");
-        assertEq(w.normalizedSlope, calc.normalizedSlope, "writer did not push the view's normalizedSlope");
-        assertEq(w.totalAmount, calc.totalAmount, "writer did not push the view's totalAmount");
-        assertEq(w.fixedBias, calc.fixedBias, "writer did not push the view's fixedBias");
+        IVeHemiVoteDelegation.DelegateCheckpoint memory written = after_[after_.length - 1];
+        assertEq(written.normalizedBias, calc.normalizedBias, "writer did not push the view's normalizedBias");
+        assertEq(written.normalizedSlope, calc.normalizedSlope, "writer did not push the view's normalizedSlope");
+        assertEq(written.totalAmount, calc.totalAmount, "writer did not push the view's totalAmount");
+        assertEq(written.fixedBias, calc.fixedBias, "writer did not push the view's fixedBias");
     }
 
     // =================================================================== H3
 
     /// @notice H3. The withdraw boundary is EXACT.
-    /// @dev    Both campaign handlers (`ARLHandler`, `InvariantHandler`) refuse
+    /// @dev    Both campaign handlers (`AutoRelockLedgerHandler`, `InvariantHandler`) refuse
     ///         to issue a withdraw unless `block.timestamp >= end`, so the state
     ///         `t == end - 1` -- where a guard weakened to
     ///         `block.timestamp + 1 < end` would differ -- is outside their

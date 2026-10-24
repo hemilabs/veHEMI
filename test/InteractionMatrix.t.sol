@@ -47,49 +47,49 @@ import "./LockedCurveTestBase.sol";
 /// is reached through the `withdraw` and `forfeit` rows.
 contract InteractionMatrixTest is LockedCurveTestBase {
     // ---- entry points ------------------------------------------------
-    uint256 constant EP_INCAMT        = 0;
-    uint256 constant EP_INCTIME       = 1;
-    uint256 constant EP_ENABLE        = 2;
-    uint256 constant EP_DISABLE       = 3;
-    uint256 constant EP_RETIRESTALE   = 4;
-    uint256 constant EP_REFRESH       = 5;
-    uint256 constant EP_DELEG_SAME    = 6;
-    uint256 constant EP_DELEG_DIFF    = 7;
-    uint256 constant EP_DELEGBYSIG    = 8;
-    uint256 constant EP_DELEGALLFOR   = 9;
-    uint256 constant EP_TRANSFERFROM  = 10;
-    uint256 constant EP_SAFETRANSFER  = 11;
-    uint256 constant EP_CREATELOCK    = 12;
-    uint256 constant EP_CREATELOCKFOR = 13;
-    uint256 constant EP_WITHDRAW      = 14;
-    uint256 constant EP_FORFEIT       = 15;
-    uint256 constant EP_NOOP          = 16;   // no trigger: the resting control
+    uint256 constant EP_INCREASE_AMOUNT      = 0;
+    uint256 constant EP_INCREASE_UNLOCK_TIME = 1;
+    uint256 constant EP_ENABLE               = 2;
+    uint256 constant EP_DISABLE              = 3;
+    uint256 constant EP_RETIRE_STALE         = 4;
+    uint256 constant EP_REFRESH              = 5;
+    uint256 constant EP_REDELEGATE_TO_SAME   = 6;
+    uint256 constant EP_DELEGATE_TO_NEW      = 7;
+    uint256 constant EP_DELEGATE_BY_SIG      = 8;
+    uint256 constant EP_DELEGATE_ALL_FOR     = 9;
+    uint256 constant EP_TRANSFER_FROM        = 10;
+    uint256 constant EP_SAFE_TRANSFER_FROM   = 11;
+    uint256 constant EP_CREATE_LOCK          = 12;
+    uint256 constant EP_CREATE_LOCK_FOR      = 13;
+    uint256 constant EP_WITHDRAW             = 14;
+    uint256 constant EP_FORFEIT              = 15;
+    uint256 constant EP_NOOP                 = 16;   // no trigger: the resting control
 
     // ---- position kinds ----------------------------------------------
-    uint256 constant K_DECAY     = 0;
-    uint256 constant K_FLAT      = 1;
-    uint256 constant K_FORFEIT   = 2;
-    uint256 constant K_NONTRANS  = 3;
-    uint256 constant K_EXPIRED   = 4;
-    uint256 constant K_FLATPAST  = 5;
+    uint256 constant KIND_DECAYING                     = 0;
+    uint256 constant KIND_FLAT                         = 1;
+    uint256 constant KIND_FORFEITABLE                  = 2;
+    uint256 constant KIND_NON_TRANSFERABLE             = 3;
+    uint256 constant KIND_EXPIRED                      = 4;
+    uint256 constant KIND_FLAT_PAST_TRANSFERABLE_AFTER = 5;
 
     // ---- delegation shapes -------------------------------------------
-    uint256 constant S_SELF   = 0;  // mint default
-    uint256 constant S_OTHER  = 1;
-    uint256 constant S_SHARED = 2;  // two delegators, one delegatee
-    uint256 constant S_MIXED  = 3;  // delegatee holds flat AND decaying
-    uint256 constant S_N      = 4;
+    uint256 constant SHAPE_SELF   = 0;  // mint default
+    uint256 constant SHAPE_OTHER  = 1;
+    uint256 constant SHAPE_SHARED = 2;  // two delegators, one delegatee
+    uint256 constant SHAPE_MIXED  = 3;  // delegatee holds flat AND decaying
+    uint256 constant SHAPE_COUNT = 4;
 
-    uint256 constant P_N  = 10;     // rows of the phase table
+    uint256 constant PHASE_COUNT = 10;  // rows of the phase table
     uint256 constant HOUR = 1 hours;
 
     // ---- actors -------------------------------------------------------
     uint256 constant OWNER_PK = 0xA11CE;
     address OWNER;              // subject position owner (signer, for BySig)
-    address constant DEE   = address(0xD0D0);   // primary delegatee
-    address constant DEE2  = address(0xD1D1);   // move target
-    address constant CO    = address(0xC0C0);   // companion owner
-    address constant FADM  = address(0xFADA);   // forfeit admin
+    address constant DELEGATEE     = address(0xD0D0);   // primary delegatee
+    address constant MOVE_TARGET   = address(0xD1D1);   // target of a delegatee move or transfer
+    address constant COMPANION     = address(0xC0C0);   // companion owner
+    address constant FORFEIT_ADMIN = address(0xFADA);
 
     // ---- per-cell state ----------------------------------------------
     uint256[] ids;        // every position minted in this cell
@@ -97,24 +97,24 @@ contract InteractionMatrixTest is LockedCurveTestBase {
     uint256 subject;      // the position the entry point is fired at
     uint256 fireT;        // the instant the entry point was fired
 
-    struct Res {
+    struct CellResult {
         uint256 zeroAfter;        // LAW1: VSUM == 0 while ESUM > 0, t > T
         uint256 sealedZeroAfter;  // LAW2: sealed getPastVotes == 0 while ESUM > 0, t > T
-        uint256 immutBad;         // LAW3: replay != live reading
+        uint256 restatedReadings; // LAW3: replay != live reading
         uint256 overAfter;        // LAW4: VSUM > ESUM, t > T
     }
 
     function setUp() public override {
         super.setUp();
         OWNER = vm.addr(OWNER_PK);
-        veHemi.updateForfeitAdmin(FADM);
+        veHemi.updateForfeitAdmin(FORFEIT_ADMIN);
         // `delegateAllFor` demands a trusted adapter with code; this test
         // contract has code and `admin == address(this)` owns VeHemi.
         delegation.setTrustedAdapter(address(this));
         runSeedingFlow();
         hemi.mint(address(this), 10_000_000 ether);
         hemi.approve(address(veHemi), type(uint256).max);
-        address[8] memory actors = [OWNER, DEE, DEE2, CO, FADM, alice, bob, charlie];
+        address[8] memory actors = [OWNER, DELEGATEE, MOVE_TARGET, COMPANION, FORFEIT_ADMIN, alice, bob, charlie];
         for (uint256 i; i < actors.length; ++i) {
             hemi.mint(actors[i], 100_000 ether);
             vm.prank(actors[i]); hemi.approve(address(veHemi), type(uint256).max);
@@ -158,24 +158,24 @@ contract InteractionMatrixTest is LockedCurveTestBase {
     // ===================================================================
     //  POSITIONS AND SHAPES
     // ===================================================================
-    function _mkFor(address o, uint256 amt, uint256 dur, bool transf, bool forf)
+    function _mkFor(address owner_, uint256 amt, uint256 dur, bool transferable, bool forfeitable)
         internal returns (uint256 id)
     {
-        if (transf) { vm.prank(o); id = veHemi.createLock(amt, dur); }
-        else { id = veHemi.createLockFor(amt, dur, o, false, forf); }
+        if (transferable) { vm.prank(owner_); id = veHemi.createLock(amt, dur); }
+        else { id = veHemi.createLockFor(amt, dur, owner_, false, forfeitable); }
     }
 
     /// Build the SUBJECT position of the requested kind, owned by OWNER.
     function _buildSubject(uint256 kind) internal returns (uint256 id) {
-        if (kind == K_DECAY)        { id = _mkFor(OWNER, 500 ether, 40 * SIX_DAYS, true,  false); }
-        else if (kind == K_FLAT)    {
+        if (kind == KIND_DECAYING)              { id = _mkFor(OWNER, 500 ether, 40 * SIX_DAYS, true,  false); }
+        else if (kind == KIND_FLAT)             {
             id = _mkFor(OWNER, 500 ether, 40 * SIX_DAYS, true, false);
             vm.prank(OWNER); veHemi.enableAutoRelock(id);
         }
-        else if (kind == K_FORFEIT) { id = _mkFor(OWNER, 500 ether, 40 * SIX_DAYS, false, true); }
-        else if (kind == K_NONTRANS){ id = _mkFor(OWNER, 500 ether, 40 * SIX_DAYS, false, false); }
-        else if (kind == K_EXPIRED) { id = _mkFor(OWNER, 500 ether, 2 * SIX_DAYS, true, false); }
-        else if (kind == K_FLATPAST) {
+        else if (kind == KIND_FORFEITABLE)      { id = _mkFor(OWNER, 500 ether, 40 * SIX_DAYS, false, true); }
+        else if (kind == KIND_NON_TRANSFERABLE) { id = _mkFor(OWNER, 500 ether, 40 * SIX_DAYS, false, false); }
+        else if (kind == KIND_EXPIRED)          { id = _mkFor(OWNER, 500 ether, 2 * SIX_DAYS, true, false); }
+        else if (kind == KIND_FLAT_PAST_TRANSFERABLE_AFTER) {
             // non-transferable => transferableAfter == unlockTime; go flat,
             // then (in `_cell`) let the ORIGINAL transferableAfter pass.
             id = _mkFor(OWNER, 500 ether, 2 * SIX_DAYS, false, false);
@@ -186,25 +186,25 @@ contract InteractionMatrixTest is LockedCurveTestBase {
 
     /// Point the subject at the shape's delegatee and mint companions.
     function _applyShape(uint256 shape) internal {
-        watch.push(OWNER); watch.push(DEE); watch.push(DEE2);
-        if (shape == S_SELF) return;   // the untouched mint default
-        if (shape == S_OTHER) { vm.prank(OWNER); delegation.delegate(subject, DEE); return; }
-        if (shape == S_SHARED) {
-            vm.prank(OWNER); delegation.delegate(subject, DEE);
-            uint256 c = _mkFor(CO, 300 ether, 40 * SIX_DAYS, true, false);
-            ids.push(c);
-            vm.prank(CO); delegation.delegate(c, DEE);
+        watch.push(OWNER); watch.push(DELEGATEE); watch.push(MOVE_TARGET);
+        if (shape == SHAPE_SELF) return;   // the untouched mint default
+        if (shape == SHAPE_OTHER) { vm.prank(OWNER); delegation.delegate(subject, DELEGATEE); return; }
+        if (shape == SHAPE_SHARED) {
+            vm.prank(OWNER); delegation.delegate(subject, DELEGATEE);
+            uint256 companionId = _mkFor(COMPANION, 300 ether, 40 * SIX_DAYS, true, false);
+            ids.push(companionId);
+            vm.prank(COMPANION); delegation.delegate(companionId, DELEGATEE);
             return;
         }
-        // S_MIXED: DEE holds one FLAT and one DECAYING record besides the
+        // SHAPE_MIXED: DELEGATEE holds one FLAT and one DECAYING record besides the
         // subject, so the subject's move has to leave both intact.
-        vm.prank(OWNER); delegation.delegate(subject, DEE);
-        uint256 f = _mkFor(CO, 300 ether, 40 * SIX_DAYS, true, false);
-        vm.prank(CO); veHemi.enableAutoRelock(f);
-        vm.prank(CO); delegation.delegate(f, DEE);
-        uint256 d = _mkFor(charlie, 200 ether, 40 * SIX_DAYS, true, false);
-        vm.prank(charlie); delegation.delegate(d, DEE);
-        ids.push(f); ids.push(d); watch.push(CO); watch.push(charlie);
+        vm.prank(OWNER); delegation.delegate(subject, DELEGATEE);
+        uint256 flatCompanionId = _mkFor(COMPANION, 300 ether, 40 * SIX_DAYS, true, false);
+        vm.prank(COMPANION); veHemi.enableAutoRelock(flatCompanionId);
+        vm.prank(COMPANION); delegation.delegate(flatCompanionId, DELEGATEE);
+        uint256 decayingCompanionId = _mkFor(charlie, 200 ether, 40 * SIX_DAYS, true, false);
+        vm.prank(charlie); delegation.delegate(decayingCompanionId, DELEGATEE);
+        ids.push(flatCompanionId); ids.push(decayingCompanionId); watch.push(COMPANION); watch.push(charlie);
     }
 
     // ===================================================================
@@ -213,11 +213,11 @@ contract InteractionMatrixTest is LockedCurveTestBase {
     // ===================================================================
     function _fire(uint256 ep) internal returns (bool ok) {
         uint256 id = subject;
-        if (ep == EP_INCAMT) {
+        if (ep == EP_INCREASE_AMOUNT) {
             hemi.mint(OWNER, 1);
             vm.prank(OWNER); try veHemi.increaseAmount(id, 1) { return true; } catch { return false; }
         }
-        if (ep == EP_INCTIME) {
+        if (ep == EP_INCREASE_UNLOCK_TIME) {
             vm.prank(OWNER); try veHemi.increaseUnlockTime(id, 60 * SIX_DAYS) { return true; } catch { return false; }
         }
         if (ep == EP_ENABLE) {
@@ -226,64 +226,64 @@ contract InteractionMatrixTest is LockedCurveTestBase {
         if (ep == EP_DISABLE) {
             vm.prank(OWNER); try veHemi.disableAutoRelock(id) { return true; } catch { return false; }
         }
-        if (ep == EP_RETIRESTALE) {
+        if (ep == EP_RETIRE_STALE) {
             vm.prank(charlie); try veHemi.retireStaleAutoRelock(id) { return true; } catch { return false; }
         }
         if (ep == EP_REFRESH) {
             // owner-only
             vm.prank(OWNER); try veHemi.refreshAutoRelock(id) { return true; } catch { return false; }
         }
-        if (ep == EP_DELEG_SAME) {
+        if (ep == EP_REDELEGATE_TO_SAME) {
             address cur = delegation.delegation(id).delegatee;
             if (cur == address(0)) return false;
             vm.prank(OWNER); try delegation.delegate(id, cur) { return true; } catch { return false; }
         }
-        if (ep == EP_DELEG_DIFF) {
-            vm.prank(OWNER); try delegation.delegate(id, DEE2) { return true; } catch { return false; }
+        if (ep == EP_DELEGATE_TO_NEW) {
+            vm.prank(OWNER); try delegation.delegate(id, MOVE_TARGET) { return true; } catch { return false; }
         }
-        if (ep == EP_DELEGBYSIG) {
+        if (ep == EP_DELEGATE_BY_SIG) {
             uint256 nonce = delegation.nonces(OWNER);
             uint256 expiry = block.timestamp + 1 days;
-            bytes32 digest = _sigDigest(id, DEE2, nonce, expiry);
+            bytes32 digest = _sigDigest(id, MOVE_TARGET, nonce, expiry);
             (uint8 v, bytes32 r, bytes32 s) = vm.sign(OWNER_PK, digest);
-            try delegation.delegateBySig(id, DEE2, nonce, expiry, v, r, s) { return true; } catch { return false; }
+            try delegation.delegateBySig(id, MOVE_TARGET, nonce, expiry, v, r, s) { return true; } catch { return false; }
         }
-        if (ep == EP_DELEGALLFOR) {
-            try delegation.delegateAllFor(OWNER, DEE2) { return true; } catch { return false; }
+        if (ep == EP_DELEGATE_ALL_FOR) {
+            try delegation.delegateAllFor(OWNER, MOVE_TARGET) { return true; } catch { return false; }
         }
-        if (ep == EP_TRANSFERFROM) {
-            vm.prank(OWNER); try veHemi.transferFrom(OWNER, DEE2, id) { return true; } catch { return false; }
+        if (ep == EP_TRANSFER_FROM) {
+            vm.prank(OWNER); try veHemi.transferFrom(OWNER, MOVE_TARGET, id) { return true; } catch { return false; }
         }
-        if (ep == EP_SAFETRANSFER) {
-            vm.prank(OWNER); try veHemi.safeTransferFrom(OWNER, DEE2, id) { return true; } catch { return false; }
+        if (ep == EP_SAFE_TRANSFER_FROM) {
+            vm.prank(OWNER); try veHemi.safeTransferFrom(OWNER, MOVE_TARGET, id) { return true; } catch { return false; }
         }
-        if (ep == EP_CREATELOCK) {
+        if (ep == EP_CREATE_LOCK) {
             vm.prank(OWNER); try veHemi.createLock(200 ether, 40 * SIX_DAYS) returns (uint256 nid) { ids.push(nid); return true; } catch { return false; }
         }
-        if (ep == EP_CREATELOCKFOR) {
+        if (ep == EP_CREATE_LOCK_FOR) {
             try veHemi.createLockFor(200 ether, 40 * SIX_DAYS, OWNER, false, false) returns (uint256 nid) { ids.push(nid); return true; } catch { return false; }
         }
         if (ep == EP_WITHDRAW) {
             vm.prank(OWNER); try veHemi.withdraw(id) { return true; } catch { return false; }
         }
         if (ep == EP_FORFEIT) {
-            vm.prank(FADM); try veHemi.forfeit(id) { return true; } catch { return false; }
+            vm.prank(FORFEIT_ADMIN); try veHemi.forfeit(id) { return true; } catch { return false; }
         }
         if (ep == EP_NOOP) return true;
         revert("no such entry point");
     }
 
-    function _sigDigest(uint256 id, address dee, uint256 nonce, uint256 expiry)
+    function _sigDigest(uint256 id, address delegatee, uint256 nonce, uint256 expiry)
         internal view returns (bytes32)
     {
-        bytes32 ds = keccak256(abi.encode(
+        bytes32 domainSeparator = keccak256(abi.encode(
             keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)"),
             keccak256(bytes("veHEMIDelegation")), keccak256(bytes("1.0.0")),
             block.chainid, address(delegation)));
-        bytes32 sh = keccak256(abi.encode(
+        bytes32 structHash = keccak256(abi.encode(
             keccak256("Delegation(uint256 delegator,address delegatee,uint256 nonce,uint256 expiry)"),
-            id, dee, nonce, expiry));
-        return keccak256(abi.encodePacked("\x19\x01", ds, sh));
+            id, delegatee, nonce, expiry));
+        return keccak256(abi.encodePacked("\x19\x01", domainSeparator, structHash));
     }
 
     // ===================================================================
@@ -334,7 +334,7 @@ contract InteractionMatrixTest is LockedCurveTestBase {
     /// Read the instants live, then replay them through `getPastVotes` at
     /// four horizons. LAW3 compares the replay with the live reading, not
     /// with a recomputed expectation.
-    function _sweep(uint256[] memory ts) internal returns (Res memory r) {
+    function _sweep(uint256[] memory ts) internal returns (CellResult memory r) {
         uint256 n = ts.length;
         uint256[] memory live = new uint256[](n);
         for (uint256 i; i < n; ++i) {
@@ -352,7 +352,7 @@ contract InteractionMatrixTest is LockedCurveTestBase {
             vm.warp(last + (hzn == 0 ? 1 : hzn == 1 ? 1 hours : hzn == 2 ? 30 days : 400 days));
             for (uint256 i; i < n; ++i) {
                 uint256 pv = _vsumPast(ts[i]);
-                if (pv != live[i]) ++r.immutBad;
+                if (pv != live[i]) ++r.restatedReadings;
                 if (hzn == 3 && pv == 0 && ts[i] > fireT && _esum(ts[i]) > 0) ++r.sealedZeroAfter;
             }
         }
@@ -362,7 +362,7 @@ contract InteractionMatrixTest is LockedCurveTestBase {
     //  THE CELL
     // ===================================================================
     function _cell(uint256 ep, uint256 kind, uint256 p, uint256 shape)
-        internal returns (bool reached, Res memory r)
+        internal returns (bool reached, CellResult memory r)
     {
         delete ids; delete watch;
         (uint256 h, uint256 s) = _phase(p);
@@ -376,9 +376,9 @@ contract InteractionMatrixTest is LockedCurveTestBase {
         _applyShape(shape);
 
         uint256 minT = t0 + 3 * HOUR;
-        if (ep == EP_RETIRESTALE) {
+        if (ep == EP_RETIRE_STALE) {
             minT = t0 + 61 * SIX_DAYS;          // STALE_FLAT_BUCKETS(60) of owner silence
-        } else if (kind == K_EXPIRED || kind == K_FLATPAST) {
+        } else if (kind == KIND_EXPIRED || kind == KIND_FLAT_PAST_TRANSFERABLE_AFTER) {
             minT = t0 + 3 * SIX_DAYS;           // past the 2*SIX_DAYS lock / original transferableAfter
         }
         uint256 T = _phaseT(minT, h, s);
@@ -391,23 +391,25 @@ contract InteractionMatrixTest is LockedCurveTestBase {
         r = _sweep(_samples(T));
     }
 
-    function _coord(uint256 ep, uint256 k, uint256 p, uint256 sh) internal pure returns (string memory) {
-        return string.concat(" at cell ep=", vm.toString(ep), " kind=", vm.toString(k),
-                             " phase=", vm.toString(p), " shape=", vm.toString(sh));
+    function _coord(uint256 ep, uint256 kind, uint256 p, uint256 shape) internal pure returns (string memory) {
+        return string.concat(" at cell ep=", vm.toString(ep), " kind=", vm.toString(kind),
+                             " phase=", vm.toString(p), " shape=", vm.toString(shape));
     }
 
-    function _check(uint256 ep, uint256 k, uint256 p, uint256 sh, Res memory r) internal pure {
+    function _check(uint256 ep, uint256 kind, uint256 p, uint256 shape, CellResult memory r) internal pure {
         if (r.zeroAfter != 0) {
-            revert(string.concat("LAW1 zero votes after the firing block", _coord(ep, k, p, sh)));
+            revert(string.concat("LAW1 zero votes after the firing block", _coord(ep, kind, p, shape)));
         }
         if (r.sealedZeroAfter != 0) {
-            revert(string.concat("LAW2 zero sealed into getPastVotes after the firing block", _coord(ep, k, p, sh)));
+            revert(string.concat(
+                "LAW2 zero sealed into getPastVotes after the firing block", _coord(ep, kind, p, shape)
+            ));
         }
-        if (r.immutBad != 0) {
-            revert(string.concat("LAW3 getPastVotes changed between horizons", _coord(ep, k, p, sh)));
+        if (r.restatedReadings != 0) {
+            revert(string.concat("LAW3 getPastVotes changed between horizons", _coord(ep, kind, p, shape)));
         }
         if (r.overAfter != 0) {
-            revert(string.concat("LAW4 over-count after the firing block", _coord(ep, k, p, sh)));
+            revert(string.concat("LAW4 over-count after the firing block", _coord(ep, kind, p, shape)));
         }
     }
 
@@ -416,106 +418,106 @@ contract InteractionMatrixTest is LockedCurveTestBase {
     function _laws(uint256 ep, uint256 kind, uint256 pLo, uint256 pHi) internal {
         uint256 snap = vm.snapshotState();
         for (uint256 p = pLo; p < pHi; ++p) {
-            for (uint256 sh; sh < S_N; ++sh) {
+            for (uint256 shape; shape < SHAPE_COUNT; ++shape) {
                 vm.revertToState(snap);
                 snap = vm.snapshotState();
-                (bool reached, Res memory r) = _cell(ep, kind, p, sh);
-                if (!reached) revert(string.concat("the entry point reverted", _coord(ep, kind, p, sh)));
-                _check(ep, kind, p, sh, r);
+                (bool reached, CellResult memory r) = _cell(ep, kind, p, shape);
+                if (!reached) revert(string.concat("the entry point reverted", _coord(ep, kind, p, shape)));
+                _check(ep, kind, p, shape, r);
             }
         }
     }
-    function _laws(uint256 ep, uint256 kind) internal { _laws(ep, kind, 0, P_N); }
+    function _laws(uint256 ep, uint256 kind) internal { _laws(ep, kind, 0, PHASE_COUNT); }
 
     // ===================================================================
     //  THE BODIES
     // ===================================================================
-    function test_incAmt_decay() public { _laws(EP_INCAMT, K_DECAY); }
-    function test_incAmt_flat() public { _laws(EP_INCAMT, K_FLAT); }
-    function test_incAmt_forfeitable() public { _laws(EP_INCAMT, K_FORFEIT); }
-    function test_incAmt_nonTransferable() public { _laws(EP_INCAMT, K_NONTRANS); }
-    function test_incAmt_flatPastTransferable() public { _laws(EP_INCAMT, K_FLATPAST); }
+    function test_increaseAmount_decaying() public { _laws(EP_INCREASE_AMOUNT, KIND_DECAYING); }
+    function test_increaseAmount_flat() public { _laws(EP_INCREASE_AMOUNT, KIND_FLAT); }
+    function test_increaseAmount_forfeitable() public { _laws(EP_INCREASE_AMOUNT, KIND_FORFEITABLE); }
+    function test_increaseAmount_nonTransferable() public { _laws(EP_INCREASE_AMOUNT, KIND_NON_TRANSFERABLE); }
+    function test_increaseAmount_flatPastTransferableAfter() public { _laws(EP_INCREASE_AMOUNT, KIND_FLAT_PAST_TRANSFERABLE_AFTER); }
 
-    function test_incTime_decay() public { _laws(EP_INCTIME, K_DECAY); }
-    function test_incTime_flat() public { _laws(EP_INCTIME, K_FLAT); }
-    function test_incTime_forfeitable() public { _laws(EP_INCTIME, K_FORFEIT); }
-    function test_incTime_nonTransferable() public { _laws(EP_INCTIME, K_NONTRANS); }
-    function test_incTime_flatPastTransferable() public { _laws(EP_INCTIME, K_FLATPAST); }
+    function test_increaseUnlockTime_decaying() public { _laws(EP_INCREASE_UNLOCK_TIME, KIND_DECAYING); }
+    function test_increaseUnlockTime_flat() public { _laws(EP_INCREASE_UNLOCK_TIME, KIND_FLAT); }
+    function test_increaseUnlockTime_forfeitable() public { _laws(EP_INCREASE_UNLOCK_TIME, KIND_FORFEITABLE); }
+    function test_increaseUnlockTime_nonTransferable() public { _laws(EP_INCREASE_UNLOCK_TIME, KIND_NON_TRANSFERABLE); }
+    function test_increaseUnlockTime_flatPastTransferableAfter() public { _laws(EP_INCREASE_UNLOCK_TIME, KIND_FLAT_PAST_TRANSFERABLE_AFTER); }
 
-    function test_enable_decay() public { _laws(EP_ENABLE, K_DECAY); }
-    function test_enable_forfeitable() public { _laws(EP_ENABLE, K_FORFEIT); }
-    function test_enable_nonTransferable() public { _laws(EP_ENABLE, K_NONTRANS); }
+    function test_enable_decaying() public { _laws(EP_ENABLE, KIND_DECAYING); }
+    function test_enable_forfeitable() public { _laws(EP_ENABLE, KIND_FORFEITABLE); }
+    function test_enable_nonTransferable() public { _laws(EP_ENABLE, KIND_NON_TRANSFERABLE); }
 
-    function test_disable_flat() public { _laws(EP_DISABLE, K_FLAT); }
-    function test_disable_flatPastTransferable() public { _laws(EP_DISABLE, K_FLATPAST); }
+    function test_disable_flat() public { _laws(EP_DISABLE, KIND_FLAT); }
+    function test_disable_flatPastTransferableAfter() public { _laws(EP_DISABLE, KIND_FLAT_PAST_TRANSFERABLE_AFTER); }
 
-    function test_retireStale_flat_a() public { _laws(EP_RETIRESTALE, K_FLAT, 0, 4); }
-    function test_retireStale_flat_b() public { _laws(EP_RETIRESTALE, K_FLAT, 4, 7); }
-    function test_retireStale_flat_c() public { _laws(EP_RETIRESTALE, K_FLAT, 7, 10); }
-    function test_retireStale_flatPastTransferable_a() public { _laws(EP_RETIRESTALE, K_FLATPAST, 0, 4); }
-    function test_retireStale_flatPastTransferable_b() public { _laws(EP_RETIRESTALE, K_FLATPAST, 4, 7); }
-    function test_retireStale_flatPastTransferable_c() public { _laws(EP_RETIRESTALE, K_FLATPAST, 7, 10); }
+    function test_retireStale_flat_phases0to3() public { _laws(EP_RETIRE_STALE, KIND_FLAT, 0, 4); }
+    function test_retireStale_flat_phases4to6() public { _laws(EP_RETIRE_STALE, KIND_FLAT, 4, 7); }
+    function test_retireStale_flat_phases7to9() public { _laws(EP_RETIRE_STALE, KIND_FLAT, 7, 10); }
+    function test_retireStale_flatPastTransferableAfter_phases0to3() public { _laws(EP_RETIRE_STALE, KIND_FLAT_PAST_TRANSFERABLE_AFTER, 0, 4); }
+    function test_retireStale_flatPastTransferableAfter_phases4to6() public { _laws(EP_RETIRE_STALE, KIND_FLAT_PAST_TRANSFERABLE_AFTER, 4, 7); }
+    function test_retireStale_flatPastTransferableAfter_phases7to9() public { _laws(EP_RETIRE_STALE, KIND_FLAT_PAST_TRANSFERABLE_AFTER, 7, 10); }
 
-    function test_refresh_flat() public { _laws(EP_REFRESH, K_FLAT); }
-    function test_refresh_flatPastTransferable() public { _laws(EP_REFRESH, K_FLATPAST); }
+    function test_refresh_flat() public { _laws(EP_REFRESH, KIND_FLAT); }
+    function test_refresh_flatPastTransferableAfter() public { _laws(EP_REFRESH, KIND_FLAT_PAST_TRANSFERABLE_AFTER); }
 
-    function test_delegSame_decay() public { _laws(EP_DELEG_SAME, K_DECAY); }
-    function test_delegSame_flat() public { _laws(EP_DELEG_SAME, K_FLAT); }
-    function test_delegSame_forfeitable() public { _laws(EP_DELEG_SAME, K_FORFEIT); }
-    function test_delegSame_nonTransferable() public { _laws(EP_DELEG_SAME, K_NONTRANS); }
-    function test_delegSame_flatPastTransferable() public { _laws(EP_DELEG_SAME, K_FLATPAST); }
+    function test_redelegateToSameDelegatee_decaying() public { _laws(EP_REDELEGATE_TO_SAME, KIND_DECAYING); }
+    function test_redelegateToSameDelegatee_flat() public { _laws(EP_REDELEGATE_TO_SAME, KIND_FLAT); }
+    function test_redelegateToSameDelegatee_forfeitable() public { _laws(EP_REDELEGATE_TO_SAME, KIND_FORFEITABLE); }
+    function test_redelegateToSameDelegatee_nonTransferable() public { _laws(EP_REDELEGATE_TO_SAME, KIND_NON_TRANSFERABLE); }
+    function test_redelegateToSameDelegatee_flatPastTransferableAfter() public { _laws(EP_REDELEGATE_TO_SAME, KIND_FLAT_PAST_TRANSFERABLE_AFTER); }
 
-    function test_delegDiff_decay() public { _laws(EP_DELEG_DIFF, K_DECAY); }
-    function test_delegDiff_flat() public { _laws(EP_DELEG_DIFF, K_FLAT); }
-    function test_delegDiff_forfeitable() public { _laws(EP_DELEG_DIFF, K_FORFEIT); }
-    function test_delegDiff_nonTransferable() public { _laws(EP_DELEG_DIFF, K_NONTRANS); }
-    function test_delegDiff_flatPastTransferable() public { _laws(EP_DELEG_DIFF, K_FLATPAST); }
+    function test_delegateToNewDelegatee_decaying() public { _laws(EP_DELEGATE_TO_NEW, KIND_DECAYING); }
+    function test_delegateToNewDelegatee_flat() public { _laws(EP_DELEGATE_TO_NEW, KIND_FLAT); }
+    function test_delegateToNewDelegatee_forfeitable() public { _laws(EP_DELEGATE_TO_NEW, KIND_FORFEITABLE); }
+    function test_delegateToNewDelegatee_nonTransferable() public { _laws(EP_DELEGATE_TO_NEW, KIND_NON_TRANSFERABLE); }
+    function test_delegateToNewDelegatee_flatPastTransferableAfter() public { _laws(EP_DELEGATE_TO_NEW, KIND_FLAT_PAST_TRANSFERABLE_AFTER); }
 
-    function test_delegBySig_decay() public { _laws(EP_DELEGBYSIG, K_DECAY); }
-    function test_delegBySig_flat() public { _laws(EP_DELEGBYSIG, K_FLAT); }
-    function test_delegBySig_forfeitable() public { _laws(EP_DELEGBYSIG, K_FORFEIT); }
-    function test_delegBySig_nonTransferable() public { _laws(EP_DELEGBYSIG, K_NONTRANS); }
-    function test_delegBySig_flatPastTransferable() public { _laws(EP_DELEGBYSIG, K_FLATPAST); }
+    function test_delegateBySig_decaying() public { _laws(EP_DELEGATE_BY_SIG, KIND_DECAYING); }
+    function test_delegateBySig_flat() public { _laws(EP_DELEGATE_BY_SIG, KIND_FLAT); }
+    function test_delegateBySig_forfeitable() public { _laws(EP_DELEGATE_BY_SIG, KIND_FORFEITABLE); }
+    function test_delegateBySig_nonTransferable() public { _laws(EP_DELEGATE_BY_SIG, KIND_NON_TRANSFERABLE); }
+    function test_delegateBySig_flatPastTransferableAfter() public { _laws(EP_DELEGATE_BY_SIG, KIND_FLAT_PAST_TRANSFERABLE_AFTER); }
 
-    function test_delegAllFor_decay() public { _laws(EP_DELEGALLFOR, K_DECAY); }
-    function test_delegAllFor_flat() public { _laws(EP_DELEGALLFOR, K_FLAT); }
-    function test_delegAllFor_forfeitable() public { _laws(EP_DELEGALLFOR, K_FORFEIT); }
-    function test_delegAllFor_nonTransferable() public { _laws(EP_DELEGALLFOR, K_NONTRANS); }
-    function test_delegAllFor_expired() public { _laws(EP_DELEGALLFOR, K_EXPIRED); }
-    function test_delegAllFor_flatPastTransferable() public { _laws(EP_DELEGALLFOR, K_FLATPAST); }
+    function test_delegateAllFor_decaying() public { _laws(EP_DELEGATE_ALL_FOR, KIND_DECAYING); }
+    function test_delegateAllFor_flat() public { _laws(EP_DELEGATE_ALL_FOR, KIND_FLAT); }
+    function test_delegateAllFor_forfeitable() public { _laws(EP_DELEGATE_ALL_FOR, KIND_FORFEITABLE); }
+    function test_delegateAllFor_nonTransferable() public { _laws(EP_DELEGATE_ALL_FOR, KIND_NON_TRANSFERABLE); }
+    function test_delegateAllFor_expired() public { _laws(EP_DELEGATE_ALL_FOR, KIND_EXPIRED); }
+    function test_delegateAllFor_flatPastTransferableAfter() public { _laws(EP_DELEGATE_ALL_FOR, KIND_FLAT_PAST_TRANSFERABLE_AFTER); }
 
-    function test_transferFrom_decay() public { _laws(EP_TRANSFERFROM, K_DECAY); }
-    function test_transferFrom_flat() public { _laws(EP_TRANSFERFROM, K_FLAT); }
-    function test_transferFrom_expired() public { _laws(EP_TRANSFERFROM, K_EXPIRED); }
-    function test_transferFrom_flatPastTransferable() public { _laws(EP_TRANSFERFROM, K_FLATPAST); }
+    function test_transferFrom_decaying() public { _laws(EP_TRANSFER_FROM, KIND_DECAYING); }
+    function test_transferFrom_flat() public { _laws(EP_TRANSFER_FROM, KIND_FLAT); }
+    function test_transferFrom_expired() public { _laws(EP_TRANSFER_FROM, KIND_EXPIRED); }
+    function test_transferFrom_flatPastTransferableAfter() public { _laws(EP_TRANSFER_FROM, KIND_FLAT_PAST_TRANSFERABLE_AFTER); }
 
-    function test_safeTransfer_decay() public { _laws(EP_SAFETRANSFER, K_DECAY); }
-    function test_safeTransfer_flat() public { _laws(EP_SAFETRANSFER, K_FLAT); }
-    function test_safeTransfer_expired() public { _laws(EP_SAFETRANSFER, K_EXPIRED); }
-    function test_safeTransfer_flatPastTransferable() public { _laws(EP_SAFETRANSFER, K_FLATPAST); }
+    function test_safeTransferFrom_decaying() public { _laws(EP_SAFE_TRANSFER_FROM, KIND_DECAYING); }
+    function test_safeTransferFrom_flat() public { _laws(EP_SAFE_TRANSFER_FROM, KIND_FLAT); }
+    function test_safeTransferFrom_expired() public { _laws(EP_SAFE_TRANSFER_FROM, KIND_EXPIRED); }
+    function test_safeTransferFrom_flatPastTransferableAfter() public { _laws(EP_SAFE_TRANSFER_FROM, KIND_FLAT_PAST_TRANSFERABLE_AFTER); }
 
-    function test_createLock_decay() public { _laws(EP_CREATELOCK, K_DECAY); }
-    function test_createLock_flat() public { _laws(EP_CREATELOCK, K_FLAT); }
-    function test_createLock_forfeitable() public { _laws(EP_CREATELOCK, K_FORFEIT); }
-    function test_createLock_nonTransferable() public { _laws(EP_CREATELOCK, K_NONTRANS); }
-    function test_createLock_expired() public { _laws(EP_CREATELOCK, K_EXPIRED); }
-    function test_createLock_flatPastTransferable() public { _laws(EP_CREATELOCK, K_FLATPAST); }
+    function test_createLock_decaying() public { _laws(EP_CREATE_LOCK, KIND_DECAYING); }
+    function test_createLock_flat() public { _laws(EP_CREATE_LOCK, KIND_FLAT); }
+    function test_createLock_forfeitable() public { _laws(EP_CREATE_LOCK, KIND_FORFEITABLE); }
+    function test_createLock_nonTransferable() public { _laws(EP_CREATE_LOCK, KIND_NON_TRANSFERABLE); }
+    function test_createLock_expired() public { _laws(EP_CREATE_LOCK, KIND_EXPIRED); }
+    function test_createLock_flatPastTransferableAfter() public { _laws(EP_CREATE_LOCK, KIND_FLAT_PAST_TRANSFERABLE_AFTER); }
 
-    function test_createLockFor_decay() public { _laws(EP_CREATELOCKFOR, K_DECAY); }
-    function test_createLockFor_flat() public { _laws(EP_CREATELOCKFOR, K_FLAT); }
-    function test_createLockFor_forfeitable() public { _laws(EP_CREATELOCKFOR, K_FORFEIT); }
-    function test_createLockFor_nonTransferable() public { _laws(EP_CREATELOCKFOR, K_NONTRANS); }
-    function test_createLockFor_expired() public { _laws(EP_CREATELOCKFOR, K_EXPIRED); }
-    function test_createLockFor_flatPastTransferable() public { _laws(EP_CREATELOCKFOR, K_FLATPAST); }
+    function test_createLockFor_decaying() public { _laws(EP_CREATE_LOCK_FOR, KIND_DECAYING); }
+    function test_createLockFor_flat() public { _laws(EP_CREATE_LOCK_FOR, KIND_FLAT); }
+    function test_createLockFor_forfeitable() public { _laws(EP_CREATE_LOCK_FOR, KIND_FORFEITABLE); }
+    function test_createLockFor_nonTransferable() public { _laws(EP_CREATE_LOCK_FOR, KIND_NON_TRANSFERABLE); }
+    function test_createLockFor_expired() public { _laws(EP_CREATE_LOCK_FOR, KIND_EXPIRED); }
+    function test_createLockFor_flatPastTransferableAfter() public { _laws(EP_CREATE_LOCK_FOR, KIND_FLAT_PAST_TRANSFERABLE_AFTER); }
 
-    function test_withdraw_expired() public { _laws(EP_WITHDRAW, K_EXPIRED); }
+    function test_withdraw_expired() public { _laws(EP_WITHDRAW, KIND_EXPIRED); }
 
-    function test_forfeit_forfeitable() public { _laws(EP_FORFEIT, K_FORFEIT); }
+    function test_forfeit_forfeitable() public { _laws(EP_FORFEIT, KIND_FORFEITABLE); }
 
-    function test_noop_decay() public { _laws(EP_NOOP, K_DECAY); }
-    function test_noop_flat() public { _laws(EP_NOOP, K_FLAT); }
-    function test_noop_forfeitable() public { _laws(EP_NOOP, K_FORFEIT); }
-    function test_noop_nonTransferable() public { _laws(EP_NOOP, K_NONTRANS); }
-    function test_noop_expired() public { _laws(EP_NOOP, K_EXPIRED); }
-    function test_noop_flatPastTransferable() public { _laws(EP_NOOP, K_FLATPAST); }
+    function test_noop_decaying() public { _laws(EP_NOOP, KIND_DECAYING); }
+    function test_noop_flat() public { _laws(EP_NOOP, KIND_FLAT); }
+    function test_noop_forfeitable() public { _laws(EP_NOOP, KIND_FORFEITABLE); }
+    function test_noop_nonTransferable() public { _laws(EP_NOOP, KIND_NON_TRANSFERABLE); }
+    function test_noop_expired() public { _laws(EP_NOOP, KIND_EXPIRED); }
+    function test_noop_flatPastTransferableAfter() public { _laws(EP_NOOP, KIND_FLAT_PAST_TRANSFERABLE_AFTER); }
 }

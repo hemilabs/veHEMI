@@ -10,7 +10,7 @@ import {MockERC20} from "test/mocks/MockERC20.sol";
 /**
  * @title THE GOVERNANCE DENOMINATOR LAW, DIRECTED MATRIX
  *
- * @notice  L1  (SAFETY, one-sided):
+ * @notice  SAFETY (one-sided):
  *              for every past instant `t` and every set `D` of DISTINCT addresses,
  *                  sum_{d in D} getPastVotes(d, t)  <=  getPastTotalSupply(t)
  *
@@ -26,13 +26,14 @@ import {MockERC20} from "test/mocks/MockERC20.sol";
  *          i.e. the ERC20Votes convention. Equality is therefore NOT a law of
  *          the system; it is only a law of the fully-delegated world.
  *
- *          L2  (TIGHTNESS, the all-delegated case):
+ *          TIGHTNESS (the all-delegated case):
  *              when every live position at `t` is delegated, the residual
- *                  R(t) = getPastTotalSupply(t) - sum_d getPastVotes(d, t)
+ *                  residual(t) = getPastTotalSupply(t) - sum_d getPastVotes(d, t)
  *              must be at most ONE SECOND of the escrow's own aggregate decay:
- *                  R(t) <= veHemi.totalVeHemiSupplyAt(t-1)
- *                          - veHemi.totalVeHemiSupplyAt(t)
- *              L1 can never see a denominator that is too LARGE. L2 can.
+ *                  residual(t) <= veHemi.totalVeHemiSupplyAt(t-1)
+ *                                 - veHemi.totalVeHemiSupplyAt(t)
+ *              SAFETY can never see a denominator that is too LARGE. TIGHTNESS
+ *              can.
  *
  * @dev     WHY THE MATRIX AND NOT ONLY AN INVARIANT. The interesting instants
  *          are defined RELATIVE TO THE SUBJECT LOCK'S OWN `end` — never
@@ -48,7 +49,7 @@ import {MockERC20} from "test/mocks/MockERC20.sol";
  */
 contract DenominatorLawMatrixTest is Test {
     VeHemi internal veHemi;
-    VeHemiVoteDelegation internal del;
+    VeHemiVoteDelegation internal delegation;
     MockERC20 internal hemi;
 
     address internal owner = address(this);
@@ -59,25 +60,26 @@ contract DenominatorLawMatrixTest is Test {
     uint256 internal constant YEAR = 365.25 days;
     uint256 internal constant SIX_DAYS = YEAR / 60;
     uint256 internal constant AMT = 1_000_000e18;
+    bytes32 internal constant TOPIC_DELEGATION_UPDATE_SKIPPED = keccak256("DelegationUpdateSkipped(uint256)");
 
     // entry points
     uint256 internal constant EP_CREATE = 0;
-    uint256 internal constant EP_INC_AMT = 1;
-    uint256 internal constant EP_INC_TIME = 2;
+    uint256 internal constant EP_INCREASE_AMOUNT = 1;
+    uint256 internal constant EP_INCREASE_UNLOCK_TIME = 2;
     uint256 internal constant EP_WITHDRAW = 3;
     uint256 internal constant EP_FORFEIT = 4;
     uint256 internal constant EP_TRANSFER = 5;
     uint256 internal constant EP_ENABLE = 6;
     uint256 internal constant EP_DISABLE = 7;
     uint256 internal constant EP_RETIRE = 8;
-    uint256 internal constant N_EP = 9;
+    uint256 internal constant ENTRY_POINT_COUNT = 9;
 
     // phases, ALL defined against the subject lock's own `end`
     uint256 internal constant PH_MIDLIFE = 0;
     uint256 internal constant PH_SIXDAYS = 1; // tau on the SIX_DAYS grid
     uint256 internal constant PH_FINAL_HOUR = 2; // H(tau) <  end  (immediate branch)
-    uint256 internal constant PH_FINAL_MINUTE = 3; // H(tau) >= end  (near-expiry branch)
-    uint256 internal constant N_PH = 4;
+    uint256 internal constant PH_NEAR_EXPIRY = 3; // H(tau) >= end  (near-expiry branch)
+    uint256 internal constant PHASE_COUNT = 4;
 
     // ---- aggregate ledger -------------------------------------------------
     uint256 internal cellsExecuted;
@@ -88,22 +90,21 @@ contract DenominatorLawMatrixTest is Test {
     uint256 internal violatingCells;
     uint256 internal violatingInstants;
     int256 internal worstOverall;
-    uint256 internal l2Cells;
-    uint256 internal l2Instants;
-    uint256 internal l2ViolatingInstants;
-    int256 internal l2Worst;
+    uint256 internal tightnessInstants;
+    uint256 internal tightnessViolatingInstants;
+    int256 internal tightnessWorst;
 
     /// @dev Non-vacuity floors. A matrix that skips every interesting cell is
     ///      worth nothing; these make that outcome RED instead of green.
-    bool internal doL1 = true;
-    bool internal doL2 = true;
-    uint256 internal epLo;
-    uint256 internal epHi = N_EP;
+    bool internal checkSafety = true;
+    bool internal checkTightness = true;
+    uint256 internal firstEntryPoint;
+    uint256 internal entryPointEnd = ENTRY_POINT_COUNT;
     /// @dev The `increaseAmount` cell in the near-expiry branch is excluded
-    ///      from L2: VeHemi does not forward that update (the documented
+    ///      from TIGHTNESS: VeHemi does not forward that update (the documented
     ///      `DelegationUpdateSkipped` behaviour), so the denominator carries
     ///      the added weight and the delegatee does not. Pinned by
-    ///      `test_nearExpiryIncreaseAmountIsSkipped_documented`.
+    ///      `test_nearExpiryIncreaseAmountIsNotForwarded`.
     bool internal excludeNearExpiryIncrease = true;
 
     uint256 internal constant MIN_CELLS = 20;
@@ -118,10 +119,11 @@ contract DenominatorLawMatrixTest is Test {
     function _freshWorld() internal {
         hemi = new MockERC20("HEMI", "HEMI", 18);
         VeHemi logic = new VeHemi(address(hemi));
-        ERC1967Proxy p = new ERC1967Proxy(address(logic), abi.encodeWithSelector(VeHemi.initialize.selector, owner));
-        veHemi = VeHemi(address(p));
-        del = new VeHemiVoteDelegation(address(veHemi));
-        veHemi.updateVoteDelegation(del);
+        ERC1967Proxy proxy =
+            new ERC1967Proxy(address(logic), abi.encodeWithSelector(VeHemi.initialize.selector, owner));
+        veHemi = VeHemi(address(proxy));
+        delegation = new VeHemiVoteDelegation(address(veHemi));
+        veHemi.updateVoteDelegation(delegation);
         veHemi.updateForfeitAdmin(owner);
     }
 
@@ -131,7 +133,7 @@ contract DenominatorLawMatrixTest is Test {
     }
 
     // ---------------------------------------------------------------- utils
-    function _hourBoundary(uint256 t) internal pure returns (uint256) {
+    function _nextHourBoundary(uint256 t) internal pure returns (uint256) {
         return (t / 3600) * 3600 + 3600;
     }
 
@@ -147,27 +149,27 @@ contract DenominatorLawMatrixTest is Test {
 
     function _votes(uint256 t) internal view returns (uint256 v) {
         // The delegate universe of this fixture. DISTINCT by construction.
-        v = del.getPastVotes(alice, t) + del.getPastVotes(bob, t) + del.getPastVotes(carol, t);
+        v = delegation.getPastVotes(alice, t) + delegation.getPastVotes(bob, t) + delegation.getPastVotes(carol, t);
     }
 
-    /// @dev One sampled instant. Returns the L1 residual `votes - supply`
+    /// @dev One sampled instant. Returns the SAFETY excess `votes - supply`
     ///      (positive == VIOLATION).
-    function _probe(uint256 t) internal returns (int256 d) {
-        uint256 sup = del.getPastTotalSupply(t);
-        uint256 v = _votes(t);
-        d = int256(v) - int256(sup);
+    function _checkSafetyAt(uint256 t) internal returns (int256 excess) {
+        uint256 supply = delegation.getPastTotalSupply(t);
+        uint256 votes = _votes(t);
+        excess = int256(votes) - int256(supply);
         unchecked {
             instantsCompared += 1;
         }
-        if (d > 0) {
+        if (excess > 0) {
             unchecked {
                 violatingInstants += 1;
             }
-            if (d > worstOverall) worstOverall = d;
+            if (excess > worstOverall) worstOverall = excess;
         }
     }
 
-    /// @dev L2. Only meaningful when every live position is delegated; the
+    /// @dev TIGHTNESS. Only meaningful when every live position is delegated; the
     ///      caller asserts that precondition. The bound is ONE SECOND of the
     ///      escrow's own aggregate decay, so it never references
     ///      `getPastTotalSupply`'s internal time base, measured as the largest
@@ -180,7 +182,7 @@ contract DenominatorLawMatrixTest is Test {
     ///      implementation would report a spurious violation at `t == tau`.
     ///      Widening to the nearest clean second in the three preceding it
     ///      removes those and leaves real residuals untouched.
-    function _l2Bound(uint256 t) internal view returns (uint256 bound) {
+    function _tightnessBound(uint256 t) internal view returns (uint256 bound) {
         uint256 e0 = veHemi.totalVeHemiSupplyAt(t);
         uint256 e1 = veHemi.totalVeHemiSupplyAt(t - 1);
         uint256 e2 = veHemi.totalVeHemiSupplyAt(t - 2);
@@ -190,22 +192,22 @@ contract DenominatorLawMatrixTest is Test {
         if (e3 > e2 && e3 - e2 > bound) bound = e3 - e2;
     }
 
-    function _probeL2(uint256 t) internal {
+    function _checkTightnessAt(uint256 t) internal {
         if (t < 4) return;
-        uint256 sup = del.getPastTotalSupply(t);
-        uint256 v = _votes(t);
-        if (sup < v) return; // that is L1's business, not L2's
-        uint256 residual = sup - v;
-        uint256 bound = _l2Bound(t);
+        uint256 supply = delegation.getPastTotalSupply(t);
+        uint256 votes = _votes(t);
+        if (supply < votes) return; // that is SAFETY's business, not TIGHTNESS's
+        uint256 residual = supply - votes;
+        uint256 bound = _tightnessBound(t);
         unchecked {
-            l2Instants += 1;
+            tightnessInstants += 1;
         }
         if (residual > bound) {
             unchecked {
-                l2ViolatingInstants += 1;
+                tightnessViolatingInstants += 1;
             }
             int256 over = int256(residual - bound);
-            if (over > l2Worst) l2Worst = over;
+            if (over > tightnessWorst) tightnessWorst = over;
         }
     }
 
@@ -220,22 +222,22 @@ contract DenominatorLawMatrixTest is Test {
         uint256 hi = end + 1;
         if (hi > block.timestamp) hi = block.timestamp;
 
-        uint256 before_ = violatingInstants;
-        int256 wb = worstOverall;
+        uint256 violatingBefore = violatingInstants;
+        int256 worstBefore = worstOverall;
 
         // dense head: [tau-2, tau+180]
         uint256 headHi = tau + 180;
         if (headHi > hi) headHi = hi;
         for (uint256 t = lo; t <= headHi; ++t) {
-            if (doL1) _probe(t);
-            if (allDelegated && doL2) _probeL2(t);
+            if (checkSafety) _checkSafetyAt(t);
+            if (allDelegated && checkTightness) _checkTightnessAt(t);
         }
         // dense tail: [end-180, end+1]
         uint256 tailLo = end >= 180 ? end - 180 : 1;
         if (tailLo < headHi + 1) tailLo = headHi + 1;
         for (uint256 t = tailLo; t <= hi; ++t) {
-            if (doL1) _probe(t);
-            if (allDelegated && doL2) _probeL2(t);
+            if (checkSafety) _checkSafetyAt(t);
+            if (allDelegated && checkTightness) _checkTightnessAt(t);
         }
         // coarse stride across the interior
         if (tailLo > headHi + 1) {
@@ -243,13 +245,13 @@ contract DenominatorLawMatrixTest is Test {
             uint256 stride = span / 64;
             if (stride == 0) stride = 1;
             for (uint256 t = headHi + 1; t < tailLo; t += stride) {
-                if (doL1) _probe(t);
-                if (allDelegated && doL2) _probeL2(t);
+                if (checkSafety) _checkSafetyAt(t);
+                if (allDelegated && checkTightness) _checkTightnessAt(t);
             }
         }
 
-        positives = violatingInstants - before_;
-        worst = worstOverall > wb ? worstOverall : int256(0);
+        positives = violatingInstants - violatingBefore;
+        worst = worstOverall > worstBefore ? worstOverall : int256(0);
         if (positives > 0) {
             emit log_named_uint(string.concat("  VIOLATION ", tag, " instants"), positives);
             emit log_named_int(string.concat("  VIOLATION ", tag, " worst(wei)"), worstOverall);
@@ -266,24 +268,24 @@ contract DenominatorLawMatrixTest is Test {
         } else if (phase == PH_SIXDAYS) {
             tau = end - SIX_DAYS; // `end` is SIX_DAYS-aligned, so this is too
         } else if (phase == PH_FINAL_HOUR) {
-            uint256 hf = (end / 3600) * 3600;
-            tau = hf >= 60 ? hf - 60 : 0; // H(tau) == hf < end  when end % 3600 != 0
+            uint256 endHourStart = (end / 3600) * 3600;
+            tau = endHourStart >= 60 ? endHourStart - 60 : 0; // H(tau) == endHourStart < end  when end % 3600 != 0
         } else {
             // THE NEAR-EXPIRY WINDOW, entered at its EARLIEST instant so the
             // `[tau, end]` over-count window is as WIDE as the branch allows:
             // `H(tau) >= end` holds for every `tau >= floor(end/3600)*3600`,
             // and the window is `end % 3600` seconds long (a multiple of
             // 360 s for a SIX_DAYS-aligned `end`: SIX_DAYS mod 3600 = 360).
-            uint256 hf2 = (end / 3600) * 3600;
-            tau = hf2 < end ? hf2 : end - 3600;
+            uint256 endHourStart = (end / 3600) * 3600;
+            tau = endHourStart < end ? endHourStart : end - 3600;
         }
-        deferral = tau < end && _hourBoundary(tau) >= end;
+        deferral = tau < end && _nextHourBoundary(tau) >= end;
     }
 
     function _epName(uint256 ep) internal pure returns (string memory) {
         if (ep == EP_CREATE) return "createLock";
-        if (ep == EP_INC_AMT) return "increaseAmount";
-        if (ep == EP_INC_TIME) return "increaseUnlockTime";
+        if (ep == EP_INCREASE_AMOUNT) return "increaseAmount";
+        if (ep == EP_INCREASE_UNLOCK_TIME) return "increaseUnlockTime";
         if (ep == EP_WITHDRAW) return "withdraw";
         if (ep == EP_FORFEIT) return "forfeit";
         if (ep == EP_TRANSFER) return "transferFrom";
@@ -296,7 +298,7 @@ contract DenominatorLawMatrixTest is Test {
         if (ph == PH_MIDLIFE) return "midlife";
         if (ph == PH_SIXDAYS) return "sixdays";
         if (ph == PH_FINAL_HOUR) return "finalhour";
-        return "finalminute";
+        return "nearexpiry";
     }
 
     // ------------------------------------------------------------ the cells
@@ -309,8 +311,10 @@ contract DenominatorLawMatrixTest is Test {
         // non-transferable position has `transferableAfter > now`, which
         // `enableAutoRelock` refuses (`SeedingNotFinalized`) while
         // `lockedSeedingFinalized` is false, and `transferFrom` refuses
-        // outright. The flat family needs
-        // R >= 2*SIX_DAYS at the enable instant, hence the longer duration.
+        // outright. The flat family needs the remaining term
+        // `enableAutoRelock` stores in `autoRelockRemaining` (whole SIX_DAYS
+        // buckets from grid(now) to `end`) >= 2*SIX_DAYS at the enable
+        // instant, hence the longer duration.
         uint256 id = _mk(
             alice,
             (ep == EP_ENABLE || ep == EP_DISABLE || ep == EP_RETIRE) ? 8 * SIX_DAYS : 4 * SIX_DAYS,
@@ -323,7 +327,7 @@ contract DenominatorLawMatrixTest is Test {
         if (ep == EP_WITHDRAW) {
             // `withdraw` is legal only at/after `end`; the phase selects how
             // far after, so the earliest phase IS the instant `end` itself.
-            if (phase == PH_FINAL_MINUTE) tau = end;
+            if (phase == PH_NEAR_EXPIRY) tau = end;
             else if (phase == PH_FINAL_HOUR) tau = end + 1800;
             else if (phase == PH_SIXDAYS) tau = end + SIX_DAYS;
             else tau = end + 2 * SIX_DAYS;
@@ -341,12 +345,13 @@ contract DenominatorLawMatrixTest is Test {
         uint256 endForScan = end;
 
         if (ep == EP_ENABLE || ep == EP_DISABLE || ep == EP_RETIRE) {
-            // The flat family. `enableAutoRelock` needs R >= 2*SIX_DAYS, so
-            // the ENABLE cell's own phase is the phase of the enable; the
+            // The flat family. `enableAutoRelock` needs the remaining term it
+            // stores in `autoRelockRemaining` to be >= 2*SIX_DAYS, so the
+            // ENABLE cell's own phase is the phase of the enable; the
             // DISABLE/RETIRE cells enable at mid-life first and then act at
-            // the phase instant, where the FROZEN `end` is already in the
-            // past -- `H >= end` holds trivially, which is why this family
-            // is in the near-expiry branch for every phase.
+            // the phase instant, where the stored `end` is already in the
+            // past -- `H >= end` holds trivially, which is why this family is
+            // in the near-expiry branch for every phase.
             if (ep == EP_ENABLE) {
                 vm.warp(tau);
                 vm.prank(alice);
@@ -362,24 +367,24 @@ contract DenominatorLawMatrixTest is Test {
                     emit log_named_string("SKIP (enable refused)", tag);
                     return;
                 }
-                uint256 tau2 = tau;
+                uint256 actAt = tau;
                 if (ep == EP_RETIRE) {
-                    (bool sok, bytes memory sret) =
+                    (bool staleAtOk, bytes memory staleAtReturn) =
                         address(veHemi).staticcall(abi.encodeWithSignature("autoRelockStaleAt(uint256)", id));
-                    if (!sok) {
+                    if (!staleAtOk) {
                         unchecked {
                             cellsSkipped += 1;
                         }
                         emit log_named_string("SKIP (no staleAt)", tag);
                         return;
                     }
-                    uint256 staleAt = abi.decode(sret, (uint256));
-                    if (tau2 < staleAt) tau2 = staleAt;
+                    uint256 staleAt = abi.decode(staleAtReturn, (uint256));
+                    if (actAt < staleAt) actAt = staleAt;
                 }
-                if (tau2 <= block.timestamp) tau2 = block.timestamp + 1;
-                vm.warp(tau2);
-                tau = tau2;
-                deferral = tau < end && _hourBoundary(tau) >= end;
+                if (actAt <= block.timestamp) actAt = block.timestamp + 1;
+                vm.warp(actAt);
+                tau = actAt;
+                deferral = tau < end && _nextHourBoundary(tau) >= end;
                 if (ep == EP_DISABLE) {
                     vm.prank(alice);
                     (ok,) = address(veHemi).call(abi.encodeWithSignature("disableAutoRelock(uint256)", id));
@@ -396,14 +401,14 @@ contract DenominatorLawMatrixTest is Test {
             (ok,) = address(veHemi).call(
                 abi.encodeWithSignature("createLockFor(uint256,uint256,address,bool,bool)", AMT, 4 * SIX_DAYS, bob, true, false)
             );
-        } else if (ep == EP_INC_AMT) {
+        } else if (ep == EP_INCREASE_AMOUNT) {
             vm.warp(tau);
             hemi.mint(alice, AMT);
             vm.prank(alice);
             hemi.approve(address(veHemi), AMT);
             vm.prank(alice);
             (ok,) = address(veHemi).call(abi.encodeWithSignature("increaseAmount(uint256,uint256)", id, AMT));
-        } else if (ep == EP_INC_TIME) {
+        } else if (ep == EP_INCREASE_UNLOCK_TIME) {
             vm.warp(tau);
             vm.prank(alice);
             (ok,) = address(veHemi).call(abi.encodeWithSignature("increaseUnlockTime(uint256,uint256)", id, 60 * SIX_DAYS));
@@ -441,22 +446,22 @@ contract DenominatorLawMatrixTest is Test {
         }
 
         // Every position in this fixture is delegated (VeHemi self-delegates at
-        // mint and every transfer re-delegates), so L2 applies.
+        // mint and every transfer re-delegates), so TIGHTNESS applies.
         {
-            uint256 i0 = instantsCompared;
-            vm.warp(_hourBoundary(endForScan) + 2 hours);
+            uint256 instantsBefore = instantsCompared;
+            vm.warp(_nextHourBoundary(endForScan) + 2 hours);
             // `increaseAmount` inside the near-expiry window is not forwarded
             // to the delegatee (documented; see `excludeNearExpiryIncrease`),
-            // so this one cell is L2-excluded here and pinned by its own body
-            // below.
-            (uint256 pos,) =
-                _scanCell(tau, endForScan, !(excludeNearExpiryIncrease && ep == EP_INC_AMT && deferral), tag);
+            // so this one cell is excluded from TIGHTNESS here and pinned by
+            // its own body below.
+            (uint256 violatingInstantsInCell,) =
+                _scanCell(tau, endForScan, !(excludeNearExpiryIncrease && ep == EP_INCREASE_AMOUNT && deferral), tag);
             if (deferral) {
                 unchecked {
-                    deferralInstants += instantsCompared - i0;
+                    deferralInstants += instantsCompared - instantsBefore;
                 }
             }
-            if (pos > 0) {
+            if (violatingInstantsInCell > 0) {
                 unchecked {
                     violatingCells += 1;
                 }
@@ -466,36 +471,36 @@ contract DenominatorLawMatrixTest is Test {
 
     // ------------------------------------------------------------------ run
     function _runRange() internal {
-        for (uint256 ep = epLo; ep < epHi; ++ep) {
-            for (uint256 ph; ph < N_PH; ++ph) {
+        for (uint256 ep = firstEntryPoint; ep < entryPointEnd; ++ep) {
+            for (uint256 ph; ph < PHASE_COUNT; ++ph) {
                 _runCell(ep, ph);
             }
         }
     }
 
-    function _reportL1() internal {
+    function _reportSafety() internal {
         emit log_named_uint("cells executed           ", cellsExecuted);
         emit log_named_uint("cells skipped            ", cellsSkipped);
         emit log_named_uint("deferral-branch cells    ", deferralCells);
         emit log_named_uint("instants compared        ", instantsCompared);
         emit log_named_uint("deferral instants        ", deferralInstants);
-        emit log_named_uint("L1 violating cells       ", violatingCells);
-        emit log_named_uint("L1 violating instants    ", violatingInstants);
-        emit log_named_int("L1 worst (wei)           ", worstOverall);
+        emit log_named_uint("SAFETY violating cells   ", violatingCells);
+        emit log_named_uint("SAFETY violating instants", violatingInstants);
+        emit log_named_int("SAFETY worst (wei)       ", worstOverall);
     }
 
-    function _reportL2() internal {
-        emit log_named_uint("L2 instants              ", l2Instants);
-        emit log_named_uint("L2 violating instants    ", l2ViolatingInstants);
-        emit log_named_int("L2 worst over (wei)      ", l2Worst);
+    function _reportTightness() internal {
+        emit log_named_uint("TIGHTNESS instants          ", tightnessInstants);
+        emit log_named_uint("TIGHTNESS violating instants", tightnessViolatingInstants);
+        emit log_named_int("TIGHTNESS worst over (wei)  ", tightnessWorst);
     }
 
-    /// @notice L1 over the whole 9 x 4 grid.
-    function test_L1_pastVotesSumNeverExceedsPastTotalSupply_matrix() public {
-        doL1 = true;
-        doL2 = false;
+    /// @notice SAFETY over the whole 9 x 4 grid.
+    function test_safety_pastVotesSumNeverExceedsPastTotalSupply_matrix() public {
+        checkSafety = true;
+        checkTightness = false;
         _runRange();
-        _reportL1();
+        _reportSafety();
 
         // --- NON-VACUITY FIRST. A matrix that reached nothing must be RED. ---
         assertGe(cellsExecuted, MIN_CELLS, "VACUOUS: too few matrix cells actually executed");
@@ -506,44 +511,44 @@ contract DenominatorLawMatrixTest is Test {
         );
 
         // --- THE LAW ---
-        assertEq(violatingInstants, 0, "L1 VIOLATED: sum getPastVotes > getPastTotalSupply");
+        assertEq(violatingInstants, 0, "SAFETY VIOLATED: sum getPastVotes > getPastTotalSupply");
     }
 
-    /// @notice L2 over `createLock .. forfeit`. Split from the rest purely for
+    /// @notice TIGHTNESS over `createLock .. forfeit`. Split from the rest purely for
     ///         the per-body gas budget (the combined body needs > 2^30 gas,
     ///         the `gas_limit` of the default and ci profiles).
-    function test_L2_allDelegatedResidualIsAtMostOneSecondOfDecay_core() public {
-        doL1 = false;
-        doL2 = true;
-        epLo = EP_CREATE;
-        epHi = EP_TRANSFER;
+    function test_tightness_allDelegatedResidualIsAtMostOneSecondOfDecay_createThroughForfeit() public {
+        checkSafety = false;
+        checkTightness = true;
+        firstEntryPoint = EP_CREATE;
+        entryPointEnd = EP_TRANSFER;
         _runRange();
-        _reportL2();
-        assertGe(l2Instants, 2000, "VACUOUS: L2 core never evaluated");
+        _reportTightness();
+        assertGe(tightnessInstants, 2000, "VACUOUS: TIGHTNESS createLock..forfeit never evaluated");
         assertEq(
-            l2ViolatingInstants,
+            tightnessViolatingInstants,
             0,
-            "L2 VIOLATED: the denominator exceeds the delegated votes by more than one second of decay"
+            "TIGHTNESS VIOLATED: the denominator exceeds the delegated votes by more than one second of decay"
         );
     }
 
-    /// @notice L2 over `transferFrom .. retireStaleAutoRelock`.
-    function test_L2_allDelegatedResidualIsAtMostOneSecondOfDecay_transferAndFlat() public {
-        doL1 = false;
-        doL2 = true;
-        epLo = EP_TRANSFER;
-        epHi = N_EP;
+    /// @notice TIGHTNESS over `transferFrom .. retireStaleAutoRelock`.
+    function test_tightness_allDelegatedResidualIsAtMostOneSecondOfDecay_transferThroughRetire() public {
+        checkSafety = false;
+        checkTightness = true;
+        firstEntryPoint = EP_TRANSFER;
+        entryPointEnd = ENTRY_POINT_COUNT;
         _runRange();
-        _reportL2();
-        assertGe(l2Instants, 2000, "VACUOUS: L2 transfer/flat never evaluated");
+        _reportTightness();
+        assertGe(tightnessInstants, 2000, "VACUOUS: TIGHTNESS transferFrom..retireStaleAutoRelock never evaluated");
         assertEq(
-            l2ViolatingInstants,
+            tightnessViolatingInstants,
             0,
-            "L2 VIOLATED: the denominator exceeds the delegated votes by more than one second of decay"
+            "TIGHTNESS VIOLATED: the denominator exceeds the delegated votes by more than one second of decay"
         );
     }
 
-    /// @notice DOCUMENTED BEHAVIOUR: the near-expiry skip of
+    /// @notice INTENDED BEHAVIOUR (IVeHemi NatSpec): the near-expiry skip of
     ///         `increaseAmount`.
     ///
     ///         An `increaseAmount` on an unarmed position in its final
@@ -555,21 +560,21 @@ contract DenominatorLawMatrixTest is Test {
     ///         weight the delegatee does not receive is the added amount's
     ///         remaining decay, bounded by `addedSlope * 3600`, and it is zero
     ///         at `end`.
-    function test_nearExpiryIncreaseAmountIsSkipped_documented() public {
+    function test_nearExpiryIncreaseAmountIsNotForwarded() public {
         _freshWorld();
         uint256 id = _mk(alice, 4 * SIX_DAYS, true, false);
         uint256 end = veHemi.getLockedBalance(id).end;
         uint256 window = ((end - 1) % 3600) + 1;
         uint256 tau = end - window; // the first second of the window
-        assertTrue(_hourBoundary(tau) >= end, "fixture: tau is not in the near-expiry window");
-        assertTrue(_hourBoundary(tau - 1) < end, "fixture: tau is not the first second of the window");
-        assertTrue(tau > block.timestamp, "fixture: tau in the past");
+        assertTrue(_nextHourBoundary(tau) >= end, "premise: tau is not in the near-expiry window");
+        assertTrue(_nextHourBoundary(tau - 1) < end, "premise: tau is not the first second of the window");
+        assertTrue(tau > block.timestamp, "premise: tau in the past");
 
         vm.warp(tau);
-        (address d0, , , , ) = del.delegations(id);
-        assertEq(d0, alice, "fixture: the position is not self-delegated");
+        (address delegateeBefore, , , , ) = delegation.delegations(id);
+        assertEq(delegateeBefore, alice, "premise: the position is not self-delegated");
         bytes32 recordBefore = _recordHash(id);
-        uint256 votesBefore = del.getVotes(alice);
+        uint256 votesBefore = delegation.getVotes(alice);
 
         hemi.mint(alice, AMT);
         vm.startPrank(alice);
@@ -579,35 +584,37 @@ contract DenominatorLawMatrixTest is Test {
         vm.stopPrank();
 
         // (1) The skip is announced, once, for this position, by VeHemi.
-        assertEq(_skipEvents(vm.getRecordedLogs(), id), 1,
+        assertEq(_countSkipEvents(vm.getRecordedLogs(), id), 1,
             "the near-expiry increaseAmount did not emit DelegationUpdateSkipped once");
         assertEq(uint256(uint128(veHemi.getLockedBalance(id).amount)), 2 * AMT, "the escrow did not take the deposit");
 
         // (2) The delegatee is unchanged: same record (delegatee, end, bias,
         //     amount, slope), same votes.
         assertEq(_recordHash(id), recordBefore, "the delegation record changed");
-        assertEq(del.getVotes(alice), votesBefore, "the delegatee's votes changed");
+        assertEq(delegation.getVotes(alice), votesBefore, "the delegatee's votes changed");
 
         // (3) The weight left out is the added amount's remaining decay:
         //     positive inside the window, at most `addedSlope * 3600`, zero at `end`.
-        vm.warp(_hourBoundary(end) + 2 hours);
-        uint256 worstGap = _worstSkippedWeight(id, tau + 1, end);
+        vm.warp(_nextHourBoundary(end) + 2 hours);
+        uint256 worstSkippedWeight = _worstSkippedWeight(id, tau + 1, end);
         emit log_named_uint("near-expiry window (s)      ", window);
-        emit log_named_uint("worst skipped weight        ", worstGap);
-        assertGt(worstGap, 0, "VACUOUS: no weight was left out -- the update was forwarded");
+        emit log_named_uint("worst skipped weight        ", worstSkippedWeight);
+        assertGt(worstSkippedWeight, 0, "VACUOUS: no weight was left out -- the update was forwarded");
         assertEq(veHemi.balanceOfNFTAt(id, end), 0, "the escrow weight is not zero at end");
-        assertEq(del.getPastVotes(alice, end), 0, "the delegatee's weight is not zero at end");
+        assertEq(delegation.getPastVotes(alice, end), 0, "the delegatee's weight is not zero at end");
     }
 
     function _recordHash(uint256 id_) internal view returns (bytes32) {
-        (address d, uint48 e, uint96 b, uint96 a, uint64 sl) = del.delegations(id_);
-        return keccak256(abi.encode(d, e, b, a, sl));
+        (address delegatee, uint48 end, uint96 bias, uint96 amount, uint64 slope) = delegation.delegations(id_);
+        return keccak256(abi.encode(delegatee, end, bias, amount, slope));
     }
 
-    function _skipEvents(Vm.Log[] memory logs_, uint256 id_) internal view returns (uint256 n) {
-        bytes32 tSkipped = keccak256("DelegationUpdateSkipped(uint256)");
+    function _countSkipEvents(Vm.Log[] memory logs_, uint256 id_) internal view returns (uint256 n) {
         for (uint256 i; i < logs_.length; ++i) {
-            if (logs_[i].emitter == address(veHemi) && logs_[i].topics.length > 1 && logs_[i].topics[0] == tSkipped) {
+            if (
+                logs_[i].emitter == address(veHemi) && logs_[i].topics.length > 1
+                    && logs_[i].topics[0] == TOPIC_DELEGATION_UPDATE_SKIPPED
+            ) {
                 assertEq(uint256(logs_[i].topics[1]), id_, "DelegationUpdateSkipped names another position");
                 ++n;
             }
@@ -623,12 +630,12 @@ contract DenominatorLawMatrixTest is Test {
         uint256 oneSecond = (2 * AMT) / (4 * YEAR) + 1;
         for (uint256 t = from_; t <= to_; t += 60) {
             uint256 escrow = veHemi.balanceOfNFTAt(id_, t);
-            uint256 v = del.getPastVotes(alice, t);
-            assertGe(escrow, v, "the delegatee holds more than the escrow");
-            uint256 gap = escrow - v;
+            uint256 votes = delegation.getPastVotes(alice, t);
+            assertGe(escrow, votes, "the delegatee holds more than the escrow");
+            uint256 gap = escrow - votes;
             if (gap > worst) worst = gap;
             assertLe(gap, bound, "the skipped weight exceeds addedSlope * 3600");
-            assertLe(del.getPastTotalSupply(t) - v, bound + oneSecond,
+            assertLe(delegation.getPastTotalSupply(t) - votes, bound + oneSecond,
                 "the denominator residual exceeds addedSlope * 3600");
         }
     }

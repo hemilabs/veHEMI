@@ -214,9 +214,11 @@ contract VeHemiAragonAdapterTest is Test {
         uint256 tokenId = _createLock(ALICE, 10e18, YEAR);
         _delegateAndWarp(tokenId, ALICE);
 
-        // _delegateAndWarp puts us at exactly the epoch boundary where delegation
-        // activates. Warp 1 more second so that block.timestamp - 1 = the
-        // boundary itself, which includes the active delegation checkpoint.
+        // _delegateAndWarp puts us at the next hour boundary; the delegation
+        // has been active since the next second after the `delegate` call
+        // (`block.timestamp + 1`). Warp 1 more second so that
+        // block.timestamp - 1 = the boundary itself, which includes the active
+        // delegation checkpoint.
         vm.warp(block.timestamp + 1);
 
         // Simulate Aragon's snapshot: block.timestamp - 1
@@ -326,7 +328,7 @@ contract VeHemiAragonAdapterTest is Test {
         assertEq(delegation.delegation(tid1).delegatee, BOB);
         assertEq(delegation.delegation(tid2).delegatee, BOB);
 
-        // After epoch boundary, BOB should have voting power
+        // After the hour boundary, BOB should have voting power
         uint256 nextEpoch = ((block.timestamp / CHECKPOINT_INTERVAL) * CHECKPOINT_INTERVAL) + CHECKPOINT_INTERVAL;
         vm.warp(nextEpoch);
         assertEq(adapter.getVotes(BOB), delegation.getVotes(BOB));
@@ -883,8 +885,8 @@ contract VeHemiAragonAdapterTest is Test {
         _createLock(ALICE, 10e18, 2 * YEAR);
 
         // 2. Move strictly inside an hour so t+1 and the next boundary are far apart
-        uint256 nextEpoch = ((block.timestamp / CHECKPOINT_INTERVAL) * CHECKPOINT_INTERVAL) + CHECKPOINT_INTERVAL;
-        vm.warp(nextEpoch - 1800);
+        uint256 nextHourBoundary = ((block.timestamp / CHECKPOINT_INTERVAL) * CHECKPOINT_INTERVAL) + CHECKPOINT_INTERVAL;
+        vm.warp(nextHourBoundary - 1800);
         uint256 tDelegate = block.timestamp;
 
         // 3. Delegate ALICE's token to BOB via the adapter
@@ -898,13 +900,13 @@ contract VeHemiAragonAdapterTest is Test {
         // 5. Live one second later, well before the hour boundary
         vm.warp(tDelegate + 1);
         assertGt(adapter.getVotes(BOB), 0, "getVotes must be > 0 at t+1");
-        vm.warp(nextEpoch - 1);
-        assertGt(adapter.getVotes(BOB), 0, "getVotes must be > 0 one second before epoch boundary");
+        vm.warp(nextHourBoundary - 1);
+        assertGt(adapter.getVotes(BOB), 0, "getVotes must be > 0 one second before the hour boundary");
 
         // 6. Still live at the boundary
-        vm.warp(nextEpoch);
-        assertGt(adapter.getVotes(BOB), 0, "getVotes must be > 0 at epoch boundary");
-        assertGt(adapter.getPastVotes(BOB, block.timestamp), 0, "getPastVotes must be > 0 at epoch boundary");
+        vm.warp(nextHourBoundary);
+        assertGt(adapter.getVotes(BOB), 0, "getVotes must be > 0 at the hour boundary");
+        assertGt(adapter.getPastVotes(BOB, block.timestamp), 0, "getPastVotes must be > 0 at the hour boundary");
     }
 
     // ─── balanceOf with expired but unwithdrawn locks ───────────────────
@@ -1011,7 +1013,7 @@ contract VeHemiAragonAdapterTest is Test {
 
         vm.prank(BOB);
         delegation.delegate(tokenId2, CAROL);
-        // Advance to next epoch boundary so BOB's delegation is active
+        // Advance to the next hour boundary (BOB's delegation is active from the next second)
         uint256 nextEpoch = ((block.timestamp / CHECKPOINT_INTERVAL) * CHECKPOINT_INTERVAL) + CHECKPOINT_INTERVAL;
         vm.warp(nextEpoch);
 
@@ -1391,9 +1393,10 @@ contract VeHemiAragonAdapterTest is Test {
         uint256 delegationStarts = ((block.timestamp / CHECKPOINT_INTERVAL) * CHECKPOINT_INTERVAL) + CHECKPOINT_INTERVAL;
         vm.warp(delegationStarts);
 
-        // refreshVotingPower uses the checkpoint timestamp (next-epoch boundary),
-        // consistent with delegation events. Verify via log inspection since
-        // the checkpoint timestamp is in the future and getPastVotes reverts.
+        // refreshVotingPower uses the checkpoint timestamp (the next second,
+        // `block.timestamp + 1`), consistent with delegation events. Verify via
+        // log inspection since the checkpoint timestamp is in the future and
+        // getPastVotes reverts.
         vm.recordLogs();
         adapter.refreshVotingPower(ALICE);
 
@@ -1515,9 +1518,10 @@ contract VeHemiAragonAdapterTest is Test {
         // Warp to mid-life to get a decayed, non-trivial value
         vm.warp(block.timestamp + YEAR);
 
-        // refreshVotingPower uses the checkpoint timestamp (next-epoch boundary),
-        // which is always in the future relative to block.timestamp. The emitted
-        // value should be >= getVotes() (which uses block.timestamp with more decay).
+        // refreshVotingPower uses the checkpoint timestamp (the next second,
+        // `block.timestamp + 1`), which is always in the future relative to
+        // block.timestamp. The emitted value should be <= getVotes() (which
+        // uses block.timestamp, one second less decay).
         uint256 getVotesResult = delegation.getVotes(ALICE);
         assertGt(getVotesResult, 0, "should have non-zero votes at mid-life");
 
@@ -2005,7 +2009,7 @@ contract VeHemiAragonAdapterTest is Test {
         vm.prank(ALICE);
         adapter.delegate(BOB);
 
-        // Warp past the next epoch boundary so the re-delegation activates
+        // Warp past the next hour boundary (the re-delegation is active from the next second)
         uint256 nextEpoch = ((block.timestamp / CHECKPOINT_INTERVAL) * CHECKPOINT_INTERVAL) + CHECKPOINT_INTERVAL;
         vm.warp(nextEpoch + 1);
 
@@ -2077,7 +2081,7 @@ contract VeHemiAragonAdapterTest is Test {
 
         assertEq(veHemi.balanceOf(ALICE), positionCount, "ALICE should have all positions");
 
-        // Warp to next epoch so delegations can take effect
+        // Warp to the next hour boundary
         uint256 nextEpoch = ((block.timestamp / CHECKPOINT_INTERVAL) * CHECKPOINT_INTERVAL) + CHECKPOINT_INTERVAL;
         vm.warp(nextEpoch);
 

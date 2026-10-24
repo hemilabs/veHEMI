@@ -13,8 +13,9 @@ import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
 ///         (`uint256[37] __gapV2` -> `[38]`) compiles, leaves the VeHemi runtime
 ///         unchanged and passes every fixture-based layout check, while every
 ///         library access to slot 64+ lands one slot off (the libraries would
-///         read R from a slot VeHemi never writes it to). This suite holds the
-///         mirror to VeHemi's layout inside `forge test`.
+///         read R = `autoRelockRemaining(id)` from a slot VeHemi never writes
+///         it to). This suite holds the mirror to VeHemi's layout inside
+///         `forge test`.
 ///
 /// @dev    TWO INDEPENDENT LAYERS.
 ///
@@ -30,13 +31,13 @@ import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
 ///
 ///         LAYER B (runtime): the expected slot is read from the committed
 ///         layout, never from the mirror. VeHemi itself writes R and the
-///         heartbeat through its own compiled layout; the libraries only READ R
-///         (`VeHemiCurveLib.sol::checkpoint` reads `autoRelockRemaining` through
-///         the mirror and builds the flat user point from it).
+///         refresh stamp through its own compiled layout; the libraries only
+///         READ R (`VeHemiCurveLib.sol::checkpoint` reads `autoRelockRemaining`
+///         through the mirror and builds the flat user point from it).
 ///         - `test_VeHemiWritesRAtTheDeclaredSlot` and
 ///           `test_RLandsOnNeitherNeighbouringSlot` pin where VeHemi stores R
-///           and the stamp. They pin VeHemi's layout and cannot see a mirror
-///           drift.
+///           and the refresh stamp. They pin VeHemi's layout and cannot see a
+///           mirror drift.
 ///         - `test_LibraryReadsRFromTheDeclaredSlot` plants a sentinel R at the
 ///           declared slot and different sentinels one slot either side, forces
 ///           a user checkpoint, and requires the flat bias to come from the
@@ -59,7 +60,7 @@ contract StorageLayoutMirrorParityTest is LockedCurveTestBase {
 
     /// @dev anti-vacuity floor; the real layout has 29 top-level entries
     ///      (deployed 26 + 3 appended, asserted by
-    ///      `StorageLayoutOnchainAnchor.t.sol::test_AutoRelockAppendsExactlyThreeVeHemiEntriesAndNothingElse`).
+    ///      `StorageLayoutOnchainAnchor.t.sol::test_AutoRelockAppendsExactlyThreeEntriesPerLayoutAndNothingElse`).
     uint256 internal constant MIN_MEMBERS = 25;
 
     string internal veHemiJson;
@@ -80,12 +81,12 @@ contract StorageLayoutMirrorParityTest is LockedCurveTestBase {
 
     // ───────────────────────────── json helpers ─────────────────────────────
 
-    function probeIndex(string calldata json, string calldata path) external view returns (string memory) {
+    function readJsonString(string calldata json, string calldata path) external view returns (string memory) {
         return vm.parseJsonString(json, path);
     }
 
     function _exists(string memory json, string memory path) internal view returns (bool) {
-        try this.probeIndex(json, path) returns (string memory) {
+        try this.readJsonString(json, path) returns (string memory) {
             return true;
         } catch {
             return false;
@@ -267,7 +268,7 @@ contract StorageLayoutMirrorParityTest is LockedCurveTestBase {
         assertGe(m, MIN_MEMBERS, "mirror side rendered too few members: stale or empty");
     }
 
-    /// @notice THE GATE. Member for member, in order, types included.
+    /// @notice THE CHECK. Member for member, in order, types included.
     function test_MirrorMatchesVeHemiLayout() public {
         uint256 i;
         while (true) {
@@ -325,8 +326,8 @@ contract StorageLayoutMirrorParityTest is LockedCurveTestBase {
 
     /// @notice The same, one slot either side: R must sit at neither
     ///         `keccak256(id . 63)` nor `keccak256(id . 65)`. Slot 65 is
-    ///         `autoRelockRefreshedAt`, so its word for `id` holds the enable
-    ///         stamp; the words at `keccak256(id . 63)` and
+    ///         `autoRelockRefreshedAt`, so its word for `id` holds the refresh
+    ///         stamp written at enable; the words at `keccak256(id . 63)` and
     ///         `keccak256(id . 66)` (slots 63 and 66 are gap words, not
     ///         mappings) hold nothing. Like the test above, this pins VeHemi's
     ///         own layout, not the mirror.
@@ -343,10 +344,11 @@ contract StorageLayoutMirrorParityTest is LockedCurveTestBase {
             "something wrote R one slot BELOW the declared mapping base"
         );
         // The next mapping base is `autoRelockRefreshedAt`: it must hold the
-        // enable stamp (captured here, independently of any getter) and not R.
-        uint256 stamp = block.timestamp; // no warp since enableAutoRelock
+        // refresh stamp written at enable (captured here, independently of any
+        // getter) and not R.
+        uint256 refreshStamp = block.timestamp; // no warp since enableAutoRelock
         uint256 above = uint256(vm.load(address(veHemi), keccak256(abi.encode(id, declared + 1))));
-        assertEq(above, stamp, "slot 64+1 does not hold the enable stamp");
+        assertEq(above, refreshStamp, "slot 64+1 does not hold the refresh stamp written at enable");
         assertTrue(above != uint256(veHemi.autoRelockRemaining(id)), "R found one slot ABOVE the declared base");
         assertEq(
             uint256(vm.load(address(veHemi), keccak256(abi.encode(id, declared + 2)))),
@@ -383,7 +385,7 @@ contract StorageLayoutMirrorParityTest is LockedCurveTestBase {
 
         uint256 declared = _declaredSlot("autoRelockRemaining");
         uint256 r = veHemi.autoRelockRemaining(id);
-        assertGe(r, 2 * SIX_DAYS, "precondition: armed");
+        assertGe(r, 2 * SIX_DAYS, "premise: armed");
 
         // The enable itself: the library built the flat point from the R
         // VeHemi had just stored.
@@ -392,7 +394,8 @@ contract StorageLayoutMirrorParityTest is LockedCurveTestBase {
         assertEq(p.bias, _flatBias(100 ether, r), "enable: the library did not read R from the declared slot");
 
         // Sentinels: whole buckets, pairwise distinct, none equal to R or to
-        // the stamp, all within MAX_TIME so every path stays in range.
+        // the refresh stamp, all within MAX_TIME so every path stays in
+        // range.
         uint256 rDeclared = r - 2 * SIX_DAYS;
         uint256 rBelow = r - 4 * SIX_DAYS;
         uint256 rAbove = r - 6 * SIX_DAYS;

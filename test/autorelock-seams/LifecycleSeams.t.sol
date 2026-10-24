@@ -14,8 +14,8 @@ contract LifecycleSeamsTest is AutoRelockSeamsBase {
 
     // ---------------------------------------------------------------- T1
     // Transfer of a FLAT position: the auto-relock state does NOT follow the
-    // token, so the buyer inherits no one-second-from-stale clock that a
-    // stranger could then fire.
+    // token, so the buyer inherits no abandonment clock one second from
+    // lapsing that a stranger could then fire.
     function test_T1_transfer_disarms_the_position() public {
         uint256 id = _mint(alice, 1000e18, 100 * SIX_DAYS, true, false);
         vm.prank(alice);
@@ -30,7 +30,7 @@ contract LifecycleSeamsTest is AutoRelockSeamsBase {
 
         // The transfer auto-disabled it: bob holds a plain decaying lock.
         assertEq(ve.autoRelockRemaining(id), 0, "state followed the token");
-        // No auto-relock clock exists for anyone to read or fire on bob.
+        // No abandonment clock exists for anyone to read or fire on bob.
         vm.expectRevert(VeHemi.AutoRelockNotEnabled.selector);
         ve.autoRelockStaleAt(id);
 
@@ -46,13 +46,13 @@ contract LifecycleSeamsTest is AutoRelockSeamsBase {
 
     // ---------------------------------------------------------------- T2
     // FORFEIT of a FLAT forfeitable position: all curves and votes clear.
-    function test_T2_forfeit_flat_position() public {
+    function test_T2_forfeitOfFlatPositionClearsEveryCurveAndTheVotes() public {
         uint256 id = _mint(alice, 1000e18, 100 * SIX_DAYS, false, true);
         vm.prank(alice);
         ve.enableAutoRelock(id);
 
         vm.warp(block.timestamp + 10 * SIX_DAYS);
-        assertGt(del.getVotes(alice), 0, "probe: no votes before the forfeit");
+        assertGt(del.getVotes(alice), 0, "premise: no votes before the forfeit");
 
         vm.prank(admin);
         ve.forfeit(id);
@@ -68,48 +68,49 @@ contract LifecycleSeamsTest is AutoRelockSeamsBase {
     // ---------------------------------------------------------------- T3
     // A FLAT forfeitable position is still forfeitable at the last second of
     // its window, and the forfeit clears it completely.
-    function test_T3_forfeit_window_vs_flat() public {
+    function test_T3_flatPositionIsForfeitableAtTheLastSecondOfTheWindow() public {
         uint256 id = _mint(alice, 1000e18, 100 * SIX_DAYS, false, true);
-        uint256 ta = ve.transferableAfter(id);
+        uint256 transferableAfter = ve.transferableAfter(id);
         vm.prank(alice);
         ve.enableAutoRelock(id);
 
-        vm.warp(ta - 1);
-        uint256 before = hemi.balanceOf(admin);
+        vm.warp(transferableAfter - 1);
+        uint256 adminBalanceBefore = hemi.balanceOf(admin);
         vm.prank(admin);
         ve.forfeit(id);
-        assertEq(hemi.balanceOf(admin) - before, 1000e18, "forfeit did not seize the principal");
+        assertEq(hemi.balanceOf(admin) - adminBalanceBefore, 1000e18, "forfeit did not seize the principal");
         assertEq(ve.autoRelockRemaining(id), 0, "forfeit left the flag");
-        assertEq(ve.totalVeHemiSupply(), 0, "forfeit at ta-1 left supply");
+        assertEq(ve.totalVeHemiSupply(), 0, "forfeit at transferableAfter - 1 left supply");
     }
 
-    // At and after `ta` the forfeit is refused even though the position is
-    // still flat at full weight, and the position becomes transferable.
-    // (At `ta` itself the window check refuses; one second later the frozen
-    // `lock.end`, which equals `ta`, is in the past and the expiry check
-    // refuses first.)
-    function test_T3b_flat_survives_past_ta_and_forfeit_closes() public {
+    // T3b -- At and after `transferableAfter` the forfeit is refused even
+    // though the position is still flat at full weight, and the position
+    // becomes transferable. (At `transferableAfter` itself the window check
+    // refuses; one second later the stored `lock.end`, which equals
+    // `transferableAfter`, is in the past and the expiry check refuses
+    // first.)
+    function test_T3b_flat_survives_past_transferableAfter_and_forfeit_closes() public {
         uint256 id = _mint(alice, 1000e18, 100 * SIX_DAYS, false, true);
-        uint256 ta = ve.transferableAfter(id);
+        uint256 transferableAfter = ve.transferableAfter(id);
         vm.prank(alice);
         ve.enableAutoRelock(id);
-        uint256 w = ve.balanceOfNFT(id);
+        uint256 flatWeight = ve.balanceOfNFT(id);
 
-        vm.warp(ta);
+        vm.warp(transferableAfter);
         vm.prank(admin);
         vm.expectRevert(VeHemi.ForfeitWindowExpired.selector);
         ve.forfeit(id);
 
-        vm.warp(ta + 1);
-        assertEq(ve.balanceOfNFT(id), w, "flat weight lost past ta");
-        assertEq(ve.nonTransferableTotalVeHemiSupply(), 0, "locked subcurve not retired at ta");
-        assertEq(ve.forfeitableTotalVeHemiSupply(), 0, "forfeitable subcurve not retired at ta");
+        vm.warp(transferableAfter + 1);
+        assertEq(ve.balanceOfNFT(id), flatWeight, "flat weight lost past transferableAfter");
+        assertEq(ve.nonTransferableTotalVeHemiSupply(), 0, "locked subcurve not retired at transferableAfter");
+        assertEq(ve.forfeitableTotalVeHemiSupply(), 0, "forfeitable subcurve not retired at transferableAfter");
         vm.prank(admin);
         vm.expectRevert(VeHemi.LockExpired.selector);
         ve.forfeit(id);
 
         // the position is now transferable, and the transfer disarms it
-        assertTrue(ve.isTransferable(id), "not transferable past ta");
+        assertTrue(ve.isTransferable(id), "not transferable past transferableAfter");
         vm.prank(alice);
         ve.transferFrom(alice, bob, id);
         assertEq(ve.autoRelockRemaining(id), 0, "transfer did not disarm");
@@ -126,7 +127,7 @@ contract LifecycleSeamsTest is AutoRelockSeamsBase {
     // ---------------------------------------------------------------- T5
     // An approved operator can move the position but cannot disarm or
     // heartbeat it, and the move itself disarms it.
-    function test_T5_operator_powers() public {
+    function test_T5_operatorCannotDisableOrRefresh_andItsTransferDisarms() public {
         uint256 id = _mint(alice, 1000e18, 100 * SIX_DAYS, true, false);
         vm.prank(alice);
         ve.enableAutoRelock(id);
@@ -152,18 +153,18 @@ contract LifecycleSeamsTest is AutoRelockSeamsBase {
 
     // ---------------------------------------------------------------- T6
     // supplyBreakdown vs dedicated views with a flat non-transferable position
-    function test_T6_view_consistency_flat() public {
+    function test_T6_supplyBreakdownMatchesTheDedicatedViews_withAFlatPosition() public {
         _mint(alice, 1000e18, 100 * SIX_DAYS, false, true);
-        uint256 id2 = _mint(bob, 500e18, 100 * SIX_DAYS, false, false);
+        uint256 bobId = _mint(bob, 500e18, 100 * SIX_DAYS, false, false);
         vm.prank(bob);
-        ve.enableAutoRelock(id2);
+        ve.enableAutoRelock(bobId);
 
         for (uint256 k = 0; k < 6; ++k) {
             vm.warp(block.timestamp + SIX_DAYS / 3);
-            (uint256 t, uint256 l, uint256 f, ) = ve.supplyBreakdown();
-            assertEq(l, ve.nonTransferableTotalVeHemiSupply(), "locked mismatch");
-            assertEq(f, ve.forfeitableTotalVeHemiSupply(), "forf mismatch");
-            assertEq(t, ve.totalVeHemiSupply(), "total mismatch");
+            (uint256 total, uint256 locked_, uint256 forfeitable_, ) = ve.supplyBreakdown();
+            assertEq(locked_, ve.nonTransferableTotalVeHemiSupply(), "locked mismatch");
+            assertEq(forfeitable_, ve.forfeitableTotalVeHemiSupply(), "forfeitable mismatch");
+            assertEq(total, ve.totalVeHemiSupply(), "total mismatch");
         }
     }
 }

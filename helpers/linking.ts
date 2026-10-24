@@ -124,12 +124,12 @@ export async function immutableReferencesOf(
     contractName: string
 ): Promise<Record<string, { start: number; length: number }[]>> {
     const names = await hre.artifacts.getAllFullyQualifiedNames();
-    const fq = names.find((n) => n.endsWith(`:${contractName}`));
-    if (!fq) throw new Error(`no artifact for ${contractName}`);
-    const bi = await hre.artifacts.getBuildInfo(fq);
-    if (!bi) return {};
-    const [source, name] = fq.split(":");
-    const out = (bi.output.contracts as any)?.[source]?.[name];
+    const fullyQualifiedName = names.find((n) => n.endsWith(`:${contractName}`));
+    if (!fullyQualifiedName) throw new Error(`no artifact for ${contractName}`);
+    const buildInfo = await hre.artifacts.getBuildInfo(fullyQualifiedName);
+    if (!buildInfo) return {};
+    const [source, name] = fullyQualifiedName.split(":");
+    const out = (buildInfo.output.contracts as any)?.[source]?.[name];
     return out?.evm?.deployedBytecode?.immutableReferences ?? {};
 }
 
@@ -155,13 +155,13 @@ export async function assertLinkManifest(
 ): Promise<void> {
     const names = await hre.artifacts.getAllFullyQualifiedNames();
     const actual: Record<string, LinkSiteCounts> = {};
-    for (const fq of names) {
-        if (!fq.startsWith("src/")) continue;
-        const a = await hre.artifacts.readArtifact(fq);
-        const counts = linkSiteCounts(a.deployedLinkReferences as LinkReferences);
-        if (Object.keys(counts).length > 0) actual[a.contractName] = counts;
+    for (const fullyQualifiedName of names) {
+        if (!fullyQualifiedName.startsWith("src/")) continue;
+        const artifact = await hre.artifacts.readArtifact(fullyQualifiedName);
+        const counts = linkSiteCounts(artifact.deployedLinkReferences as LinkReferences);
+        if (Object.keys(counts).length > 0) actual[artifact.contractName] = counts;
     }
-    const norm = (o: Record<string, LinkSiteCounts>) =>
+    const canonicalJson = (o: Record<string, LinkSiteCounts>) =>
         JSON.stringify(
             Object.fromEntries(
                 Object.entries(o)
@@ -172,11 +172,11 @@ export async function assertLinkManifest(
                     ])
             )
         );
-    if (norm(actual) !== norm(expected)) {
+    if (canonicalJson(actual) !== canonicalJson(expected)) {
         throw new Error(
             "LINK MANIFEST MISMATCH — the set of DELEGATECALL libraries changed.\n" +
-                `  expected: ${norm(expected)}\n` +
-                `  actual:   ${norm(actual)}\n` +
+                `  expected: ${canonicalJson(expected)}\n` +
+                `  actual:   ${canonicalJson(actual)}\n` +
                 "Every contract listed above must have EVERY library deployed and passed via\n" +
                 "`libraries:` in its `deploy(...)` call, or its implementation cannot exist.\n" +
                 "Update helpers/vehemiLibraries.ts + the manifest, then re-run."
@@ -255,9 +255,9 @@ export async function assertDeployedCodeMatchesLinkedArtifact(
 
     // `immutable`s are written into the runtime image by the constructor, so
     // the artifact's zeros will never equal the chain's values. Zero both.
-    const imm = await immutableReferencesOf(hre, contractName);
-    const want = stripMetadata(neutralizeImmutables(linked, imm));
-    const got = stripMetadata(neutralizeImmutables(onchain, imm));
+    const immutableRefs = await immutableReferencesOf(hre, contractName);
+    const want = stripMetadata(neutralizeImmutables(linked, immutableRefs));
+    const got = stripMetadata(neutralizeImmutables(onchain, immutableRefs));
     if (want !== got) {
         throw new Error(
             `${contractName} at ${address}: deployed code does not match the linked artifact.\n` +
@@ -285,7 +285,7 @@ export async function assertDeployedCodeMatchesLinkedArtifact(
         `  ${contractName} code:` +
             " ".repeat(Math.max(1, 18 - contractName.length)) +
             `OK (${(onchain.length - 2) / 2} B, ${total} link site(s) resolved, ` +
-            `${Object.values(imm).reduce((n, v) => n + v.length, 0)} immutable slot(s) neutralised, ` +
+            `${Object.values(immutableRefs).reduce((n, v) => n + v.length, 0)} immutable slot(s) neutralised, ` +
             "metadata-stripped match)"
     );
 }
@@ -319,16 +319,16 @@ export async function assertMatchesFoundryArtifact(
     }
     const forge = JSON.parse(fs.readFileSync(foundryPath).toString());
     const hardhat = await hre.artifacts.readArtifact(contractName);
-    const fObj: string = forge.deployedBytecode?.object ?? "";
-    const a = stripMetadata(fObj.replace(/^0x/, "").replace(PLACEHOLDER, "00".repeat(20)));
+    const forgeObject: string = forge.deployedBytecode?.object ?? "";
+    const forgeRuntime = stripMetadata(forgeObject.replace(/^0x/, "").replace(PLACEHOLDER, "00".repeat(20)));
     PLACEHOLDER.lastIndex = 0;
-    const b = stripMetadata(hardhat.deployedBytecode.replace(/^0x/, "").replace(PLACEHOLDER, "00".repeat(20)));
+    const hardhatRuntime = stripMetadata(hardhat.deployedBytecode.replace(/^0x/, "").replace(PLACEHOLDER, "00".repeat(20)));
     PLACEHOLDER.lastIndex = 0;
-    if (a !== b) {
+    if (forgeRuntime !== hardhatRuntime) {
         throw new Error(
             `${contractName}: the Foundry build and the Hardhat build DISAGREE.\n` +
-                `  forge   ${a.length / 2} B (metadata-stripped)\n` +
-                `  hardhat ${b.length / 2} B (metadata-stripped)\n` +
+                `  forge   ${forgeRuntime.length / 2} B (metadata-stripped)\n` +
+                `  hardhat ${hardhatRuntime.length / 2} B (metadata-stripped)\n` +
                 "Every size and attestation in this repo is measured by forge; every byte deployed\n" +
                 "is produced by hardhat. They must agree or the measurement describes nothing."
         );
@@ -336,6 +336,6 @@ export async function assertMatchesFoundryArtifact(
     console.log(
         `  ${contractName}:` +
             " ".repeat(Math.max(1, 23 - contractName.length)) +
-            `forge == hardhat (${a.length / 2} B metadata-stripped)`
+            `forge == hardhat (${forgeRuntime.length / 2} B metadata-stripped)`
     );
 }

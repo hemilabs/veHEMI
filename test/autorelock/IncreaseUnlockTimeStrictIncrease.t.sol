@@ -5,10 +5,11 @@ import "../LockedCurveTestBase.sol";
 
 /// @notice The strict-increase refusal of `increaseUnlockTime`
 ///         (`NewLockDurationNotGreater`), on both branches. On a FLAT position a
-///         request for exactly R asks for the term the position already has
-///         and must be refused without touching anything; one bucket more must
-///         be accepted and move R. The bodies make the boundary call directly
-///         and assert the contract's answer, not a recomputation of its rule.
+///         request for exactly R (`autoRelockRemaining`, the frozen remaining
+///         term) asks for the term the position already has and must be
+///         refused without touching anything; one bucket more must be accepted
+///         and move R. The bodies make the boundary call directly and assert
+///         the contract's answer, not a recomputation of its rule.
 contract IncreaseUnlockTimeStrictIncreaseTest is LockedCurveTestBase {
     /// THE ACCEPTANCE CONTROL. Without this the refusals below could pass
     /// because `increaseUnlockTime` refuses EVERYTHING. One whole bucket beyond
@@ -48,7 +49,7 @@ contract IncreaseUnlockTimeStrictIncreaseTest is LockedCurveTestBase {
         runSeedingFlow();
         (uint256 id, , ) = createLock(alice, 100 ether, 2 * 365 days);
         uint256 end = veHemi.getLockedBalance(id).end;
-        assertGt(end, block.timestamp, "precondition: still decaying");
+        assertGt(end, block.timestamp, "premise: still decaying");
 
         vm.prank(alice);
         vm.expectRevert(VeHemi.NewLockDurationNotGreater.selector);
@@ -59,15 +60,15 @@ contract IncreaseUnlockTimeStrictIncreaseTest is LockedCurveTestBase {
     /// so `duration == R` yields `grid(now + R) == grid(now) + R`: the term the
     /// position already has. It is refused with `NewLockDurationNotGreater`
     /// and moves nothing (no R, weight or end change).
-    function test_refusedNoopTouchesNothing() public {
+    function test_flatNoopExtensionIsRefusedAndTouchesNothing() public {
         runSeedingFlow();
         (uint256 id, , ) = createLock(alice, 100 ether, 2 * 365 days);
         vm.prank(alice);
         veHemi.enableAutoRelock(id);
 
         uint256 R = veHemi.autoRelockRemaining(id);
-        assertGt(R, 0, "precondition: position is flat");
-        assertEq(R % SIX_DAYS, 0, "precondition: R is whole buckets");
+        assertGt(R, 0, "premise: position is flat");
+        assertEq(R % SIX_DAYS, 0, "premise: R is whole buckets");
         uint256 wBefore = veHemi.balanceOfNFT(id);
         uint256 endBefore = veHemi.getLockedBalance(id).end;
 

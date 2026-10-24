@@ -13,7 +13,7 @@ import "../mocks/MockHemiVoteDelegation.sol";
 ///         `transferFrom` and `withdraw`, but has no `disableAutoRelock` path.
 ///         Disarm-on-transfer is what keeps such a holder from ever holding an
 ///         armed position it cannot disarm.
-contract LegacyHolder {
+contract AutoRelockUnawareHolder {
     function pull(address ve, address from, uint256 id) external {
         VeHemi(ve).transferFrom(from, address(this), id);
     }
@@ -31,10 +31,12 @@ contract LegacyHolder {
 /// @notice Who may arm a position, and what a transfer does to an armed one:
 ///         enable is strict-owner (an ERC-721 approval does not suffice) and
 ///         needs R >= 2 buckets, the end never moves back and cycling cannot make
-///         a position immortal, a transfer disarms with an exact end-snap (an
-///         owner self-transfer does not), a legacy holder receives a disarmed
-///         lock, forfeit is not escapable, and `createLockWithAutoRelock` lands
-///         in the same state as create-then-enable. Delegation is a mock here.
+///         a position immortal, a transfer disarms with an exact floor-snap (an
+///         owner self-transfer does not), an auto-relock-unaware holder
+///         receives a disarmed lock, forfeit is not escapable, and
+///         `createLockWithAutoRelock` lands in the same state as
+///         create-then-enable. Delegation is a mock here.
+///         R = `autoRelockRemaining(id)`, the frozen remaining term.
 contract AutoRelockAuthzTest is Test {
     MockERC20 hemi;
     VeHemi veHemi;
@@ -83,8 +85,8 @@ contract AutoRelockAuthzTest is Test {
         id = veHemi.createLock(amt, dur);
     }
 
-    function _mkNonTransferable(address to, uint256 amt, uint256 dur, bool forf) internal returns (uint256 id) {
-        id = veHemi.createLockFor(amt, dur, to, false, forf);
+    function _mkNonTransferable(address to, uint256 amt, uint256 dur, bool forfeitable) internal returns (uint256 id) {
+        id = veHemi.createLockFor(amt, dur, to, false, forfeitable);
     }
 
     // =====================================================================
@@ -123,7 +125,7 @@ contract AutoRelockAuthzTest is Test {
         veHemi.enableAutoRelock(id);
     }
 
-    /// THE STALE-APPROVAL ATTACK. A marketplace approval is authority to MOVE
+    /// THE DANGLING-APPROVAL ATTACK. A marketplace approval is authority to MOVE
     /// the asset, never authority to REDEFINE it. If `enableAutoRelock` honoured
     /// ERC-721 approvals, any dangling marketplace operator could freeze a
     /// victim's principal for as long as it liked, for free.
@@ -149,15 +151,15 @@ contract AutoRelockAuthzTest is Test {
     function test_enableRequiresTwoBuckets() public {
         uint256 id = _mkTransferable(owner, 100 ether, 3 * SIX_DAYS);
         uint256 end = veHemi.getLockedBalance(id).end;
-        assertEq(end % SIX_DAYS, 0, "precondition: grid-aligned end");
+        assertEq(end % SIX_DAYS, 0, "premise: grid-aligned end");
 
         // Last second at which R == 2 * SIX_DAYS: accepted, with exactly that R.
-        uint256 snap = vm.snapshotState();
+        uint256 snapshot = vm.snapshotState();
         vm.warp(end - SIX_DAYS - 1);
         vm.prank(owner);
         veHemi.enableAutoRelock(id);
         assertEq(uint256(veHemi.autoRelockRemaining(id)), 2 * SIX_DAYS, "R == 2 buckets must be accepted");
-        vm.revertToState(snap);
+        vm.revertToState(snapshot);
 
         // One second later R == SIX_DAYS: refused.
         vm.warp(end - SIX_DAYS);
@@ -193,7 +195,7 @@ contract AutoRelockAuthzTest is Test {
             assertLe(
                 veHemi.getLockedBalance(id).end,
                 block.timestamp + r0,
-                "unlock time ratcheted past now + R0 (immortal position)"
+                "unlock time ratcheted past now + the first enable's R (immortal position)"
             );
             vm.prank(owner);
             veHemi.enableAutoRelock(id);
@@ -201,14 +203,14 @@ contract AutoRelockAuthzTest is Test {
         }
     }
 
-    /// A transfer of an armed position whose frozen end is in the past is not
+    /// A transfer of an armed position whose stored end is in the past is not
     /// an early exit: the disarm restores a live end, so the buyer cannot
     /// withdraw and the weight is not annihilated.
     function test_transferIsNotAFreeEarlyExit() public {
         uint256 id = _mkTransferable(owner, 100 ether, 400 days);
         vm.prank(owner);
         veHemi.enableAutoRelock(id);
-        vm.warp(block.timestamp + 500 days); // stale end is in the past
+        vm.warp(block.timestamp + 500 days); // the stored end is in the past
         vm.prank(owner);
         veHemi.transferFrom(owner, buyer, id);
         uint256 balBefore = hemi.balanceOf(buyer);
@@ -232,8 +234,8 @@ contract AutoRelockAuthzTest is Test {
         veHemi.enableAutoRelock(id);
         uint64 r = veHemi.autoRelockRemaining(id);
 
-        vm.warp(block.timestamp + 500 days); // stale end is now in the PAST
-        assertLt(veHemi.getLockedBalance(id).end, block.timestamp, "precondition: end not stale");
+        vm.warp(block.timestamp + 500 days); // the stored end is now in the PAST
+        assertLt(veHemi.getLockedBalance(id).end, block.timestamp, "premise: stored end not past");
 
         vm.prank(owner);
         veHemi.transferFrom(owner, buyer, id);
@@ -242,11 +244,12 @@ contract AutoRelockAuthzTest is Test {
         // The flag was cleared by the transfer's auto-disable.
         assertEq(veHemi.autoRelockRemaining(id), 0, "flag should have been cleared on transfer");
         // The disarm snapped the end to grid(now)+R, exactly as disableAutoRelock
-        // would, so the buyer receives a LIVE decaying lock, not a stale one.
+        // would, so the buyer receives a LIVE decaying lock, not one whose stored
+        // end is past.
         assertEq(
             veHemi.getLockedBalance(id).end,
             ((block.timestamp / SIX_DAYS) + uint256(r) / SIX_DAYS) * SIX_DAYS,
-            "disarm end-snap"
+            "disarm floor-snap"
         );
         assertGt(veHemi.getLockedBalance(id).end, block.timestamp, "disarmed lock must be live");
         // It is already disarmed, so disableAutoRelock now reverts for everyone.
@@ -259,7 +262,7 @@ contract AutoRelockAuthzTest is Test {
     /// live flat position — a marketplace or lending market that prices off it
     /// concludes "expired, withdrawable now" and is wrong. `effectiveLockEnd` is
     /// the number to read, and `isAutoRelockEnabled` the flag that says so.
-    function test_staleEndIsTheIntegratorHazard() public {
+    function test_storedEndIsTheIntegratorHazard() public {
         uint256 id = _mkTransferable(owner, 100 ether, 400 days);
         vm.prank(owner);
         veHemi.enableAutoRelock(id);
@@ -272,15 +275,15 @@ contract AutoRelockAuthzTest is Test {
         assertTrue((veHemi.autoRelockRemaining(id) != 0));
         assertEq(veHemi.effectiveLockEnd(id), ((block.timestamp + r) / SIX_DAYS) * SIX_DAYS);
         assertGt(veHemi.effectiveLockEnd(id), block.timestamp + 380 days);
-        emit log_named_uint("stale end (naive)", veHemi.getLockedBalance(id).end);
+        emit log_named_uint("stored end (naive)", veHemi.getLockedBalance(id).end);
         emit log_named_uint("effective end (true)", veHemi.effectiveLockEnd(id));
     }
 
     /// A position can never arrive ARMED inside a contract that has no disable
     /// path: the pull auto-disables it, so it is a plain decaying lock that
     /// expires and is withdrawable normally.
-    function test_flatPositionArrivesDisarmedInLegacyContract() public {
-        LegacyHolder holder = new LegacyHolder();
+    function test_flatPositionArrivesDisarmedInAutoRelockUnawareHolder() public {
+        AutoRelockUnawareHolder holder = new AutoRelockUnawareHolder();
         uint256 id = _mkTransferable(owner, 100 ether, 400 days);
         vm.prank(owner);
         veHemi.enableAutoRelock(id);
@@ -288,8 +291,8 @@ contract AutoRelockAuthzTest is Test {
         veHemi.approve(address(holder), id);
         holder.pull(address(veHemi), owner, id);
         assertEq(veHemi.ownerOf(id), address(holder));
-        // The pull disarmed it: it is a live decaying lock, not a frozen flat term.
-        assertEq(veHemi.autoRelockRemaining(id), 0, "arrived armed in a legacy holder");
+        // The pull disarmed it: it is a live decaying lock, not an armed (flat) position.
+        assertEq(veHemi.autoRelockRemaining(id), 0, "arrived armed in an auto-relock-unaware holder");
         assertGt(veHemi.getLockedBalance(id).end, block.timestamp, "disarmed lock must be live");
 
         // Before its term expires, withdraw is correctly refused.
@@ -308,12 +311,12 @@ contract AutoRelockAuthzTest is Test {
     /// all until `transferableAfter`, and auto-relock does not move that date.
     function test_autoRelockDoesNotMoveTransferability() public {
         uint256 id = _mkNonTransferable(owner, 100 ether, 400 days, false);
-        uint256 ta = veHemi.transferableAfter(id);
+        uint256 transferableAfter = veHemi.transferableAfter(id);
         vm.prank(owner);
         veHemi.enableAutoRelock(id);
-        assertEq(veHemi.transferableAfter(id), ta, "auto-relock moved transferableAfter");
+        assertEq(veHemi.transferableAfter(id), transferableAfter, "auto-relock moved transferableAfter");
         assertFalse(veHemi.isTransferable(id));
-        vm.warp(ta);
+        vm.warp(transferableAfter);
         assertTrue(veHemi.isTransferable(id), "flat position never becomes transferable");
     }
 
@@ -329,10 +332,10 @@ contract AutoRelockAuthzTest is Test {
         assertEq(veHemi.ownerOf(id), buyer);
         assertEq(veHemi.autoRelockRemaining(id), 0, "flag should have been cleared through safeTransferFrom");
 
-        uint256 nt = _mkNonTransferable(owner, 100 ether, 400 days, false);
+        uint256 nonTransferableId = _mkNonTransferable(owner, 100 ether, 400 days, false);
         vm.prank(owner);
         vm.expectRevert(VeHemi.NotTransferable.selector);
-        veHemi.safeTransferFrom(owner, buyer, nt);
+        veHemi.safeTransferFrom(owner, buyer, nonTransferableId);
     }
 
     /// The operator three-hop (victim -> operator, arm, operator -> victim)
@@ -354,7 +357,7 @@ contract AutoRelockAuthzTest is Test {
         // hop 2: operator arms it (it owns it now).
         vm.prank(operator);
         veHemi.enableAutoRelock(id);
-        assertTrue(veHemi.autoRelockRemaining(id) != 0, "probe: not armed mid-hop");
+        assertTrue(veHemi.autoRelockRemaining(id) != 0, "premise: not armed mid-hop");
 
         // hop 3: operator transfers it back to the victim.
         vm.prank(operator);
@@ -377,7 +380,7 @@ contract AutoRelockAuthzTest is Test {
         vm.prank(owner);
         veHemi.enableAutoRelock(id);
         uint64 r = veHemi.autoRelockRemaining(id);
-        assertTrue(r != 0, "probe: not armed");
+        assertTrue(r != 0, "premise: not armed");
         uint64 end0 = veHemi.getLockedBalance(id).end;
         int256 amount0 = int256(veHemi.getLockedBalance(id).amount);
 
@@ -388,7 +391,7 @@ contract AutoRelockAuthzTest is Test {
         vm.prank(owner);
         veHemi.transferFrom(owner, owner, id); // benign self-transfer
 
-        // Stays armed: same R, same end (NO disarm end-snap even after the warp),
+        // Stays armed: same R, same end (NO disarm floor-snap even after the warp),
         // owner and principal unchanged, still a flat position carrying weight.
         assertEq(veHemi.ownerOf(id), owner, "self-transfer changed owner");
         assertEq(veHemi.autoRelockRemaining(id), r, "self-transfer disarmed the position");
@@ -405,9 +408,9 @@ contract AutoRelockAuthzTest is Test {
     // D. LIVENESS GUARDS
     // =====================================================================
 
-    /// The owner's `increaseAmount` must not be blocked by a stale
+    /// The owner's `increaseAmount` must not be blocked by a past stored
     /// end, or an owner can no longer top up their own flat position.
-    function test_increaseAmountWorksOnStaleEndFlatPosition() public {
+    function test_increaseAmountWorksOnFlatPositionWithPastStoredEnd() public {
         uint256 id = _mkTransferable(owner, 100 ether, 400 days);
         vm.prank(owner);
         veHemi.enableAutoRelock(id);
@@ -434,17 +437,18 @@ contract AutoRelockAuthzTest is Test {
         assertEq(veHemi.autoRelockRemaining(id), 0, "flag survived the burn");
     }
 
-    /// The near-expiry skip in VeHemi.sol `_delegate`: a flat position must stay
-    /// delegatable after its stale end passes.
-    function test_flatPositionStaysDelegatable() public {
+    /// An armed transfer after the stored end has passed: the transfer disarms
+    /// the position before the ownership change (restoring a live end) and
+    /// re-delegates it, so the delegation record names the buyer.
+    function test_armedTransferWithPastStoredEndRebooksAtTheBuyer() public {
         uint256 id = _mkTransferable(owner, 100 ether, 400 days);
         vm.prank(owner);
         veHemi.enableAutoRelock(id);
         vm.warp(block.timestamp + 500 days);
         vm.prank(owner);
         veHemi.transferFrom(owner, buyer, id);
-        (address dee, , , , ) = mockDelegation.delegations(id);
-        assertEq(dee, buyer, "flat position stopped being delegatable past its stale end");
+        (address delegatee, , , , ) = mockDelegation.delegations(id);
+        assertEq(delegatee, buyer, "the armed transfer did not rebook the delegation at the buyer");
     }
 
     // =====================================================================
@@ -453,42 +457,54 @@ contract AutoRelockAuthzTest is Test {
 
     /// `createLockWithAutoRelock` must produce a position BYTE-FOR-BYTE
     /// equivalent to create-then-enable in the same block: same flag, same
-    /// stamp, same locked balance, same (flat) weight. This is the core
+    /// refresh stamp, same locked balance, same (flat) weight. This is the core
     /// correctness claim — it reuses `_enableAutoRelock`, so it must land in
     /// exactly the state the two-tx path lands in.
     function test_armAtCreationEqualsCreateThenEnable() public {
         uint256 amt = 100 ether;
         uint256 dur = 200 days;
 
-        // A: armed at creation, one tx.
+        // Armed at creation, one tx.
         vm.prank(owner);
-        uint256 a = veHemi.createLockWithAutoRelock(amt, dur, true, false);
+        uint256 armedAtCreationId = veHemi.createLockWithAutoRelock(amt, dur, true, false);
 
-        // B: created plain, then enabled by the owner — SAME block.
-        uint256 b = veHemi.createLockFor(amt, dur, owner, true, false);
-        assertEq(veHemi.autoRelockRemaining(b), 0, "B armed before enable");
+        // Created plain, then enabled by the owner — SAME block.
+        uint256 enabledAfterCreateId = veHemi.createLockFor(amt, dur, owner, true, false);
+        assertEq(veHemi.autoRelockRemaining(enabledAfterCreateId), 0, "the plain position armed before enable");
         vm.prank(owner);
-        veHemi.enableAutoRelock(b);
+        veHemi.enableAutoRelock(enabledAfterCreateId);
 
-        assertEq(veHemi.autoRelockRemaining(a), veHemi.autoRelockRemaining(b), "R mismatch");
-        assertGt(veHemi.autoRelockRemaining(a), 0, "A not armed");
         assertEq(
-            uint256(veHemi.autoRelockRefreshedAt(a)),
-            uint256(veHemi.autoRelockRefreshedAt(b)),
+            veHemi.autoRelockRemaining(armedAtCreationId),
+            veHemi.autoRelockRemaining(enabledAfterCreateId),
+            "R mismatch"
+        );
+        assertGt(veHemi.autoRelockRemaining(armedAtCreationId), 0, "the armed-at-creation position is not armed");
+        assertEq(
+            uint256(veHemi.autoRelockRefreshedAt(armedAtCreationId)),
+            uint256(veHemi.autoRelockRefreshedAt(enabledAfterCreateId)),
             "refresh stamp mismatch"
         );
         assertEq(
-            uint256(veHemi.autoRelockRefreshedAt(a)), block.timestamp, "A not stamped at creation block"
+            uint256(veHemi.autoRelockRefreshedAt(armedAtCreationId)),
+            block.timestamp,
+            "the armed-at-creation refresh stamp is not the creation block"
         );
-        assertEq(veHemi.getLockedBalance(a).end, veHemi.getLockedBalance(b).end, "end mismatch");
         assertEq(
-            uint256(uint128(veHemi.getLockedBalance(a).amount)),
-            uint256(uint128(veHemi.getLockedBalance(b).amount)),
+            veHemi.getLockedBalance(armedAtCreationId).end,
+            veHemi.getLockedBalance(enabledAfterCreateId).end,
+            "end mismatch"
+        );
+        assertEq(
+            uint256(uint128(veHemi.getLockedBalance(armedAtCreationId).amount)),
+            uint256(uint128(veHemi.getLockedBalance(enabledAfterCreateId).amount)),
             "amount mismatch"
         );
         // Flat weight: the two positions carry identical balance, and it is > 0.
-        assertEq(veHemi.balanceOfNFT(a), veHemi.balanceOfNFT(b), "weight mismatch");
-        assertGt(veHemi.balanceOfNFT(a), 0, "zero weight");
+        assertEq(
+            veHemi.balanceOfNFT(armedAtCreationId), veHemi.balanceOfNFT(enabledAfterCreateId), "weight mismatch"
+        );
+        assertGt(veHemi.balanceOfNFT(armedAtCreationId), 0, "zero weight");
     }
 
     /// Flatness proof: an armed-at-creation position does NOT decay across a
@@ -498,16 +514,16 @@ contract AutoRelockAuthzTest is Test {
         uint256 amt = 100 ether;
         uint256 dur = 200 days;
         vm.prank(owner);
-        uint256 armed = veHemi.createLockWithAutoRelock(amt, dur, true, false);
-        uint256 plain = veHemi.createLockFor(amt, dur, owner, true, false);
+        uint256 armedId = veHemi.createLockWithAutoRelock(amt, dur, true, false);
+        uint256 plainId = veHemi.createLockFor(amt, dur, owner, true, false);
 
-        uint256 armed0 = veHemi.balanceOfNFT(armed);
-        uint256 plain0 = veHemi.balanceOfNFT(plain);
+        uint256 armedWeightBefore = veHemi.balanceOfNFT(armedId);
+        uint256 plainWeightBefore = veHemi.balanceOfNFT(plainId);
 
         vm.warp(block.timestamp + SIX_DAYS);
 
-        assertEq(veHemi.balanceOfNFT(armed), armed0, "armed position decayed");
-        assertLt(veHemi.balanceOfNFT(plain), plain0, "plain position did not decay");
+        assertEq(veHemi.balanceOfNFT(armedId), armedWeightBefore, "armed position decayed");
+        assertLt(veHemi.balanceOfNFT(plainId), plainWeightBefore, "plain position did not decay");
     }
 
     /// The UNARMED creation paths are untouched by arm-at-creation: both
@@ -516,11 +532,11 @@ contract AutoRelockAuthzTest is Test {
     function test_unarmedCreatePathsLeavePositionUnarmed() public {
         uint256 id = veHemi.createLockFor(100 ether, 200 days, owner, true, false);
         assertEq(veHemi.autoRelockRemaining(id), 0, "createLockFor armed the position");
-        assertEq(uint256(veHemi.autoRelockRefreshedAt(id)), 0, "createLockFor stamped the position");
+        assertEq(uint256(veHemi.autoRelockRefreshedAt(id)), 0, "createLockFor set a refresh stamp");
         vm.prank(owner);
         uint256 id2 = veHemi.createLock(100 ether, 200 days);
         assertEq(veHemi.autoRelockRemaining(id2), 0, "createLock armed the position");
-        assertEq(uint256(veHemi.autoRelockRefreshedAt(id2)), 0, "createLock stamped the position");
+        assertEq(uint256(veHemi.autoRelockRefreshedAt(id2)), 0, "createLock set a refresh stamp");
     }
 
     /// Arm-at-creation works for a NON-TRANSFERABLE position post-seeding, and
@@ -556,15 +572,15 @@ contract AutoRelockAuthzTest is Test {
     /// In the PRE-seeding window a non-transferable position can be minted, but
     /// arming it at creation must revert exactly as enableAutoRelock would,
     /// so the create path is not an unguarded arming admit-path into seedBatch.
-    function test_armAtCreationRespectsSeedingGate() public {
+    function test_armAtCreationRespectsSeedingGuard() public {
         // Fresh proxy that is NOT seeding-finalized (unlike the suite's setUp).
         VeHemi logic = new VeHemi(address(hemi));
-        MockHemiVoteDelegation del = new MockHemiVoteDelegation();
+        MockHemiVoteDelegation delegation = new MockHemiVoteDelegation();
         ERC1967Proxy proxy = new ERC1967Proxy(
             address(logic), abi.encodeWithSelector(VeHemi.initialize.selector, address(this))
         );
         VeHemi ve = VeHemi(address(proxy));
-        ve.updateVoteDelegation(IVeHemiVoteDelegation(address(del)));
+        ve.updateVoteDelegation(IVeHemiVoteDelegation(address(delegation)));
         hemi.approve(address(ve), type(uint256).max);
         // seedingStarted == false, lockedSeedingFinalized == false here.
 
@@ -576,11 +592,11 @@ contract AutoRelockAuthzTest is Test {
         // Control: a TRANSFERABLE position (transferableAfter == 0) is NOT a
         // subcurve member, so the seeding guard permits arming it even
         // pre-finalization.
-        uint256 okId = ve.createLockWithAutoRelock(100 ether, 200 days, true, false);
-        assertGt(ve.autoRelockRemaining(okId), 0, "transferable arm should be allowed pre-seeding");
+        uint256 transferableId = ve.createLockWithAutoRelock(100 ether, 200 days, true, false);
+        assertGt(ve.autoRelockRemaining(transferableId), 0, "transferable arm should be allowed pre-seeding");
 
         // And the non-transferable position can still be minted UNARMED.
-        uint256 ntId = ve.createLockFor(100 ether, 200 days, address(this), false, false);
-        assertEq(ve.autoRelockRemaining(ntId), 0, "unarmed non-transferable mint should work");
+        uint256 nonTransferableId = ve.createLockFor(100 ether, 200 days, address(this), false, false);
+        assertEq(ve.autoRelockRemaining(nonTransferableId), 0, "unarmed non-transferable mint should work");
     }
 }

@@ -581,7 +581,7 @@ contract VeHemiAragonAdapterForkTest is Test {
         tv.execute(proposalId);
     }
 
-    // ─── Item 4: Non-member vote rejection ──────────────────────────────
+    // ─── Non-member vote rejection ──────────────────────────────────────
 
     function test_fork_nonMemberCannotVote() public {
         vm.skip(!forkEnabled);
@@ -605,7 +605,7 @@ contract VeHemiAragonAdapterForkTest is Test {
         tv.vote(proposalId, VOTE_YES, false);
     }
 
-    // ─── Item 5: minProposerVotingPower gate ────────────────────────────
+    // ─── minProposerVotingPower gate ────────────────────────────────────
 
     function _createDaoWithProposerThreshold()
         internal

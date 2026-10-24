@@ -7,7 +7,7 @@ import {LyingVoteDelegation} from "../mocks/LyingVoteDelegation.sol";
 import {GarbageModule} from "../module-failure/BrokenModules.sol";
 
 /// @notice An adapter whose relays burn all the gas they are given.
-contract GasBurningAdapter {
+contract GasEatingAdapter {
     function notifyVotesChanged(address, uint256, uint256) external pure {
         while (true) {}
     }
@@ -17,7 +17,9 @@ contract GasBurningAdapter {
     }
 }
 
-/// @notice A module whose window probe REVERTS with 32 bytes of non-zero data.
+/// @notice A module whose window probe REVERTS with 32 bytes of non-zero data;
+///         otherwise it is a `LyingVoteDelegation` (reads forwarded, writes
+///         ignored).
 contract RevertingWindowProbeModule is LyingVoteDelegation {
     constructor(IVeHemiVoteDelegation real_) LyingVoteDelegation(real_) {}
 
@@ -35,34 +37,34 @@ contract RevertingWindowProbeModule is LyingVoteDelegation {
 ///         window probe, delegation of an armed position past its stored end,
 ///         and the undecodable-module risk. Each body fails if the guard it
 ///         names is removed or inverted.
-contract AutoRelockGuards is AutoRelockTestBase {
+contract AutoRelockGuardsTest is AutoRelockTestBase {
     /// @notice The vote-delegation module caps each `notifyVotesChanged` relay at
     ///         `RELAY_GAS_BUDGET`, so an adapter that burns its gas cannot make a
     ///         delegation write run out of gas. (The account-wide
     ///         `notifyDelegateChanged` relay is uncapped by design and is the
     ///         module's last statement; this adapter burns there too, which the
     ///         try/catch absorbs with 1/64 of the frame left.)
-    function test_relayGasBudget_bindsAGasBurningAdapter() public {
-        delegation.setTrustedAdapter(address(new GasBurningAdapter()));
+    function test_relayGasBudget_bindsAGasEatingAdapter() public {
+        delegation.setTrustedAdapter(address(new GasEatingAdapter()));
         (uint256 id, , ) = createLock(attacker, 1_000 ether, 4 * 365 days);
         vm.prank(attacker);
-        (bool ok, ) = address(delegation).call{gas: 3_000_000}(abi.encodeCall(delegation.delegate, (id, dele)));
-        assertTrue(ok, "a gas-burning adapter made a delegation write run out of gas");
+        (bool ok, ) = address(delegation).call{gas: 3_000_000}(abi.encodeCall(delegation.delegate, (id, delegateeA)));
+        assertTrue(ok, "a gas-eating adapter made a delegation write run out of gas");
         vm.warp(block.timestamp + 2);
-        assertEq(delegation.getVotes(dele), veHemi.balanceOfNFT(id), "the write did not book the votes");
+        assertEq(delegation.getVotes(delegateeA), veHemi.balanceOfNFT(id), "the write did not book the votes");
     }
 
     /// @notice `retireStrandedFlatTerm` refuses a record that is not flat: a live
     ///         DECAYING record cannot be re-booked by a stranger.
     function test_retireStrandedFlatTerm_refusesALiveDecayingRecord() public {
         (uint256 id, , ) = createLock(attacker, 1_000 ether, 4 * 365 days);
-        delegateTo(attacker, id, dele);
+        delegateTo(attacker, id, delegateeA);
         vm.warp(block.timestamp + 2);
-        uint256 before = delegation.getVotes(dele);
+        uint256 before = delegation.getVotes(delegateeA);
         vm.prank(stranger);
         vm.expectRevert(VeHemiVoteDelegation.FlatTermNotRetryable.selector);
         delegation.retireStrandedFlatTerm(id);
-        assertEq(delegation.getVotes(dele), before, "votes moved");
+        assertEq(delegation.getVotes(delegateeA), before, "votes moved");
     }
 
     /// @notice ... and an ARMED position's flat record (it is not stranded).
@@ -87,7 +89,7 @@ contract AutoRelockGuards is AutoRelockTestBase {
     /// @notice The upgrade-window probe in `enableAutoRelock` reads the module's
     ///         answer only when the call SUCCEEDED: a module whose
     ///         `legacyDatingActive` reverts with non-zero return data does not
-    ///         block arming (the probe fails open).
+    ///         block `enableAutoRelock` (the probe fails open).
     function test_windowProbe_failsOpenOnARevertWithData() public {
         (uint256 id, , ) = createLock(attacker, 1_000 ether, 4 * 365 days);
         veHemi.updateVoteDelegation(IVeHemiVoteDelegation(address(new RevertingWindowProbeModule(delegation))));
@@ -103,16 +105,16 @@ contract AutoRelockGuards is AutoRelockTestBase {
         (uint256 id, , ) = createLock(attacker, 1_000 ether, 3 * SIX_DAYS);
         enable(attacker, id);
         _ageAndRefresh(attacker, id, 6);
-        assertLt(veHemi.getLockedBalance(id).end, block.timestamp, "probe: the stored end is not in the past");
-        assertTrue(veHemi.isAutoRelockEnabled(id), "probe: not armed");
+        assertLt(veHemi.getLockedBalance(id).end, block.timestamp, "premise: the stored end is not in the past");
+        assertTrue(veHemi.isAutoRelockEnabled(id), "premise: not armed");
         vm.prank(attacker);
-        delegation.setAutoDelegate(dele2);
+        delegation.setAutoDelegate(delegateeB);
         vm.prank(attacker);
         veHemi.transferFrom(attacker, attacker, id);
         assertTrue(veHemi.isAutoRelockEnabled(id), "a self-transfer disarmed the position");
-        assertEq(delegation.delegation(id).delegatee, dele2, "the self-transfer did not reach the auto-delegate");
+        assertEq(delegation.delegation(id).delegatee, delegateeB, "the self-transfer did not reach the auto-delegate");
         vm.warp(block.timestamp + 2);
-        assertEq(delegation.getVotes(dele2), veHemi.balanceOfNFT(id), "the auto-delegate does not hold the weight");
+        assertEq(delegation.getVotes(delegateeB), veHemi.balanceOfNFT(id), "the auto-delegate does not hold the weight");
     }
 
     /// @notice KNOWN LIMITATION (documented on `VeHemi.updateVoteDelegation`): a
@@ -124,7 +126,7 @@ contract AutoRelockGuards is AutoRelockTestBase {
     function test_undecodableModule_locksArmedPrincipalUntilTheOwnerReplacesIt() public {
         (uint256 id, , ) = createLock(attacker, 1_000 ether, 4 * 365 days);
         enable(attacker, id);
-        IVeHemiVoteDelegation good = IVeHemiVoteDelegation(address(delegation));
+        IVeHemiVoteDelegation realDelegation = IVeHemiVoteDelegation(address(delegation));
         veHemi.updateVoteDelegation(IVeHemiVoteDelegation(address(new GarbageModule())));
 
         // Undecodable return data reverts at the `try ... returns` decode
@@ -139,9 +141,9 @@ contract AutoRelockGuards is AutoRelockTestBase {
         vm.prank(attacker);
         vm.expectRevert(VeHemi.LockNotExpired.selector);
         veHemi.withdraw(id);
-        assertTrue(veHemi.isAutoRelockEnabled(id), "probe: the position is no longer armed");
+        assertTrue(veHemi.isAutoRelockEnabled(id), "premise: the position is no longer armed");
 
-        veHemi.updateVoteDelegation(good);
+        veHemi.updateVoteDelegation(realDelegation);
         disable(attacker, id);
         vm.warp(veHemi.getLockedBalance(id).end + 1);
         uint256 before = hemi.balanceOf(attacker);

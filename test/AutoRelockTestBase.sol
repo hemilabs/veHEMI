@@ -9,7 +9,8 @@ import "./LockedCurveTestBase.sol";
 ///         `grid()`, `slopeOf`, `residualLockup` (`effectiveLockEnd - now`),
 ///         `warpToPhase`, and enable / disable / delegate wrappers. Green means
 ///         "this attack did not succeed on this build"; it never means the
-///         attack is impossible.
+///         attack is impossible. R = `autoRelockRemaining(id)`, the frozen
+///         remaining term in seconds (whole SIX_DAYS buckets).
 contract AutoRelockTestBase is LockedCurveTestBase {
     /// @dev The bucket-mean flat level is `slope * (R - SIX_DAYS/2)`.
     uint256 internal constant HALF_BUCKET = 262_980; // SIX_DAYS / 2
@@ -17,8 +18,8 @@ contract AutoRelockTestBase is LockedCurveTestBase {
     address internal attacker = address(0xA11CE0);
     address internal victim = address(0x71C71);
     address internal stranger = address(0x57AA9E);
-    address internal dele = address(0xDE1E6A);
-    address internal dele2 = address(0xDE1E62);
+    address internal delegateeA = address(0xDE1E6A);
+    address internal delegateeB = address(0xDE1E62);
 
     function setUp() public virtual override {
         super.setUp();

@@ -31,7 +31,7 @@ fs_permissions = [
 # Block pinning is opt-in via the HEMI_FORK_BLOCK env var: fork tests that want
 # a reproducible snapshot read `vm.envOr("HEMI_FORK_BLOCK", uint256(0))` and
 # call `vm.createSelectFork("hemi", pinnedBlock)` from setUp when non-zero
-# (test/autorelock-upgrade pins by default through AUTORELOCK_TEST_FORK_BLOCK).
+# (test/autorelock-upgrade forks at AUTORELOCK_TEST_FORK_BLOCK by default).
 [rpc_endpoints]
 # Foundry 1.5.1 retries at a flat interval: 6 retries x 1,000 ms is a 6-second
 # window and does not outlast a 60-second rate-limit reset; the fork CI steps
@@ -87,8 +87,9 @@ runs = 1000
 
 # The invariant BUDGET is the one deliberate difference from the default
 # profile: it changes how many fuzz sequences run, not the compiled bytecode.
-# The pull-request job runs the campaigns at this budget; the scheduled job in
-# .github/workflows/test.yml runs them under the default profile (1024 x 128).
+# In .github/workflows/test.yml the `Foundry project` job (every push and pull
+# request) runs the campaigns at this budget; the nightly job runs them under
+# the default profile (1024 x 128).
 [profile.ci.invariant]
 runs = 128
 depth = 128

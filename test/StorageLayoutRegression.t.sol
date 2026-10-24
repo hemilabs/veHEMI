@@ -202,7 +202,7 @@ contract StorageLayoutRegressionTest is Test {
 
     /// @dev Fourth mutant: V2 delegation storage with __gapV2 shrunk from
     ///      [44] to [43] and a new field appended in its place. Proves
-    ///      that `test_VeHemiVoteDelegation_GapIsExactly44Slots` in
+    ///      that `test_VeHemiVoteDelegation_GapV2IsExactly44Slots` in
     ///      StorageLayoutGolden.t.sol (which pins the `t_array(t_uint256)44_storage`
     ///      type key) would fire against a regenerated fixture for this layout.
     ///      This covers a gap-size reduction, which plain sentinel-at-zero
@@ -305,8 +305,8 @@ contract StorageLayoutRegressionTest is Test {
     ///      `totalSlope` ↔ `totalBias` swapped within slot 24 (the packed
     ///      int128 pair). Parallel to the `LockedBalance` and `Delegation`
     ///      swap mutants — proves that the
-    ///      `test_VeHemi_SeedingProgressMemberLayout` golden pin
-    ///      (StorageLayoutGolden.t.sol:286-330) discriminates an intra-struct
+    ///      `test_VeHemi_SeedingProgressMemberLayout` golden pin in
+    ///      StorageLayoutGolden.t.sol discriminates an intra-struct
     ///      reorder of the seeding accumulator.
     ///
     ///      Why this matters at runtime: `finalizeSeeding` computes

@@ -9,7 +9,7 @@ import "../mocks/MockERC20.sol";
 
 /// @notice Auto-relock against the REAL VeHemiVoteDelegation: the quorum
 ///         denominator (`getPastTotalSupply`, from `totalVeHemiSupplyAt`)
-///         carries the flat term past the position's frozen end.
+///         carries the flat term past the position's stored end.
 contract AutoRelockRealVVDTest is Test {
     MockERC20 hemi;
     VeHemi veHemi;
@@ -42,17 +42,17 @@ contract AutoRelockRealVVDTest is Test {
     }
 
     /// `totalVeHemiSupplyAt` (the Aragon quorum denominator, read through the
-    /// module's `getPastTotalSupply`) carries the flat term after the frozen
+    /// module's `getPastTotalSupply`) carries the flat term after the stored
     /// end has passed.
     function test_quorumDenominatorCarriesTheFlatTerm() public {
         uint256 id = _mk(400 days);
         vm.prank(owner);
         veHemi.enableAutoRelock(id);
-        uint256 w = veHemi.balanceOfNFT(id);
+        uint256 flatWeight = veHemi.balanceOfNFT(id);
         vm.warp(block.timestamp + 500 days);
-        assertLt(veHemi.getLockedBalance(id).end, block.timestamp, "precondition: frozen end is past");
+        assertLt(veHemi.getLockedBalance(id).end, block.timestamp, "premise: stored end is past");
         veHemi.checkpoint();
-        assertEq(veHemi.totalVeHemiSupply(), w, "denominator lost the flat term");
-        assertEq(vvd.getPastTotalSupply(block.timestamp - 1), w, "past denominator lost it");
+        assertEq(veHemi.totalVeHemiSupply(), flatWeight, "denominator lost the flat term");
+        assertEq(vvd.getPastTotalSupply(block.timestamp - 1), flatWeight, "past denominator lost it");
     }
 }

@@ -2063,7 +2063,7 @@ contract ForkUpgradeLockedCurveTest is Test {
         uint256 tokenId = veHemi.createLock(1000 ether, MAX_TIME / 2);
         vm.stopPrank();
 
-        // createLock auto-delegates to msg.sender; delegation takes effect at next day boundary
+        // createLock auto-delegates to msg.sender; the delegation takes effect at the next second
         _warpAndRoll(1 days + 1);
         veHemi.checkpoint();
 
@@ -2084,12 +2084,12 @@ contract ForkUpgradeLockedCurveTest is Test {
     }
 
     // ═════════════════════════════════════════════════════════════════════
-    //  42. NON-OWNER increaseAmount ON FORFEITABLE POSITION
+    //  42. increaseAmount ON A FORFEITABLE POSITION IS OWNER-ONLY
     // ═════════════════════════════════════════════════════════════════════
 
     /// @notice increaseAmount is owner-only: a non-owner is refused with NotOwner. Verify the
     ///         owner's top-up works correctly for forfeitable positions and updates both curves.
-    function testOwnerIncreaseAmountOnForfeitablePosition() public onlyFork {
+    function testIncreaseAmountOnForfeitablePositionIsOwnerOnly() public onlyFork {
         _upgradeAndSeed();
 
         // Create a forfeitable position owned by 0xCAFE
@@ -2103,9 +2103,9 @@ contract ForkUpgradeLockedCurveTest is Test {
         uint256 forfeitableBefore = veHemi.forfeitableTotalVeHemiSupply();
 
         // A DIFFERENT address (not the owner) is refused
-        address donator = address(0xD000);
-        deal(HEMI_TOKEN, donator, 50 ether);
-        vm.startPrank(donator);
+        address nonOwner = address(0xD000);
+        deal(HEMI_TOKEN, nonOwner, 50 ether);
+        vm.startPrank(nonOwner);
         hemiToken.approve(address(veHemi), 50 ether);
         vm.expectRevert(VeHemi.NotOwner.selector);
         veHemi.increaseAmount(tokenId, 50 ether);
@@ -3307,7 +3307,7 @@ contract ForkUpgradeLockedCurveTest is Test {
         snap.preTotal = veHemi.totalVeHemiSupply();
         snap.preLocked = veHemi.nonTransferableTotalVeHemiSupply();
         snap.preForfeitable = veHemi.forfeitableTotalVeHemiSupply();
-        uint256 preTotalLocked58 = veHemi.totalLocked();
+        uint256 totalLockedBeforeCreate = veHemi.totalLocked();
 
         // Anchor snapshot — mainnet has zero forfeitable positions
         assertEq(snap.preForfeitable, 0, "mainnet seed forfeitable anchor = 0");
@@ -3320,7 +3320,7 @@ contract ForkUpgradeLockedCurveTest is Test {
         vm.stopPrank();
 
         // totalLocked delta on create
-        assertEq(veHemi.totalLocked(), preTotalLocked58 + 100 ether, "totalLocked +100 on create");
+        assertEq(veHemi.totalLocked(), totalLockedBeforeCreate + 100 ether, "totalLocked +100 on create");
 
         // Capture timestamp ONCE — every expected value below uses this exact value.
         snap.t0 = block.timestamp;
@@ -3596,10 +3596,10 @@ contract ForkUpgradeLockedCurveTest is Test {
         assertGt(block.timestamp, ta, "Past TA");
         assertLt(block.timestamp, lockEnd, "Before lock.end");
         // Exact bias instead of assertGt(x, 0)
-        uint256 slope59a = uint256(100 ether) / MAX_TIME;
+        uint256 expectedSlope = uint256(100 ether) / MAX_TIME;
         assertEq(
             veHemi.balanceOfNFT(tokenId),
-            slope59a * (lockEnd - block.timestamp),
+            expectedSlope * (lockEnd - block.timestamp),
             "Position bias = slope*(lockEnd-now)"
         );
 
@@ -3786,7 +3786,7 @@ contract ForkUpgradeLockedCurveTest is Test {
 
         uint256 preForfeitable = veHemi.forfeitableTotalVeHemiSupply();
         uint256 preTotal = veHemi.totalVeHemiSupply();
-        uint256 preTotalLocked59e = veHemi.totalLocked();
+        uint256 totalLockedBeforeCreate = veHemi.totalLocked();
 
         deal(HEMI_TOKEN, GNOSIS_SAFE, 100 ether);
         vm.startPrank(GNOSIS_SAFE);
@@ -3795,7 +3795,7 @@ contract ForkUpgradeLockedCurveTest is Test {
         vm.stopPrank();
 
         // totalLocked delta on create
-        assertEq(veHemi.totalLocked(), preTotalLocked59e + 100 ether, "totalLocked +100 on create");
+        assertEq(veHemi.totalLocked(), totalLockedBeforeCreate + 100 ether, "totalLocked +100 on create");
 
         uint256 t0 = block.timestamp;
         uint256 ta = veHemi.transferableAfter(tokenId);

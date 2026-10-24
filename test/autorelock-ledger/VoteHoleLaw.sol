@@ -6,14 +6,18 @@ import {VeHemiVoteDelegation} from "src/VeHemiVoteDelegation.sol";
 /**
  * @title VoteHoleLaw
  * @notice The bound on the delegation vote hole, shared by the campaign
- *         check (`ARLChecks.checkVoteHoleBounded`) and the directed tests in
- *         test/VoteHole.t.sol.
+ *         check (`AutoRelockLedgerChecks.checkVoteHoleBounded`) and the directed tests in
+ *         test/VoteHole.t.sol. `VoteContinuityLaw` (test/delegation-votes/) differs: it
+ *         reads only the public vote surface over elapsed windows and measures a
+ *         shortfall against records the caller witnessed; this law is a state
+ *         predicate at `block.timestamp` on `delegationBookedAt` and the
+ *         delegation records.
  *
  * @dev WHAT THE HOLE IS. Every weight-changing write on a position runs
  *      `VeHemi._delegate` -> `VeHemiVoteDelegation._delegate`, which retires
  *      the position's old contribution and books the new one. Both legs are
- *      dated `_imm()` and the booking instant is stamped in
- *      `delegationBookedAt`: `block.timestamp + 1`, or the next hourly
+ *      dated `_imm()`, and the booking instant is recorded as the booking
+ *      stamp `delegationBookedAt`: `block.timestamp + 1`, or the next hour
  *      boundary inside the upgrade-hour window (`legacyDatingUntil`). A
  *      booking that matured later than its retirement would leave the
  *      position contributing zero to its delegatee in between, and because
@@ -24,18 +28,18 @@ import {VeHemiVoteDelegation} from "src/VeHemiVoteDelegation.sol";
  *
  *      A — AT MOST ONE CHECKPOINT INTERVAL. For every token carrying a
  *          delegation record, `delegationBookedAt[id] <= nextBoundary(now)`.
- *          A booking may be pending, never pending past the very next hourly
+ *          A booking may be pending, never pending past the very next hour
  *          boundary, so any hole is strictly narrower than CHECKPOINT_INTERVAL
  *          and its end is fixed the moment the write lands.
  *
- *      A2 — NO ORPHAN STAMP. A token with no delegation record carries no
- *          maturity stamp (they are deleted together). A surviving stamp would
- *          be a hole with no way to close.
+ *      A2 — NO ORPHAN BOOKING STAMP. A token with no delegation record
+ *          carries no booking stamp (they are deleted together). A surviving
+ *          booking stamp would be a hole with no way to close.
  *
  *      B — CONFINED, AND HEALED AT THE BOUNDARY. For every delegatee, the
  *          delegatee's live votes are AT LEAST the sum of the contributions of
  *          every token whose booking has already matured. A hole that reached a
- *          co-delegator (not confined) or a hole that outlived its own maturity
+ *          co-delegator (not confined) or a hole that outlived its own booking
  *          stamp (not healed) both break this, and both break it in the wei.
  *          Deliberately `>=`: the over-count is bounded by
  *          `checkVotesNeverExceedSupply`; this law bounds the under-count.
@@ -56,15 +60,15 @@ library VoteHoleLaw {
     uint256 internal constant EPOCH_OFFSET = 0;
 
     struct Report {
-        uint256 lateMaturity;     // clause A violations
-        uint256 maxLateBy;        // wei-equivalent: seconds past the next boundary
-        uint256 orphanStamp;      // clause A2 violations
-        uint256 shortfalls;       // clause B violations
-        uint256 maxShortfallWei;  // worst under-count, in wei
+        uint256 lateMaturities;       // clause A violations
+        uint256 maxLateBySeconds;     // worst lateness, in seconds past the next hour boundary
+        uint256 orphanBookingStamps;  // clause A2 violations
+        uint256 shortfalls;           // clause B violations
+        uint256 maxShortfallWei;      // worst under-count, in wei
         address worstDelegatee;
-        uint256 inHole;           // COVERAGE: records observed mid-hole
-        uint256 maxHoleWidth;     // COVERAGE: widest observed hole, seconds
-        uint256 maturedCounted;   // COVERAGE: matured records the sum reached
+        uint256 inHole;               // COVERAGE: records observed mid-hole
+        uint256 maxHoleWidth;         // COVERAGE: widest observed hole, seconds
+        uint256 maturedCounted;       // COVERAGE: matured records the sum reached
     }
 
     function nextBoundary(uint256 t) internal pure returns (uint256) {
@@ -83,42 +87,43 @@ library VoteHoleLaw {
     }
 
     function scan(
-        VeHemiVoteDelegation d_,
+        VeHemiVoteDelegation delegation_,
         uint256[] memory ids_,
         address[] memory delegatees_,
         uint256 t_
-    ) internal view returns (Report memory r) {
+    ) internal view returns (Report memory report) {
         uint256[] memory matured = new uint256[](delegatees_.length);
-        uint256 nb = nextBoundary(t_);
+        uint256 nextHourBoundary = nextBoundary(t_);
 
         for (uint256 i; i < ids_.length; ++i) {
-            (address dg, uint48 end, uint96 bias, , uint64 slope) = d_.delegations(ids_[i]);
-            uint256 bookedAt = uint256(d_.delegationBookedAt(ids_[i]));
+            (address delegatee, uint48 end, uint96 bias, , uint64 slope) =
+                delegation_.delegations(ids_[i]);
+            uint256 bookedAt = uint256(delegation_.delegationBookedAt(ids_[i]));
 
-            if (dg == address(0)) {
-                if (bookedAt != 0) { unchecked { r.orphanStamp += 1; } }
+            if (delegatee == address(0)) {
+                if (bookedAt != 0) { unchecked { report.orphanBookingStamps += 1; } }
                 continue;
             }
-            if (bookedAt > nb) {
-                unchecked { r.lateMaturity += 1; }
-                uint256 e = bookedAt - nb;
-                if (e > r.maxLateBy) r.maxLateBy = e;
+            if (bookedAt > nextHourBoundary) {
+                unchecked { report.lateMaturities += 1; }
+                uint256 lateBy = bookedAt - nextHourBoundary;
+                if (lateBy > report.maxLateBySeconds) report.maxLateBySeconds = lateBy;
             }
             if (bookedAt > t_) {
                 // MID-HOLE: the booking stamp is still in the future, so the
                 // record has not matured and is not counted. Coverage, not a
                 // violation.
-                unchecked { r.inHole += 1; }
-                uint256 w = bookedAt - t_;
-                if (w > r.maxHoleWidth) r.maxHoleWidth = w;
+                unchecked { report.inHole += 1; }
+                uint256 holeWidth = bookedAt - t_;
+                if (holeWidth > report.maxHoleWidth) report.maxHoleWidth = holeWidth;
                 continue;
             }
-            uint256 c = contributionAt(uint256(slope), uint256(bias), uint256(end), t_);
-            if (c == 0) continue;
+            uint256 contribution = contributionAt(uint256(slope), uint256(bias), uint256(end), t_);
+            if (contribution == 0) continue;
             for (uint256 k; k < delegatees_.length; ++k) {
-                if (delegatees_[k] == dg) {
-                    matured[k] += c;
-                    unchecked { r.maturedCounted += 1; }
+                if (delegatees_[k] == delegatee) {
+                    matured[k] += contribution;
+                    unchecked { report.maturedCounted += 1; }
                     break;
                 }
             }
@@ -126,11 +131,14 @@ library VoteHoleLaw {
 
         for (uint256 k; k < delegatees_.length; ++k) {
             if (matured[k] == 0) continue;
-            uint256 votes = d_.getVotes(delegatees_[k]);
+            uint256 votes = delegation_.getVotes(delegatees_[k]);
             if (votes < matured[k]) {
-                unchecked { r.shortfalls += 1; }
-                uint256 s = matured[k] - votes;
-                if (s > r.maxShortfallWei) { r.maxShortfallWei = s; r.worstDelegatee = delegatees_[k]; }
+                unchecked { report.shortfalls += 1; }
+                uint256 shortfall = matured[k] - votes;
+                if (shortfall > report.maxShortfallWei) {
+                    report.maxShortfallWei = shortfall;
+                    report.worstDelegatee = delegatees_[k];
+                }
             }
         }
     }

@@ -61,7 +61,7 @@ FAILED=0
 # also finds a successor that reaches the chain through `is VeHemi`.
 # Not discovered: a contract that reaches the chain through an aliased import
 # (`import {VeHemiStorageV3 as S}; contract X is S`).
-_slh_flat() {
+_storage_chain_flat_sources() {
   # Strip BOTH comment forms with a state machine (a `/* ... */` NatSpec block
   # that merely ILLUSTRATES a declaration must not be discovered), then join
   # each file onto one line so a wrapped inheritance list stays visible.
@@ -80,36 +80,36 @@ _slh_flat() {
     }
     END { printf "\n" }'
 }
-_slh_heads() {
-  _slh_flat \
+_storage_chain_contract_bases() {
+  _storage_chain_flat_sources \
     | grep -oE '(abstract[[:space:]]+)?contract[[:space:]]+[A-Za-z0-9_]+[[:space:]]+is[[:space:]][^{;]*' \
     | grep -v '^abstract' \
     | sed -E 's/^contract[[:space:]]+([A-Za-z0-9_]+)[[:space:]]+is[[:space:]]/\1\t/'
 }
-_slh_discover() {
-  local seed='VeHemiStorageV[0-9]+|VeHemiDelegationStorageV[0-9]+'
-  local heads acc="" prev="" n m bases
-  heads="$(_slh_heads)"
+_storage_chain_discover() {
+  local chain_pattern='VeHemiStorageV[0-9]+|VeHemiDelegationStorageV[0-9]+'
+  local contract_bases discovered="" prev="" n m bases
+  contract_bases="$(_storage_chain_contract_bases)"
   while :; do
-    acc="$( { printf '%s\n' "$acc"
-              while IFS=$'\t' read -r n bases; do
-                [ -n "$n" ] || continue
-                if printf '%s' "$bases" \
-                     | grep -qE "(^|[^A-Za-z0-9_])($seed)([^A-Za-z0-9_]|$)"; then
-                  printf '%s\n' "$n"
-                fi
-              done <<< "$heads"
-            } | sed '/^$/d' | sort -u )"
-    [ "$acc" = "$prev" ] && break
-    prev="$acc"
-    for m in $acc; do seed="$seed|$m"; done
+    discovered="$( { printf '%s\n' "$discovered"
+                     while IFS=$'\t' read -r n bases; do
+                       [ -n "$n" ] || continue
+                       if printf '%s' "$bases" \
+                            | grep -qE "(^|[^A-Za-z0-9_])($chain_pattern)([^A-Za-z0-9_]|$)"; then
+                         printf '%s\n' "$n"
+                       fi
+                     done <<< "$contract_bases"
+                   } | sed '/^$/d' | sort -u )"
+    [ "$discovered" = "$prev" ] && break
+    prev="$discovered"
+    for m in $discovered; do chain_pattern="$chain_pattern|$m"; done
   done
-  printf '%s\n' "$acc" | sed '/^$/d'
+  printf '%s\n' "$discovered" | sed '/^$/d'
 }
 DISCOVERED=()
 while IFS= read -r name; do
   [ -n "$name" ] && DISCOVERED+=("$name")
-done < <(_slh_discover)
+done < <(_storage_chain_discover)
 # A discovery predicate that matches nothing is broken, not clean: fail closed.
 if [ "${#DISCOVERED[@]}" -eq 0 ]; then
   echo "ERROR: the storage-chain discovery predicate matched NO contract under src/."

@@ -11,26 +11,26 @@ contract FlatSubcurveExitTest is LockedCurveTestBase {
         vm.prank(alice);
         uint256 id = veHemi.createLockFor(100 ether, 2 * 365 days, alice, false, false);
         runSeedingFlow();
-        uint256 ta = veHemi.transferableAfter(id);
+        uint256 transferableAfter = veHemi.transferableAfter(id);
         vm.prank(alice);
         veHemi.enableAutoRelock(id);
 
-        uint256 w = veHemi.balanceOfNFT(id);
-        emit log_named_uint("weight", w);
-        emit log_named_uint("transferableAfter", ta);
+        uint256 flatWeight = veHemi.balanceOfNFT(id);
+        emit log_named_uint("weight", flatWeight);
+        emit log_named_uint("transferableAfter", transferableAfter);
 
         // Walk PAST transferableAfter while still flat. The position becomes
         // TRANSFERABLE (isTransferable == true) and must therefore leave the
-        // locked subcurve -- for a decaying position lockedSlopeChanges[ta]
+        // locked subcurve -- for a decaying position lockedSlopeChanges[transferableAfter]
         // does that automatically.
-        vm.warp(ta + 1);
+        vm.warp(transferableAfter + 1);
         veHemi.checkpoint();
 
         emit log_named_uint("isTransferable", veHemi.isTransferable(id) ? 1 : 0);
         emit log_named_uint("total", veHemi.totalVeHemiSupply());
         emit log_named_uint("nonTransferable", veHemi.nonTransferableTotalVeHemiSupply());
 
-        assertTrue(veHemi.isTransferable(id), "precondition: position is now transferable");
+        assertTrue(veHemi.isTransferable(id), "premise: position is now transferable");
         assertEq(veHemi.nonTransferableTotalVeHemiSupply(), 0,
             "a transferable flat position is still counted in the non-transferable subcurve");
     }
@@ -44,11 +44,11 @@ contract FlatSubcurveExitTest is LockedCurveTestBase {
         vm.prank(alice);
         uint256 id = veHemi.createLockFor(100 ether, 2 * 365 days, alice, false, false);
         runSeedingFlow();
-        uint256 ta = veHemi.transferableAfter(id);
+        uint256 transferableAfter = veHemi.transferableAfter(id);
         vm.prank(alice);
         veHemi.enableAutoRelock(id);
 
-        vm.warp(ta + 1);
+        vm.warp(transferableAfter + 1);
         veHemi.checkpoint();
         // Owner disables; the position now decays out normally in the GLOBAL
         // curve. It must already have left the subcurves at transferableAfter.
@@ -59,10 +59,10 @@ contract FlatSubcurveExitTest is LockedCurveTestBase {
         veHemi.checkpoint();
 
         uint256 total = veHemi.totalVeHemiSupply();
-        uint256 nt = veHemi.nonTransferableTotalVeHemiSupply();
+        uint256 nonTransferableSupply = veHemi.nonTransferableTotalVeHemiSupply();
         emit log_named_uint("total", total);
-        emit log_named_uint("nonTransferable", nt);
-        assertLe(nt, total, "invariant_subcurveOrdering VIOLATED: nonTransferable > total");
+        emit log_named_uint("nonTransferable", nonTransferableSupply);
+        assertLe(nonTransferableSupply, total, "invariant_subcurveOrdering VIOLATED: nonTransferable > total");
     }
 
     /// @dev The READ path must retire the flat position too, when the LAST
@@ -74,23 +74,23 @@ contract FlatSubcurveExitTest is LockedCurveTestBase {
         vm.prank(alice);
         uint256 id = veHemi.createLockFor(100 ether, 2 * 365 days, alice, false, false);
         runSeedingFlow();
-        uint256 ta = veHemi.transferableAfter(id);
+        uint256 transferableAfter = veHemi.transferableAfter(id);
         vm.prank(alice);
         veHemi.enableAutoRelock(id);
 
         // NO checkpoint after this point -- pure view-path query.
-        vm.warp(ta + 1);
+        vm.warp(transferableAfter + 1);
         assertEq(veHemi.nonTransferableTotalVeHemiSupply(), 0,
-            "READ PATH: stale fixedBias reported for a now-transferable flat position");
+            "READ PATH: the non-transferable subcurve still counts a now-transferable flat position");
         assertEq(veHemi.forfeitableTotalVeHemiSupply(), 0, "forfeitable read path");
         (, uint256 locked_, , ) = veHemi.supplyBreakdown();
         assertEq(locked_, 0, "supplyBreakdown read path");
     }
 
-    /// @dev A FLAT position's stored `end` is frozen and falls into the past
-    ///      while it keeps its full, non-decaying weight. `VeHemi::withdraw`
+    /// @dev A FLAT position's stored `end` does not move and falls into the
+    ///      past while it keeps its full, non-decaying weight. `VeHemi::withdraw`
     ///      must therefore refuse a flat position (`LockNotExpired`) even after
-    ///      that stale end: otherwise it would carry its full flat voting power
+    ///      that stored end: otherwise it would carry its full flat voting power
     ///      with zero remaining lock-up.
     function test_flatPositionIsNotWithdrawableUntilDisabledAndServed() public {
         // `enableAutoRelock` refuses a still-non-transferable position until
@@ -99,11 +99,11 @@ contract FlatSubcurveExitTest is LockedCurveTestBase {
         (uint256 id, , uint256 end) = createLock(alice, 100 ether, 2 * 365 days);
         vm.prank(alice);
         veHemi.enableAutoRelock(id);
-        uint256 maxWeight = veHemi.balanceOfNFT(id);
+        uint256 flatWeight = veHemi.balanceOfNFT(id);
 
         // One second after the ORIGINAL unlock time. Weight is untouched...
         vm.warp(end + 1);
-        assertEq(veHemi.balanceOfNFT(id), maxWeight, "weight decayed");
+        assertEq(veHemi.balanceOfNFT(id), flatWeight, "weight decayed");
 
         // ...so the position must NOT be withdrawable. The property: a
         // position carrying non-zero veHEMI weight is never liquid.

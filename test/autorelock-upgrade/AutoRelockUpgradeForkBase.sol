@@ -19,17 +19,20 @@ interface IForkERC20 {
 
 /**
  * Shared fork harness for the upgrade-hour window (`legacyDatingUntil`).
+ * Throughout this directory B is the hour boundary that closes the window,
+ * W is the stored window end (VVD slot 101, `legacyDatingUntil`), and A is
+ * the delegatee of the picked position (`_pickDelegated`).
  *
- * Fork-only: skips without HEMI_RPC_URL. Pinned by AUTORELOCK_TEST_FORK_BLOCK
+ * Fork-only: skips without HEMI_RPC_URL. Forks at AUTORELOCK_TEST_FORK_BLOCK
  * (digits only; default 5,524,738) and logs the block it forked. Skips unless
  * the VVD proxy still points at the deployed implementation. setUp also asserts
  * the three on-chain premises the design rests on, as deploy/08's pre-flight 5b
  * checks them: slot 101 is 0 or an hour boundary at or before the next boundary
- * (a window word left by an earlier armed forward, then a rollback; the armed
- * leg overwrites it), EIP-1967 admin == ProxyAdmin, and Initializable
- * `_initialized == 1`. Over a non-zero window word the plain-leg bodies
- * (`_upgradeBothPlain`) skip: they pin the fallback from W == 0, and over a
- * past boundary a plain leg dates writes immediately instead (deploy/08 never
+ * (a window word left by an earlier window-arming forward, then a rollback; the
+ * window-arming leg overwrites it), EIP-1967 admin == ProxyAdmin, and
+ * Initializable `_initialized == 1`. Over a non-zero window word the plain-leg
+ * bodies (`_upgradeBothPlain`) skip: they pin the fallback from W == 0, and over
+ * a past boundary a plain leg dates writes immediately instead (deploy/08 never
  * queues a plain VVD leg).
  */
 abstract contract AutoRelockUpgradeForkBase is Test {
@@ -51,9 +54,10 @@ abstract contract AutoRelockUpgradeForkBase is Test {
     VeHemiVoteDelegation vvd;
     IVeHemi veHemi;
     address liveVeHemiImpl;
-    bool live;
+    bool forkReady;
     /// @dev VVD slot 101 (`legacyDatingUntil`) at the fork block: 0, or the
-    ///      window word of an earlier armed forward that was rolled back.
+    ///      window word of an earlier window-arming forward that was rolled
+    ///      back.
     uint256 priorWindowWord;
     // Implementations deployed once per test (so a re-upgrade reuses them).
     address newVeHemiImpl;
@@ -65,18 +69,19 @@ abstract contract AutoRelockUpgradeForkBase is Test {
             vm.skip(true);
             return;
         }
-        // Earlier names of the pin and scan variables are refused, not ignored: a
-        // value set under one of them would otherwise select the default silently.
+        // Earlier names of the fork-block and scan variables are refused, not
+        // ignored: a value set under one of them would otherwise select the
+        // default silently.
         require(!vm.envExists("R31_FORK_BLOCK"), "R31_FORK_BLOCK is set (even empty) and not read: unset it and use AUTORELOCK_TEST_FORK_BLOCK");
         require(
             !vm.envExists("R29_SCAN_LO") && !vm.envExists("R29_SCAN_HI"),
             "R29_SCAN_LO/HI are set (even empty) and not read: unset them and use AUTORELOCK_FORK_SCAN_LO/HI"
         );
-        // Digits only: an empty or unset variable selects the default pin, anything
-        // else must parse (a comma-formatted block reverts here). The block is
-        // logged so a rehearsal can check it ran at the signing block.
-        string memory pin = vm.envOr("AUTORELOCK_TEST_FORK_BLOCK", string(""));
-        vm.createSelectFork("hemi", bytes(pin).length == 0 ? 5_524_738 : vm.parseUint(pin));
+        // Digits only: an empty or unset variable selects the default fork block,
+        // anything else must parse (a comma-formatted block reverts here). The
+        // block is logged so a rehearsal can check it ran at the signing block.
+        string memory forkBlockEnv = vm.envOr("AUTORELOCK_TEST_FORK_BLOCK", string(""));
+        vm.createSelectFork("hemi", bytes(forkBlockEnv).length == 0 ? 5_524_738 : vm.parseUint(forkBlockEnv));
         emit log_named_uint("fork block", block.number);
         if (block.chainid != 43111) {
             vm.skip(true);
@@ -88,51 +93,51 @@ abstract contract AutoRelockUpgradeForkBase is Test {
         }
         priorWindowWord = uint256(vm.load(VVD_PROXY, bytes32(uint256(101))));
         assertTrue(
-            priorWindowWord == 0 || (priorWindowWord % HOUR == 0 && priorWindowWord <= _nb(block.timestamp)),
-            "premise: VVD slot 101 is neither 0 nor a window word left by an earlier armed forward"
+            priorWindowWord == 0 || (priorWindowWord % HOUR == 0 && priorWindowWord <= _nextHourBoundary(block.timestamp)),
+            "premise: VVD slot 101 is neither 0 nor a window word left by an earlier window-arming forward"
         );
         assertEq(address(uint160(uint256(vm.load(VVD_PROXY, ADMIN_SLOT)))), PROXY_ADMIN, "premise: VVD admin");
         assertEq(uint256(vm.load(VVD_PROXY, INITIALIZABLE_SLOT)), 1, "premise: VVD _initialized != 1");
         vvd = VeHemiVoteDelegation(VVD_PROXY);
         veHemi = IVeHemi(VEHEMI_PROXY);
         liveVeHemiImpl = address(uint160(uint256(vm.load(VEHEMI_PROXY, IMPL_SLOT))));
-        live = true;
+        forkReady = true;
     }
 
-    function _nb(uint256 t) internal pure returns (uint256) {
+    function _nextHourBoundary(uint256 t) internal pure returns (uint256) {
         return (t / HOUR) * HOUR + HOUR;
     }
 
-    function _impls() internal {
+    function _deployImplementationsOnce() internal {
         if (newVvdImpl == address(0)) {
             newVeHemiImpl = address(new VeHemi(HEMI_TOKEN));
             newVvdImpl = address(new VeHemiVoteDelegation(VEHEMI_PROXY));
         }
     }
 
-    function _armData() internal pure returns (bytes memory) {
+    function _armWindowCalldata() internal pure returns (bytes memory) {
         return abi.encodeCall(VeHemiVoteDelegation.armLegacyDatingWindow, ());
     }
 
     /// @dev THE deploy/08 batch shape: VeHemi FIRST (plain upgrade),
     ///      VVD SECOND via upgradeAndCall(armLegacyDatingWindow()).
-    function _upgradeBoth() internal {
-        _impls();
+    function _upgradeBothAndArmWindow() internal {
+        _deployImplementationsOnce();
         vm.startPrank(SAFE);
         IForkProxyAdmin(PROXY_ADMIN).upgrade(VEHEMI_PROXY, newVeHemiImpl);
-        IForkProxyAdmin(PROXY_ADMIN).upgradeAndCall(VVD_PROXY, newVvdImpl, _armData());
+        IForkProxyAdmin(PROXY_ADMIN).upgradeAndCall(VVD_PROXY, newVvdImpl, _armWindowCalldata());
         vm.stopPrank();
-        assertEq(uint256(vvd.legacyDatingUntil()), _nb(block.timestamp), "arm: window end != next boundary");
+        assertEq(uint256(vvd.legacyDatingUntil()), _nextHourBoundary(block.timestamp), "window arm: window end != next hour boundary");
     }
 
-    /// @dev Two plain upgrades (no arm): the fail-safe fallback. Skips over a
-    ///      non-zero window word (see the contract header).
+    /// @dev Two plain upgrades (no window arm): the fail-safe fallback. Skips
+    ///      over a non-zero window word (see the contract header).
     function _upgradeBothPlain() internal {
         if (priorWindowWord != 0) {
             vm.skip(true); // these bodies pin the fallback from W == 0
             return;
         }
-        _impls();
+        _deployImplementationsOnce();
         vm.startPrank(SAFE);
         IForkProxyAdmin(PROXY_ADMIN).upgrade(VEHEMI_PROXY, newVeHemiImpl);
         IForkProxyAdmin(PROXY_ADMIN).upgrade(VVD_PROXY, newVvdImpl);
@@ -140,32 +145,36 @@ abstract contract AutoRelockUpgradeForkBase is Test {
     }
 
     function _upgradeVeHemiOnly() internal {
-        _impls();
+        _deployImplementationsOnce();
         vm.prank(SAFE);
         IForkProxyAdmin(PROXY_ADMIN).upgrade(VEHEMI_PROXY, newVeHemiImpl);
     }
 
-    function _to(uint256 t) internal {
+    function _warpAndRollTo(uint256 t) internal {
         vm.warp(t);
         vm.roll(block.number + 1);
     }
 
     /// @dev A block after `boundary_` (never backwards in time).
-    function _toAfterB(uint256 boundary_) internal {
+    function _toAfterBoundary(uint256 boundary_) internal {
         uint256 t = boundary_ + 10;
         if (t <= block.timestamp) t = block.timestamp + 12;
-        _to(t);
+        _warpAndRollTo(t);
     }
 
     /// @dev The next 12 s Hemi block, unless that would cross into the next
     ///      hour from B-1, in which case stay in the same block.
     function _nextBlockOrSame(uint256 boundary_) internal {
-        if (block.timestamp + 1 != boundary_) _to(block.timestamp + 12);
+        if (block.timestamp + 1 != boundary_) _warpAndRollTo(block.timestamp + 12);
     }
 
-    /// @dev Live, delegated positions in the scan range, id >= `from_`, at
-    ///      least 30 days from their end, weighing at least `minWeight_`.
-    function _pickFrom(uint256 from_, uint256 minWeight_) internal view returns (uint256 id, address owner, address a) {
+    /// @dev The first delegated position in the scan range with id >= `from_`,
+    ///      at least 30 days from its end, weighing at least `minWeight_`.
+    function _pickDelegatedFrom(uint256 from_, uint256 minWeight_)
+        internal
+        view
+        returns (uint256 id, address owner, address delegatee)
+    {
         uint256 lo = vm.envOr("AUTORELOCK_FORK_SCAN_LO", uint256(29400));
         uint256 hi = vm.envOr("AUTORELOCK_FORK_SCAN_HI", uint256(29720));
         if (from_ > lo) lo = from_;
@@ -177,11 +186,11 @@ abstract contract AutoRelockUpgradeForkBase is Test {
             if (veHemi.balanceOfNFT(i) < minWeight_) continue;
             return (i, veHemi.ownerOf(i), d);
         }
-        revert("no live delegated position in scan range");
+        revert("no delegated position in the scan range at least 30 days from its end and weighing at least minWeight_");
     }
 
-    function _pick() internal view returns (uint256, address, address) {
-        return _pickFrom(0, 1e18);
+    function _pickDelegated() internal view returns (uint256, address, address) {
+        return _pickDelegatedFrom(0, 1e18);
     }
 
     /// The seven execution offsets (seconds after the hour's start). All are
@@ -194,76 +203,76 @@ abstract contract AutoRelockUpgradeForkBase is Test {
 
     // ---------------- raw-state observation (layout of VeHemiDelegationStorageV1) ----------------
 
-    function _cpBase(address d) internal pure returns (bytes32) {
+    function _checkpointArraySlot(address d) internal pure returns (bytes32) {
         return keccak256(abi.encode(d, uint256(1)));
     }
 
     /// @dev Raw words of delegateCheckpoints[d] (length + every element, 2 words each).
-    function _rawArray(address d) internal view returns (bytes32[] memory w) {
-        bytes32 p = _cpBase(d);
-        uint256 len = uint256(vm.load(VVD_PROXY, p));
-        w = new bytes32[](1 + 2 * len);
-        w[0] = bytes32(len);
-        uint256 data = uint256(keccak256(abi.encode(p)));
-        for (uint256 i; i < 2 * len; ++i) w[1 + i] = vm.load(VVD_PROXY, bytes32(data + i));
+    function _rawArray(address d) internal view returns (bytes32[] memory words) {
+        bytes32 arraySlot = _checkpointArraySlot(d);
+        uint256 len = uint256(vm.load(VVD_PROXY, arraySlot));
+        words = new bytes32[](1 + 2 * len);
+        words[0] = bytes32(len);
+        uint256 data = uint256(keccak256(abi.encode(arraySlot)));
+        for (uint256 i; i < 2 * len; ++i) words[1 + i] = vm.load(VVD_PROXY, bytes32(data + i));
     }
 
-    function _rawRecord(uint256 id) internal view returns (bytes32 a, bytes32 b) {
-        uint256 p = uint256(keccak256(abi.encode(id, uint256(0))));
-        a = vm.load(VVD_PROXY, bytes32(p));
-        b = vm.load(VVD_PROXY, bytes32(p + 1));
+    function _rawRecord(uint256 id) internal view returns (bytes32 recordWord0, bytes32 recordWord1) {
+        uint256 recordSlot = uint256(keccak256(abi.encode(id, uint256(0))));
+        recordWord0 = vm.load(VVD_PROXY, bytes32(recordSlot));
+        recordWord1 = vm.load(VVD_PROXY, bytes32(recordSlot + 1));
     }
 
     function _rawBucket(address d, uint256 k) internal view returns (bytes32) {
         return vm.load(VVD_PROXY, keccak256(abi.encode(k, keccak256(abi.encode(d, uint256(2))))));
     }
 
-    /// @dev One digest over the raw state of `ds` x (`keys` buckets) and the
+    /// @dev One digest over the raw state of `delegatees` x (`keys` buckets) and the
     ///      records of `ids`, plus per-item words for diagnostics.
-    function _observe(address[] memory ds, uint256[] memory ids, uint256[] memory keys)
+    function _observe(address[] memory delegatees, uint256[] memory ids, uint256[] memory keys)
         internal
         view
         returns (bytes32[] memory items)
     {
-        items = new bytes32[](ds.length * (1 + keys.length) + ids.length);
+        items = new bytes32[](delegatees.length * (1 + keys.length) + ids.length);
         uint256 n;
-        for (uint256 i; i < ds.length; ++i) {
-            items[n++] = keccak256(abi.encode(_rawArray(ds[i])));
-            for (uint256 j; j < keys.length; ++j) items[n++] = _rawBucket(ds[i], keys[j]);
+        for (uint256 i; i < delegatees.length; ++i) {
+            items[n++] = keccak256(abi.encode(_rawArray(delegatees[i])));
+            for (uint256 j; j < keys.length; ++j) items[n++] = _rawBucket(delegatees[i], keys[j]);
         }
         for (uint256 i; i < ids.length; ++i) {
-            (bytes32 a, bytes32 b) = _rawRecord(ids[i]);
-            items[n++] = keccak256(abi.encode(a, b));
+            (bytes32 recordWord0, bytes32 recordWord1) = _rawRecord(ids[i]);
+            items[n++] = keccak256(abi.encode(recordWord0, recordWord1));
         }
     }
 
-    function _assertSameObs(bytes32[] memory x, bytes32[] memory y, string memory what) internal {
+    function _assertSameObservation(bytes32[] memory x, bytes32[] memory y, string memory what) internal {
         assertEq(x.length, y.length, string.concat(what, ": observation length"));
         for (uint256 i; i < x.length; ++i) {
             if (x[i] != y[i]) emit log_named_uint(string.concat(what, ": raw-state mismatch at item"), i);
         }
-        assertEq(keccak256(abi.encode(x)), keccak256(abi.encode(y)), string.concat(what, ": raw state differs from the live twin"));
+        assertEq(keccak256(abi.encode(x)), keccak256(abi.encode(y)), string.concat(what, ": raw state differs between the two worlds"));
     }
 
     /// @dev DelegateVotesChanged(delegatee, prev, new) emitted by the VVD proxy, in order.
-    function _dvc(Vm.Log[] memory logs) internal pure returns (bytes32[] memory out) {
-        bytes32 t = keccak256("DelegateVotesChanged(address,uint256,uint256)");
+    function _delegateVotesChangedDigests(Vm.Log[] memory logs) internal pure returns (bytes32[] memory out) {
+        bytes32 topic0 = keccak256("DelegateVotesChanged(address,uint256,uint256)");
         uint256 n;
         for (uint256 i; i < logs.length; ++i) {
-            if (logs[i].emitter == VVD_PROXY && logs[i].topics.length > 0 && logs[i].topics[0] == t) ++n;
+            if (logs[i].emitter == VVD_PROXY && logs[i].topics.length > 0 && logs[i].topics[0] == topic0) ++n;
         }
         out = new bytes32[](n);
         n = 0;
         for (uint256 i; i < logs.length; ++i) {
-            if (logs[i].emitter == VVD_PROXY && logs[i].topics.length > 0 && logs[i].topics[0] == t) {
+            if (logs[i].emitter == VVD_PROXY && logs[i].topics.length > 0 && logs[i].topics[0] == topic0) {
                 out[n++] = keccak256(abi.encode(logs[i].topics[1], logs[i].data));
             }
         }
     }
 
-    function _countTopic(Vm.Log[] memory logs, address emitter, bytes32 t) internal pure returns (uint256 n) {
+    function _countTopic(Vm.Log[] memory logs, address emitter, bytes32 topic0) internal pure returns (uint256 n) {
         for (uint256 i; i < logs.length; ++i) {
-            if (logs[i].emitter == emitter && logs[i].topics.length > 0 && logs[i].topics[0] == t) ++n;
+            if (logs[i].emitter == emitter && logs[i].topics.length > 0 && logs[i].topics[0] == topic0) ++n;
         }
     }
 }

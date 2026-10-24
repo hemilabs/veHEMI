@@ -14,25 +14,25 @@ contract GasExhaustingModuleTest is AutoRelockSeamsBase {
         uint256 id = _mint(alice, 1000e18, 3 * SIX_DAYS, true, false);
         ve.updateVoteDelegation(IVeHemiVoteDelegation(address(new RevertingVoteDelegation())));
         vm.warp(ve.getLockedBalance(id).end + 1);
-        uint256 b = hemi.balanceOf(alice);
+        uint256 balanceBefore = hemi.balanceOf(alice);
         vm.prank(alice);
         ve.withdraw(id);
-        assertEq(hemi.balanceOf(alice) - b, 1000e18, "principal trapped (cheap revert)");
+        assertEq(hemi.balanceOf(alice) - balanceBefore, 1000e18, "principal trapped (cheap revert)");
     }
 
     // The same property with a module that breaks by EXHAUSTING GAS.
-    function test_oogModule_withdraw() public {
+    function test_gasExhaustingModule_withdraw() public {
         uint256 id = _mint(alice, 1000e18, 3 * SIX_DAYS, true, false);
         ve.updateVoteDelegation(IVeHemiVoteDelegation(address(new OogVoteDelegation())));
         vm.warp(ve.getLockedBalance(id).end + 1);
-        uint256 b = hemi.balanceOf(alice);
+        uint256 balanceBefore = hemi.balanceOf(alice);
         vm.prank(alice);
         ve.withdraw(id);
-        assertEq(hemi.balanceOf(alice) - b, 1000e18, "PRINCIPAL TRAPPED behind a gas-exhausting delegation module");
+        assertEq(hemi.balanceOf(alice) - balanceBefore, 1000e18, "PRINCIPAL TRAPPED behind a gas-exhausting delegation module");
     }
 
     // Same for a FLAT position: disable then withdraw.
-    function test_oogModule_disable_then_withdraw() public {
+    function test_gasExhaustingModule_disable_then_withdraw() public {
         uint256 id = _mint(alice, 1000e18, 10 * SIX_DAYS, true, false);
         vm.prank(alice);
         ve.enableAutoRelock(id);
@@ -41,14 +41,14 @@ contract GasExhaustingModuleTest is AutoRelockSeamsBase {
         vm.prank(alice);
         ve.disableAutoRelock(id);
         vm.warp(ve.getLockedBalance(id).end + 1);
-        uint256 b = hemi.balanceOf(alice);
+        uint256 balanceBefore = hemi.balanceOf(alice);
         vm.prank(alice);
         ve.withdraw(id);
-        assertEq(hemi.balanceOf(alice) - b, 1000e18, "PRINCIPAL TRAPPED (flat path)");
+        assertEq(hemi.balanceOf(alice) - balanceBefore, 1000e18, "PRINCIPAL TRAPPED (flat path)");
     }
 
     // Forfeit (admin) against the same module.
-    function test_oogModule_forfeit() public {
+    function test_gasExhaustingModule_forfeit() public {
         uint256 id = _mint(alice, 1000e18, 10 * SIX_DAYS, false, true);
         ve.updateVoteDelegation(IVeHemiVoteDelegation(address(new OogVoteDelegation())));
         vm.warp(block.timestamp + SIX_DAYS);
@@ -57,7 +57,7 @@ contract GasExhaustingModuleTest is AutoRelockSeamsBase {
     }
 
     // createLock / transferFrom against the same module.
-    function test_oogModule_createLock_and_transfer() public {
+    function test_gasExhaustingModule_createLock_and_transfer() public {
         ve.updateVoteDelegation(IVeHemiVoteDelegation(address(new OogVoteDelegation())));
         uint256 id = _mint(alice, 1000e18, 10 * SIX_DAYS, true, false);
         vm.prank(alice);

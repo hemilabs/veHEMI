@@ -10,7 +10,7 @@ import {MockERC20} from "../mocks/MockERC20.sol";
 
 /// @notice NO DOUBLE SUBTRACTION in a lock's final hour.
 ///
-///   A retirement inside the window `imm < end <= H` (`imm =
+///   A retirement inside the near-expiry window `imm < end <= H` (`imm =
 ///   block.timestamp + 1`, `H` the next hour boundary) decrements the
 ///   `expiredDelegations` SIX_DAYS bucket AND subtracts from the checkpoint
 ///   aggregate at `imm`. If the two ledgers disagreed about WHEN a
@@ -26,7 +26,7 @@ import {MockERC20} from "../mocks/MockERC20.sol";
 ///   views and the amortiser do not panic.
 contract FinalHourDoubleSubtractionTest is Test {
     VeHemi internal veHemi;
-    VeHemiVoteDelegation internal del;
+    VeHemiVoteDelegation internal delegation;
     MockERC20 internal hemi;
 
     address internal owner = address(this);
@@ -45,12 +45,12 @@ contract FinalHourDoubleSubtractionTest is Test {
     function setUp() public {
         hemi = new MockERC20("HEMI", "HEMI", 18);
         VeHemi logic = new VeHemi(address(hemi));
-        ERC1967Proxy p = new ERC1967Proxy(
+        ERC1967Proxy proxy = new ERC1967Proxy(
             address(logic), abi.encodeWithSelector(VeHemi.initialize.selector, owner)
         );
-        veHemi = VeHemi(address(p));
-        del = new VeHemiVoteDelegation(address(veHemi));
-        veHemi.updateVoteDelegation(del);
+        veHemi = VeHemi(address(proxy));
+        delegation = new VeHemiVoteDelegation(address(veHemi));
+        veHemi.updateVoteDelegation(delegation);
         vm.warp(100 * SIX_DAYS + 1800);
     }
 
@@ -69,30 +69,35 @@ contract FinalHourDoubleSubtractionTest is Test {
     {
         id = _mk(who_, dur_, forfeitable_);
         vm.prank(who_);
-        del.delegate(id, delegatee_);
+        delegation.delegate(id, delegatee_);
     }
 
-    function _H(uint256 t) internal pure returns (uint256) {
+    function _nextHourBoundary(uint256 t) internal pure returns (uint256) {
         return (t / 1 hours) * 1 hours + 1 hours;
     }
 
-    /// @dev Counts instants in `[from_, to_]` where the summed votes of `ds_`
-    ///      exceed `getPastTotalSupply`. A `panic 0x11` in a read fails the
-    ///      body.
-    function _probe(address[] memory ds_, uint256 from_, uint256 to_, string memory tag)
+    /// @dev Counts instants in `[from_, to_]` where the summed votes of
+    ///      `delegatees_` exceed `getPastTotalSupply`. A `panic 0x11` in a read
+    ///      fails the body.
+    function _countVotesAboveSupply(
+        address[] memory delegatees_,
+        uint256 from_,
+        uint256 to_,
+        string memory tag
+    )
         internal
         returns (uint256 violations, int256 worst)
     {
         for (uint256 t = from_; t <= to_; ++t) {
-            uint256 sup = del.getPastTotalSupply(t);
+            uint256 supply = delegation.getPastTotalSupply(t);
             int256 sum;
-            for (uint256 i; i < ds_.length; ++i) {
-                sum += int256(del.getPastVotes(ds_[i], t));
+            for (uint256 i; i < delegatees_.length; ++i) {
+                sum += int256(delegation.getPastVotes(delegatees_[i], t));
             }
-            int256 d = sum - int256(sup);
-            if (d > 0) {
+            int256 excess = sum - int256(supply);
+            if (excess > 0) {
                 violations++;
-                if (d > worst) worst = d;
+                if (excess > worst) worst = excess;
             }
         }
         emit log_named_uint(string.concat(tag, ": instants votes>supply"), violations);
@@ -100,12 +105,14 @@ contract FinalHourDoubleSubtractionTest is Test {
     }
 
     /// @dev Liveness of the two views the panic would brick, at `now`.
-    function _liveness(address[] memory ds_, string memory tag) internal {
-        for (uint256 i; i < ds_.length; ++i) {
-            del.calculateExpiredDelegations(ds_[i]); // MUST NOT panic
-            del.getVotes(ds_[i]); // MUST NOT panic
-            try del.writeNewCheckpointForExpiredDelegations(ds_[i]) {
-                emit log_named_string(string.concat(tag, ": amortiser wrote for"), vm.toString(ds_[i]));
+    function _liveness(address[] memory delegatees_, string memory tag) internal {
+        for (uint256 i; i < delegatees_.length; ++i) {
+            delegation.calculateExpiredDelegations(delegatees_[i]); // MUST NOT panic
+            delegation.getVotes(delegatees_[i]); // MUST NOT panic
+            try delegation.writeNewCheckpointForExpiredDelegations(delegatees_[i]) {
+                emit log_named_string(
+                    string.concat(tag, ": amortiser wrote for"), vm.toString(delegatees_[i])
+                );
             } catch (bytes memory err) {
                 // NoExpirations() is the legitimate refusal. A panic is not.
                 require(
@@ -113,7 +120,7 @@ contract FinalHourDoubleSubtractionTest is Test {
                     "amortiser reverted with something other than NoExpirations"
                 );
             }
-            del.getVotes(ds_[i]);
+            delegation.getVotes(delegatees_[i]);
         }
     }
 
@@ -123,7 +130,7 @@ contract FinalHourDoubleSubtractionTest is Test {
         veHemi.finalizeSeeding();
     }
 
-    function _one(address a_) internal pure returns (address[] memory r) {
+    function _delegatees(address a_) internal pure returns (address[] memory r) {
         r = new address[](1);
         r[0] = a_;
     }
@@ -136,18 +143,20 @@ contract FinalHourDoubleSubtractionTest is Test {
         uint256 idA = _mkTo(alice, carol, 2 * SIX_DAYS, false);
         uint256 idB = _mkTo(bob, carol, 2 * SIX_DAYS, false);
         uint256 end = veHemi.getLockedBalance(idA).end;
-        assertEq(veHemi.getLockedBalance(idB).end, end, "fixture: same bucket");
+        assertEq(veHemi.getLockedBalance(idB).end, end, "premise: same bucket");
 
-        uint256 tau = end - 60;
-        require(_H(tau) >= end, "fixture: not the deferral branch");
-        vm.warp(tau);
+        uint256 retireAt = end - 60;
+        require(_nextHourBoundary(retireAt) >= end, "premise: not the near-expiry branch");
+        vm.warp(retireAt);
         vm.prank(alice);
         veHemi.increaseUnlockTime(idA, 60 * SIX_DAYS);
 
-        vm.warp(_H(tau) + 2 hours);
-        _liveness(_one(carol), "D1");
-        (uint256 v, ) = _probe(_one(carol), tau - 2, _H(tau) + 1, "D1");
-        assertEq(v, 0, "D1: votes exceeded supply");
+        vm.warp(_nextHourBoundary(retireAt) + 2 hours);
+        _liveness(_delegatees(carol), "D1");
+        (uint256 violations, ) = _countVotesAboveSupply(
+            _delegatees(carol), retireAt - 2, _nextHourBoundary(retireAt) + 1, "D1"
+        );
+        assertEq(violations, 0, "D1: votes exceeded supply");
         idB;
     }
 
@@ -160,18 +169,20 @@ contract FinalHourDoubleSubtractionTest is Test {
         uint256 idC = _mkTo(dave, carol, 2 * SIX_DAYS, false);
         uint256 end = veHemi.getLockedBalance(idA).end;
 
-        uint256 tau = end - 60;
-        require(_H(tau) >= end, "fixture: not the deferral branch");
-        vm.warp(tau);
+        uint256 retireAt = end - 60;
+        require(_nextHourBoundary(retireAt) >= end, "premise: not the near-expiry branch");
+        vm.warp(retireAt);
         vm.prank(alice);
         veHemi.increaseUnlockTime(idA, 60 * SIX_DAYS);
         vm.prank(bob);
         veHemi.increaseUnlockTime(idB, 60 * SIX_DAYS);
 
-        vm.warp(_H(tau) + 2 hours);
-        _liveness(_one(carol), "D2");
-        (uint256 v, ) = _probe(_one(carol), tau - 2, _H(tau) + 1, "D2");
-        assertEq(v, 0, "D2: votes exceeded supply");
+        vm.warp(_nextHourBoundary(retireAt) + 2 hours);
+        _liveness(_delegatees(carol), "D2");
+        (uint256 violations, ) = _countVotesAboveSupply(
+            _delegatees(carol), retireAt - 2, _nextHourBoundary(retireAt) + 1, "D2"
+        );
+        assertEq(violations, 0, "D2: votes exceeded supply");
         idC;
     }
 
@@ -189,16 +200,18 @@ contract FinalHourDoubleSubtractionTest is Test {
         vm.prank(dave);
         veHemi.increaseUnlockTime(idC, 60 * SIX_DAYS);
 
-        uint256 tau = end - 60;
-        require(_H(tau) >= end, "fixture: not the deferral branch");
-        vm.warp(tau);
+        uint256 retireAt = end - 60;
+        require(_nextHourBoundary(retireAt) >= end, "premise: not the near-expiry branch");
+        vm.warp(retireAt);
         vm.prank(alice);
         veHemi.increaseUnlockTime(idA, 60 * SIX_DAYS);
 
-        vm.warp(_H(tau) + 2 hours);
-        _liveness(_one(carol), "D3");
-        (uint256 v, ) = _probe(_one(carol), tau - 2, _H(tau) + 1, "D3");
-        assertEq(v, 0, "D3: votes exceeded supply");
+        vm.warp(_nextHourBoundary(retireAt) + 2 hours);
+        _liveness(_delegatees(carol), "D3");
+        (uint256 violations, ) = _countVotesAboveSupply(
+            _delegatees(carol), retireAt - 2, _nextHourBoundary(retireAt) + 1, "D3"
+        );
+        assertEq(violations, 0, "D3: votes exceeded supply");
         idB;
     }
 
@@ -214,19 +227,20 @@ contract FinalHourDoubleSubtractionTest is Test {
         uint256 end = veHemi.getLockedBalance(idA).end;
 
         vm.warp(end - 2);
-        require(_H(end - 2) >= end, "fixture: not the deferral branch");
+        require(_nextHourBoundary(end - 2) >= end, "premise: not the near-expiry branch");
         // pending element at H >= end, built by the amortiser
-        del.writeNewCheckpointForExpiredDelegations(carol);
-        uint256 votesPre = del.getVotes(carol);
+        delegation.writeNewCheckpointForExpiredDelegations(carol);
+        uint256 votesBefore = delegation.getVotes(carol);
 
         veHemi.forfeit(idA); // final-SECOND retirement, same hour as the pending
 
-        assertEq(del.getVotes(carol), votesPre, "D4: retirement moved a value it must not");
+        assertEq(delegation.getVotes(carol), votesBefore, "D4: retirement moved a value it must not");
 
-        vm.warp(_H(end - 2) + 2 hours);
-        _liveness(_one(carol), "D4");
-        (uint256 v, ) = _probe(_one(carol), end - 4, _H(end - 2) + 1, "D4");
-        assertEq(v, 0, "D4: votes exceeded supply");
+        vm.warp(_nextHourBoundary(end - 2) + 2 hours);
+        _liveness(_delegatees(carol), "D4");
+        (uint256 violations, ) =
+            _countVotesAboveSupply(_delegatees(carol), end - 4, _nextHourBoundary(end - 2) + 1, "D4");
+        assertEq(violations, 0, "D4: votes exceeded supply");
         idB;
     }
 
@@ -241,27 +255,34 @@ contract FinalHourDoubleSubtractionTest is Test {
         uint256 endA = veHemi.getLockedBalance(idA).end;
         uint256 endB = veHemi.getLockedBalance(idB).end;
 
-        address[] memory ds = new address[](2);
-        ds[0] = carol;
-        ds[1] = dave;
+        address[] memory delegatees = new address[](2);
+        delegatees[0] = carol;
+        delegatees[1] = dave;
 
-        uint256 tauA = endA - 60;
-        require(_H(tauA) >= endA, "fixture A");
-        vm.warp(tauA);
+        uint256 retireAtA = endA - 60;
+        require(
+            _nextHourBoundary(retireAtA) >= endA,
+            "premise: alice's position is not on the near-expiry branch"
+        );
+        vm.warp(retireAtA);
         vm.prank(alice);
         veHemi.increaseUnlockTime(idA, 60 * SIX_DAYS);
-        _liveness(ds, "D5a");
+        _liveness(delegatees, "D5 after the first retire");
 
-        uint256 tauB = endB - 60;
-        require(_H(tauB) >= endB, "fixture B");
-        vm.warp(tauB);
+        uint256 retireAtB = endB - 60;
+        require(
+            _nextHourBoundary(retireAtB) >= endB,
+            "premise: bob's position is not on the near-expiry branch"
+        );
+        vm.warp(retireAtB);
         vm.prank(bob);
         veHemi.increaseUnlockTime(idB, 60 * SIX_DAYS);
 
-        vm.warp(_H(tauB) + 2 hours);
-        _liveness(ds, "D5b");
-        (uint256 v, ) = _probe(ds, tauB - 2, _H(tauB) + 1, "D5");
-        assertEq(v, 0, "D5: votes exceeded supply");
+        vm.warp(_nextHourBoundary(retireAtB) + 2 hours);
+        _liveness(delegatees, "D5 after the second retire");
+        (uint256 violations, ) =
+            _countVotesAboveSupply(delegatees, retireAtB - 2, _nextHourBoundary(retireAtB) + 1, "D5");
+        assertEq(violations, 0, "D5: votes exceeded supply");
         idC;
     }
 
@@ -276,22 +297,23 @@ contract FinalHourDoubleSubtractionTest is Test {
         uint256 idB = _mkTo(bob, carol, 2 * SIX_DAYS, false);
         uint256 end = veHemi.getLockedBalance(idA).end;
 
-        uint256 tau = end - 60;
-        require(_H(tau) >= end, "fixture: not the deferral branch");
-        vm.warp(tau);
+        uint256 retireAt = end - 60;
+        require(_nextHourBoundary(retireAt) >= end, "premise: not the near-expiry branch");
+        vm.warp(retireAt);
         vm.prank(alice);
         veHemi.increaseUnlockTime(idA, 60 * SIX_DAYS);
 
         // > MAX_LOCK_DURATION past the newest checkpoint -> the wipe branch
-        vm.warp(tau + MAX_TIME + 10 days);
-        _liveness(_one(carol), "D6");
+        vm.warp(retireAt + MAX_TIME + 10 days);
+        _liveness(_delegatees(carol), "D6");
         // a fresh booking into the wiped aggregate, then the views again
         uint256 idC = _mkTo(dave, carol, 2 * SIX_DAYS, false);
-        _liveness(_one(carol), "D6b");
+        _liveness(_delegatees(carol), "D6 after a fresh booking");
         vm.warp(block.timestamp + 3 * SIX_DAYS);
-        _liveness(_one(carol), "D6c");
-        (uint256 v, ) = _probe(_one(carol), block.timestamp - 60, block.timestamp, "D6");
-        assertEq(v, 0, "D6: votes exceeded supply");
+        _liveness(_delegatees(carol), "D6 three buckets later");
+        (uint256 violations, ) =
+            _countVotesAboveSupply(_delegatees(carol), block.timestamp - 60, block.timestamp, "D6");
+        assertEq(violations, 0, "D6: votes exceeded supply");
         idB;
         idC;
     }
@@ -309,20 +331,22 @@ contract FinalHourDoubleSubtractionTest is Test {
         uint256 idB = _mkTo(bob, carol, 2 * SIX_DAYS, false);
         uint256 end = veHemi.getLockedBalance(idB).end;
 
-        uint256 tau = end - 60;
-        require(_H(tau) >= end, "fixture: not the deferral branch");
-        vm.warp(tau);
+        uint256 retireAt = end - 60;
+        require(_nextHourBoundary(retireAt) >= end, "premise: not the near-expiry branch");
+        vm.warp(retireAt);
         vm.prank(bob);
         veHemi.increaseUnlockTime(idB, 60 * SIX_DAYS);
 
-        vm.warp(_H(tau) + 2 hours);
-        _liveness(_one(carol), "D7");
+        vm.warp(_nextHourBoundary(retireAt) + 2 hours);
+        _liveness(_delegatees(carol), "D7");
         // and now retire the flat one
         vm.prank(alice);
         veHemi.disableAutoRelock(idFlat);
-        _liveness(_one(carol), "D7b");
-        (uint256 v, ) = _probe(_one(carol), tau - 2, _H(tau) + 1, "D7");
-        assertEq(v, 0, "D7: votes exceeded supply");
+        _liveness(_delegatees(carol), "D7 after the flat disable");
+        (uint256 violations, ) = _countVotesAboveSupply(
+            _delegatees(carol), retireAt - 2, _nextHourBoundary(retireAt) + 1, "D7"
+        );
+        assertEq(violations, 0, "D7: votes exceeded supply");
     }
 
     // ================================================================== D8
@@ -337,18 +361,18 @@ contract FinalHourDoubleSubtractionTest is Test {
         uint256 idB = _mkTo(bob, carol, 2 * SIX_DAYS, false);
         uint256 end = veHemi.getLockedBalance(idA).end;
 
-        address[] memory ds = new address[](2);
-        ds[0] = carol;
-        ds[1] = dave;
+        address[] memory delegatees = new address[](2);
+        delegatees[0] = carol;
+        delegatees[1] = dave;
 
-        uint256 tau = end - 60;
-        require(_H(tau) >= end, "fixture: not the deferral branch");
-        vm.warp(tau);
+        uint256 retireAt = end - 60;
+        require(_nextHourBoundary(retireAt) >= end, "premise: not the near-expiry branch");
+        vm.warp(retireAt);
 
         // (i) a plain redelegation in the window is REFUSED
         vm.prank(alice);
         vm.expectRevert(VeHemiVoteDelegation.CanNotDelegateExpiredLocks.selector);
-        del.delegate(idA, dave);
+        delegation.delegate(idA, dave);
 
         // (ii) the unprivileged route in: extend, which moves `end` past `H`
         vm.prank(alice);
@@ -356,48 +380,53 @@ contract FinalHourDoubleSubtractionTest is Test {
         // (iii) and immediately redelegate, in the SAME second, exercising the
         //       two-leg live/pending insert right after the in-window write
         vm.prank(alice);
-        del.delegate(idA, dave);
-        _liveness(ds, "D8a");
+        delegation.delegate(idA, dave);
+        _liveness(delegatees, "D8 after the same-second redelegation");
 
-        vm.warp(_H(tau) + 2 hours);
-        _liveness(ds, "D8b");
-        (uint256 v, ) = _probe(ds, tau - 2, _H(tau) + 1, "D8");
-        assertEq(v, 0, "D8: votes exceeded supply");
+        vm.warp(_nextHourBoundary(retireAt) + 2 hours);
+        _liveness(delegatees, "D8 after the hour");
+        (uint256 violations, ) =
+            _countVotesAboveSupply(delegatees, retireAt - 2, _nextHourBoundary(retireAt) + 1, "D8");
+        assertEq(violations, 0, "D8: votes exceeded supply");
         idB;
     }
 
     // ================================================================== D9
     /// @notice Offsets spread across the final hour (`end - k`, k from 1 to
     ///         3599 on a doubling ladder): an `increaseUnlockTime` at each,
-    ///         asserting votes <= supply around `tau` and around `end` and the
+    ///         asserting votes <= supply around `retireAt` and around `end` and the
     ///         liveness of both views, so the body does not depend on which
     ///         second opens the branch.
-    function test_D9_everySecondOfTheFinalHour() public {
-        uint256 worstViolations;
+    function test_D9_offsetsAcrossTheFinalHour() public {
+        uint256 totalViolations;
         uint256 firstBadOffset;
-        uint16[14] memory ks = [uint16(1), 2, 3, 5, 9, 17, 33, 65, 129, 257, 513, 1025, 2049, 3599];
-        for (uint256 j; j < ks.length; ++j) {
-            uint256 k = ks[j];
+        uint16[14] memory offsets =
+            [uint16(1), 2, 3, 5, 9, 17, 33, 65, 129, 257, 513, 1025, 2049, 3599];
+        for (uint256 j; j < offsets.length; ++j) {
+            uint256 k = offsets[j];
             uint256 snap = vm.snapshotState();
             uint256 idA = _mkTo(alice, carol, 2 * SIX_DAYS, false);
             uint256 idB = _mkTo(bob, carol, 2 * SIX_DAYS, false);
             uint256 end = veHemi.getLockedBalance(idA).end;
-            uint256 tau = end - k;
-            vm.warp(tau);
+            uint256 retireAt = end - k;
+            vm.warp(retireAt);
             vm.prank(alice);
             veHemi.increaseUnlockTime(idA, 60 * SIX_DAYS);
-            vm.warp(_H(tau) + 2 hours);
-            _liveness(_one(carol), "D9");
-            (uint256 v, ) = _probe(_one(carol), tau - 1, tau + 1, "D9pt");
-            (uint256 v2, ) = _probe(_one(carol), end - 2, end + 1, "D9end");
-            v += v2;
-            if (v > 0 && firstBadOffset == 0) firstBadOffset = k;
-            worstViolations += v;
+            vm.warp(_nextHourBoundary(retireAt) + 2 hours);
+            _liveness(_delegatees(carol), "D9");
+            (uint256 violations, ) = _countVotesAboveSupply(
+                _delegatees(carol), retireAt - 1, retireAt + 1, "D9 at retireAt"
+            );
+            (uint256 endViolations, ) =
+                _countVotesAboveSupply(_delegatees(carol), end - 2, end + 1, "D9 at end");
+            violations += endViolations;
+            if (violations > 0 && firstBadOffset == 0) firstBadOffset = k;
+            totalViolations += violations;
             idB;
             vm.revertToState(snap);
         }
-        emit log_named_uint("D9: total instants votes>supply over the final hour", worstViolations);
+        emit log_named_uint("D9: total instants votes>supply over the final hour", totalViolations);
         emit log_named_uint("D9: first offset (end - k) with a violation", firstBadOffset);
-        assertEq(worstViolations, 0, "D9: votes exceeded supply somewhere in the final hour");
+        assertEq(totalViolations, 0, "D9: votes exceeded supply somewhere in the final hour");
     }
 }

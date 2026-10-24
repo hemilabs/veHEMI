@@ -15,42 +15,51 @@ import "@openzeppelin/contracts/token/ERC721/IERC721Receiver.sol";
 ///          from inside `_delegate` is refused.
 
 contract BenignReceiver is IERC721Receiver {
-    uint256 public seen;
+    uint256 public hookCalls;
     function onERC721Received(address, address, uint256, bytes calldata) external returns (bytes4) {
-        seen++;
+        hookCalls++;
         return IERC721Receiver.onERC721Received.selector;
     }
 }
 
+// The guarded entry point a `SwallowingReentrantReceiver` re-enters.
+enum ReentryTarget { TransferFrom, Withdraw, CreateLock }
+
 /// Re-enters and SWALLOWS the revert, so the outer call still returns.
-contract SwallowingReentrant is IERC721Receiver {
+contract SwallowingReentrantReceiver is IERC721Receiver {
     VeHemi ve;
-    uint8 public mode;
-    bool public armed;
+    ReentryTarget public reentryTarget;
+    bool public reentryPending;
     bool public innerOk;
     bytes4 public innerErr;
     address public sink;
-    constructor(VeHemi v) { ve = v; }
-    function arm(uint8 m, address s) external { mode = m; sink = s; armed = true; innerOk = false; innerErr = bytes4(0); }
+    constructor(VeHemi ve_) { ve = ve_; }
+    function setReentry(ReentryTarget reentryTarget_, address sink_) external {
+        reentryTarget = reentryTarget_; sink = sink_; reentryPending = true; innerOk = false; innerErr = bytes4(0);
+    }
     function onERC721Received(address, address, uint256 id, bytes calldata) external returns (bytes4) {
-        if (armed) {
-            armed = false;
-            bytes memory cd;
-            if (mode == 1) cd = abi.encodeWithSignature("transferFrom(address,address,uint256)", address(this), sink, id);
-            else if (mode == 2) cd = abi.encodeWithSignature("withdraw(uint256)", id);
-            else cd = abi.encodeWithSignature("createLock(uint256,uint256)", uint256(10 ether), uint256(365 days));
-            (bool s, bytes memory r) = address(ve).call(cd);
-            innerOk = s;
-            if (!s && r.length >= 4) innerErr = bytes4(r);
+        if (reentryPending) {
+            reentryPending = false;
+            bytes memory callData;
+            if (reentryTarget == ReentryTarget.TransferFrom) {
+                callData = abi.encodeWithSignature("transferFrom(address,address,uint256)", address(this), sink, id);
+            } else if (reentryTarget == ReentryTarget.Withdraw) {
+                callData = abi.encodeWithSignature("withdraw(uint256)", id);
+            } else {
+                callData = abi.encodeWithSignature("createLock(uint256,uint256)", uint256(10 ether), uint256(365 days));
+            }
+            (bool ok, bytes memory ret) = address(ve).call(callData);
+            innerOk = ok;
+            if (!ok && ret.length >= 4) innerErr = bytes4(ret);
         }
         return IERC721Receiver.onERC721Received.selector;
     }
 }
 
 /// Re-enters and does NOT swallow — the revert propagates.
-contract PropagatingReentrant is IERC721Receiver {
+contract PropagatingReentrantReceiver is IERC721Receiver {
     VeHemi ve;
-    constructor(VeHemi v) { ve = v; }
+    constructor(VeHemi ve_) { ve = ve_; }
     function onERC721Received(address, address, uint256 id, bytes calldata) external returns (bytes4) {
         ve.transferFrom(address(this), address(0xBEEF), id);
         return IERC721Receiver.onERC721Received.selector;
@@ -59,28 +68,30 @@ contract PropagatingReentrant is IERC721Receiver {
 
 /// A module that satisfies every decode contract VeHemi enforces and re-enters
 /// from inside `VeHemi._delegate`.
-contract GuardProbeModule {
+contract ReentrantDelegationModule {
     VeHemi public ve;
-    bool public armed;
-    address public tgt;
-    bytes public cd;
-    bool public ok;
-    bytes4 public err;
-    function setVeHemi(VeHemi v) external { ve = v; }
-    function arm(address t, bytes calldata c) external { tgt = t; cd = c; armed = true; ok = false; err = bytes4(0); }
+    bool public reentryPending;
+    address public target;
+    bytes public callData;
+    bool public innerOk;
+    bytes4 public innerErr;
+    function setVeHemi(VeHemi ve_) external { ve = ve_; }
+    function setReentry(address target_, bytes calldata callData_) external {
+        target = target_; callData = callData_; reentryPending = true; innerOk = false; innerErr = bytes4(0);
+    }
     function delegation(uint256) external pure returns (IVeHemiVoteDelegation.Delegation memory d) { return d; }
     function autoDelegate(address) external pure returns (address) { return address(0); }
     function delegate(uint256, address) external {
-        if (!armed) return;
-        armed = false;
-        (bool s, bytes memory r) = tgt.call(cd);
-        ok = s;
-        if (!s && r.length >= 4) err = bytes4(r);
+        if (!reentryPending) return;
+        reentryPending = false;
+        (bool ok, bytes memory ret) = target.call(callData);
+        innerOk = ok;
+        if (!ok && ret.length >= 4) innerErr = bytes4(ret);
     }
 }
 
 contract NonReentrantGuardTest is LockedCurveTestBase {
-    bytes4 immutable GUARD = ReentrancyGuardTransientUpgradeable.ReentrancyGuardReentrantCall.selector;
+    bytes4 immutable GUARD_SELECTOR = ReentrancyGuardTransientUpgradeable.ReentrancyGuardReentrantCall.selector;
 
     function _lock(address who, uint256 amt, uint256 dur) internal returns (uint256 id) {
         hemi.mint(who, amt);
@@ -92,29 +103,31 @@ contract NonReentrantGuardTest is LockedCurveTestBase {
 
     // -- G1: a receiver hook cannot re-enter transferFrom, withdraw or createLock
     function test_G1_receiverHookReentryRevertsWithTheGuard() public {
-        SwallowingReentrant rc = new SwallowingReentrant(veHemi);
-        hemi.mint(address(rc), 1_000 ether);
-        vm.prank(address(rc)); hemi.approve(address(veHemi), type(uint256).max);
+        SwallowingReentrantReceiver receiver = new SwallowingReentrantReceiver(veHemi);
+        hemi.mint(address(receiver), 1_000 ether);
+        vm.prank(address(receiver)); hemi.approve(address(veHemi), type(uint256).max);
 
+        string[3] memory targets = ["transferFrom", "withdraw", "createLock"];
         uint256 refusedByGuard;
-        for (uint8 m = 1; m <= 3; ++m) {
+        for (uint8 i; i < 3; ++i) {
+            ReentryTarget reentryTarget = ReentryTarget(i);
             uint256 snap = vm.snapshotState();
             vm.warp(1_700_000_000);
-            uint256 id = _lock(bob, 100 ether, m == 2 ? 370 days : 2 * 365 days);
-            vm.warp(block.timestamp + (m == 2 ? 400 days : 2 hours));
-            rc.arm(m, address(0xBEEF));
+            uint256 id = _lock(bob, 100 ether, reentryTarget == ReentryTarget.Withdraw ? 370 days : 2 * 365 days);
+            vm.warp(block.timestamp + (reentryTarget == ReentryTarget.Withdraw ? 400 days : 2 hours));
+            receiver.setReentry(reentryTarget, address(0xBEEF));
             vm.prank(bob);
-            veHemi.safeTransferFrom(bob, address(rc), id);
-            bool innerOk = rc.innerOk();
-            bytes4 e = rc.innerErr();
+            veHemi.safeTransferFrom(bob, address(receiver), id);
+            bool innerOk = receiver.innerOk();
+            bytes4 innerErr = receiver.innerErr();
             emit log_named_string(
-                string.concat("G1 hook re-entry mode ", vm.toString(uint256(m))),
-                innerOk ? "ADMITTED" : string.concat("refused ", vm.toString(bytes32(e)))
+                string.concat("G1 hook re-entry into ", targets[i]),
+                innerOk ? "ADMITTED" : string.concat("refused ", vm.toString(bytes32(innerErr)))
             );
-            if (!innerOk && e == GUARD) refusedByGuard++;
+            if (!innerOk && innerErr == GUARD_SELECTOR) refusedByGuard++;
             vm.revertToState(snap);
         }
-        emit log_named_uint("G1 modes refused by the GUARD", refusedByGuard);
+        emit log_named_uint("G1 targets refused by the GUARD", refusedByGuard);
         assertEq(refusedByGuard, 3, "G1: onERC721Received re-entry is NOT refused by the reentrancy guard");
     }
 
@@ -123,11 +136,11 @@ contract NonReentrantGuardTest is LockedCurveTestBase {
         vm.warp(1_700_000_000);
         uint256 id = _lock(bob, 100 ether, 2 * 365 days);
         vm.warp(block.timestamp + 2 hours);
-        BenignReceiver b = new BenignReceiver();
+        BenignReceiver benign = new BenignReceiver();
         vm.prank(bob);
-        veHemi.safeTransferFrom(bob, address(b), id);
-        assertEq(b.seen(), 1, "G2: the receiver hook did not fire");
-        assertEq(veHemi.ownerOf(id), address(b), "G2: the token did not arrive");
+        veHemi.safeTransferFrom(bob, address(benign), id);
+        assertEq(benign.hookCalls(), 1, "G2: the receiver hook did not fire");
+        assertEq(veHemi.ownerOf(id), address(benign), "G2: the token did not arrive");
     }
 
     // -- G3: a hook that does not swallow reverts the WHOLE transfer ---------
@@ -135,42 +148,43 @@ contract NonReentrantGuardTest is LockedCurveTestBase {
         vm.warp(1_700_000_000);
         uint256 id = _lock(bob, 100 ether, 2 * 365 days);
         vm.warp(block.timestamp + 2 hours);
-        PropagatingReentrant p = new PropagatingReentrant(veHemi);
+        PropagatingReentrantReceiver propagating = new PropagatingReentrantReceiver(veHemi);
         vm.prank(bob);
         vm.expectRevert(ReentrancyGuardTransientUpgradeable.ReentrancyGuardReentrantCall.selector);
-        veHemi.safeTransferFrom(bob, address(p), id);
+        veHemi.safeTransferFrom(bob, address(propagating), id);
     }
 
     // -- G4: the module path IS guarded --------------------------------------
     function test_G4_moduleReentryIntoAGuardedEntryPointReverts() public {
-        GuardProbeModule mod = new GuardProbeModule();
+        ReentrantDelegationModule module = new ReentrantDelegationModule();
         VeHemi logic = new VeHemi(address(hemi));
-        ERC1967Proxy px = new ERC1967Proxy(address(logic), abi.encodeWithSelector(VeHemi.initialize.selector, admin));
-        VeHemi ve2 = VeHemi(address(px));
-        mod.setVeHemi(ve2);
-        ve2.updateVoteDelegation(IVeHemiVoteDelegation(address(mod)));
+        ERC1967Proxy proxy =
+            new ERC1967Proxy(address(logic), abi.encodeWithSelector(VeHemi.initialize.selector, admin));
+        VeHemi isolatedVeHemi = VeHemi(address(proxy));
+        module.setVeHemi(isolatedVeHemi);
+        isolatedVeHemi.updateVoteDelegation(IVeHemiVoteDelegation(address(module)));
 
         string[5] memory names = ["checkpoint()", "withdraw(1)", "createLock", "transferFrom", "retireStaleAutoRelock(1)"];
         uint256 refused;
         for (uint256 i; i < 5; ++i) {
             uint256 snap = vm.snapshotState();
-            bytes memory cd;
-            if (i == 0) cd = abi.encodeWithSignature("checkpoint()");
-            else if (i == 1) cd = abi.encodeWithSignature("withdraw(uint256)", uint256(1));
-            else if (i == 2) cd = abi.encodeWithSignature("createLock(uint256,uint256)", uint256(10 ether), uint256(365 days));
-            else if (i == 3) cd = abi.encodeWithSignature("transferFrom(address,address,uint256)", address(mod), address(0xBEEF), uint256(1));
-            else cd = abi.encodeWithSignature("retireStaleAutoRelock(uint256)", uint256(1));
-            mod.arm(address(ve2), cd);
+            bytes memory callData;
+            if (i == 0) callData = abi.encodeWithSignature("checkpoint()");
+            else if (i == 1) callData = abi.encodeWithSignature("withdraw(uint256)", uint256(1));
+            else if (i == 2) callData = abi.encodeWithSignature("createLock(uint256,uint256)", uint256(10 ether), uint256(365 days));
+            else if (i == 3) callData = abi.encodeWithSignature("transferFrom(address,address,uint256)", address(module), address(0xBEEF), uint256(1));
+            else callData = abi.encodeWithSignature("retireStaleAutoRelock(uint256)", uint256(1));
+            module.setReentry(address(isolatedVeHemi), callData);
             hemi.mint(alice, 100 ether);
             vm.startPrank(alice);
-            hemi.approve(address(ve2), type(uint256).max);
-            ve2.createLock(100 ether, 365 days);
+            hemi.approve(address(isolatedVeHemi), type(uint256).max);
+            isolatedVeHemi.createLock(100 ether, 365 days);
             vm.stopPrank();
             emit log_named_string(
                 string.concat("G4 ", names[i]),
-                mod.ok() ? "ADMITTED" : string.concat("refused ", vm.toString(bytes32(mod.err())))
+                module.innerOk() ? "ADMITTED" : string.concat("refused ", vm.toString(bytes32(module.innerErr())))
             );
-            if (!mod.ok() && mod.err() == GUARD) refused++;
+            if (!module.innerOk() && module.innerErr() == GUARD_SELECTOR) refused++;
             vm.revertToState(snap);
         }
         emit log_named_uint("G4 refused by the GUARD", refused);

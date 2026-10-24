@@ -1272,11 +1272,11 @@ contract SeedingFlowTest is Test {
     ///         ≈ 12 days` while realistic seeding windows are minutes-to-hours.
     ///         But the contract MUST remain self-consistent if it does occur
     ///         in a stressed test environment: per the documented constraint
-    ///         (VeHemi.sol L1377-L1391), the seeded subcurve carries the
-    ///         position past its true subEnd because the slope-change at
-    ///         `subEnd` was already written by `seedBatch` and the
-    ///         post-finalize walk starts at `tsFinal > subEnd` (so the
-    ///         walk never revisits that bucket).
+    ///         (the OPERATIONAL CONSTRAINT paragraph of `finalizeSeeding`'s
+    ///         NatSpec in VeHemi.sol), the seeded subcurve carries the position
+    ///         past its true subEnd because the slope-change at `subEnd` was
+    ///         already written by `seedBatch` and the post-finalize walk starts
+    ///         at `tsFinal > subEnd` (so the walk never revisits that bucket).
     ///
     ///         Concretely we pin: with one short position (subEnd just inside
     ///         the window) and one long position, the finalized

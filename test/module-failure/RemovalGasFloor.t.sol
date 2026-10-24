@@ -31,8 +31,8 @@ import {VeHemiAragonAdapter} from "../../src/adapter/VeHemiAragonAdapter.sol";
 ///         Each runs against the module called directly and behind an ERC1967
 ///         proxy, with the delegatee's checkpoints fresh or dormant.
 contract RemovalGasFloorTest is AutoRelockTestBase {
-    uint256 internal constant FLOOR = 8_176_984; // VeHemi REMOVAL_GAS_FLOOR: 8M + 8M/63 + 50k
-    uint256 internal constant CAP = 29_000_000;  // below Hemi's 30M block gas limit
+    uint256 internal constant REMOVAL_GAS_FLOOR = 8_176_984; // VeHemi's private constant: 8M + 8M/63 + 50k
+    uint256 internal constant GAS_LIMIT_CAP = 29_000_000;    // below Hemi's 30M block gas limit
 
     enum Op { Disable, Retire, Enable, IncreaseAmountArmed, IncreaseUnlockTimeArmed, CreateArmed }
 
@@ -51,10 +51,10 @@ contract RemovalGasFloorTest is AutoRelockTestBase {
         veHemi.updateVoteDelegation(IVeHemiVoteDelegation(address(p)));
     }
 
-    function _flat(address who_) internal returns (uint256 id) {
+    function _flatDelegated(address who_) internal returns (uint256 id) {
         (id, , ) = createLock(who_, 1_000 ether, 4 * 365 days);
         enable(who_, id);
-        delegateTo(who_, id, dele);
+        delegateTo(who_, id, delegateeA);
         vm.warp(block.timestamp + 7200);
     }
 
@@ -68,12 +68,12 @@ contract RemovalGasFloorTest is AutoRelockTestBase {
     }
 
     function _prepare(Op op_, uint256 dormancy_, uint256 coDelegators_) internal returns (Case memory c) {
-        c.delegatee = dele;
+        c.delegatee = delegateeA;
         c.others = new uint256[](coDelegators_);
         for (uint256 k = 0; k < coDelegators_; ++k) {
-            (uint256 d, , ) = createLock(stranger, 20 ether, (20 + k * 10) * SIX_DAYS);
-            delegateTo(stranger, d, dele);
-            c.others[k] = d;
+            (uint256 otherId, , ) = createLock(stranger, 20 ether, (20 + k * 10) * SIX_DAYS);
+            delegateTo(stranger, otherId, delegateeA);
+            c.others[k] = otherId;
         }
         if (op_ == Op.CreateArmed) {
             c.caller = attacker;
@@ -84,7 +84,7 @@ contract RemovalGasFloorTest is AutoRelockTestBase {
         }
         if (op_ == Op.Enable) {
             (c.id, , ) = createLock(attacker, 1_000 ether, 4 * 365 days);
-            delegateTo(attacker, c.id, dele);
+            delegateTo(attacker, c.id, delegateeA);
             vm.warp(block.timestamp + 7200);
             _ageDelegatee(dormancy_);
             c.caller = attacker;
@@ -92,7 +92,7 @@ contract RemovalGasFloorTest is AutoRelockTestBase {
             return c;
         }
         if (op_ == Op.Retire) {
-            c.id = _flat(victim);
+            c.id = _flatDelegated(victim);
             vm.warp(veHemi.autoRelockStaleAt(c.id) - 1);
             veHemi.checkpoint();
             vm.warp(veHemi.autoRelockStaleAt(c.id));
@@ -103,14 +103,14 @@ contract RemovalGasFloorTest is AutoRelockTestBase {
         if (op_ == Op.IncreaseUnlockTimeArmed) {
             (c.id, , ) = createLock(attacker, 1_000 ether, 2 * 365 days);
             enable(attacker, c.id);
-            delegateTo(attacker, c.id, dele);
+            delegateTo(attacker, c.id, delegateeA);
             vm.warp(block.timestamp + 7200);
             _ageDelegatee(dormancy_);
             c.caller = attacker;
             c.data = abi.encodeCall(veHemi.increaseUnlockTime, (c.id, 4 * 365 days));
             return c;
         }
-        c.id = _flat(attacker);
+        c.id = _flatDelegated(attacker);
         _ageDelegatee(dormancy_);
         c.caller = attacker;
         c.data = op_ == Op.Disable
@@ -123,7 +123,7 @@ contract RemovalGasFloorTest is AutoRelockTestBase {
         (ok, ret) = address(veHemi).call{gas: g_}(c_.data);
     }
 
-    function _probe(Case memory c_, uint256 g_, uint256 snap_) internal returns (bool ok) {
+    function _commitsAt(Case memory c_, uint256 g_, uint256 snap_) internal returns (bool ok) {
         (ok, ) = _call(c_, g_);
         vm.revertToState(snap_);
     }
@@ -135,13 +135,14 @@ contract RemovalGasFloorTest is AutoRelockTestBase {
         uint256 id = op_ == Op.CreateArmed ? veHemi.nextTokenId() - 1 : c_.id;
         bool armed = veHemi.isAutoRelockEnabled(id);
         assertEq(armed, op_ != Op.Disable && op_ != Op.Retire, string.concat(what_, ": wrong flag"));
-        IVeHemiVoteDelegation.Delegation memory d = delegation.delegation(id);
-        bool flat = d.slope == 0 && d.bias > 0;
+        IVeHemiVoteDelegation.Delegation memory record = delegation.delegation(id);
+        bool flat = record.slope == 0 && record.bias > 0;
         assertEq(flat, armed, string.concat(what_, ": record shape disagrees with the flag (phantom or vote hole)"));
         vm.warp(block.timestamp + 2);
-        uint256 w = veHemi.balanceOfNFT(id);
-        for (uint256 k = 0; k < c_.others.length; ++k) w += veHemi.balanceOfNFT(c_.others[k]);
-        assertEq(delegation.getVotes(c_.delegatee), w, string.concat(what_, ": delegatee votes != positions' weight"));
+        uint256 delegatedWeight = veHemi.balanceOfNFT(id);
+        for (uint256 k = 0; k < c_.others.length; ++k) delegatedWeight += veHemi.balanceOfNFT(c_.others[k]);
+        assertEq(delegation.getVotes(c_.delegatee), delegatedWeight,
+            string.concat(what_, ": delegatee votes != positions' weight"));
     }
 
     /// @dev geth/op-geth `eth/gasestimator`: run at the cap; lo = used - 1; probe
@@ -151,23 +152,23 @@ contract RemovalGasFloorTest is AutoRelockTestBase {
     ///      least as generous as geth's; on these floored paths the floor revert
     ///      drives the bisection, so the difference does not matter.
     function _estimate(Case memory c_, uint256 snap_) internal returns (uint256 hi) {
-        uint256 g0 = gasleft();
-        (bool ok, ) = _call(c_, CAP);
-        uint256 used = g0 - gasleft();
+        uint256 gasBefore = gasleft();
+        (bool ok, ) = _call(c_, GAS_LIMIT_CAP);
+        uint256 used = gasBefore - gasleft();
         vm.revertToState(snap_);
         assertTrue(ok, "estimator: the call fails at the cap");
         uint256 lo = used - 1;
-        hi = CAP;
-        uint256 opt = ((used + 2_300) * 64) / 63;
-        if (opt < hi) {
-            if (_probe(c_, opt, snap_)) hi = opt;
-            else lo = opt;
+        hi = GAS_LIMIT_CAP;
+        uint256 optimisticLimit = ((used + 2_300) * 64) / 63;
+        if (optimisticLimit < hi) {
+            if (_commitsAt(c_, optimisticLimit, snap_)) hi = optimisticLimit;
+            else lo = optimisticLimit;
         }
         while (lo + 1 < hi) {
             if ((hi - lo) * 1_000 < hi * 15) break;
             uint256 mid = (hi + lo) / 2;
             if (mid > lo * 2) mid = lo * 2;
-            if (_probe(c_, mid, snap_)) hi = mid;
+            if (_commitsAt(c_, mid, snap_)) hi = mid;
             else lo = mid;
         }
     }
@@ -179,16 +180,16 @@ contract RemovalGasFloorTest is AutoRelockTestBase {
 
         // g*: the smallest gas limit at which the call commits.
         uint256 lo = 100_000;
-        uint256 hi = CAP;
-        assertTrue(_probe(c, hi, snap), string.concat(what_, ": does not commit at the cap"));
+        uint256 hi = GAS_LIMIT_CAP;
+        assertTrue(_commitsAt(c, hi, snap), string.concat(what_, ": does not commit at the cap"));
         while (hi - lo > 1) {
             uint256 mid = (lo + hi) / 2;
-            if (_probe(c, mid, snap)) hi = mid;
+            if (_commitsAt(c, mid, snap)) hi = mid;
             else lo = mid;
         }
         uint256 gStar = hi;
         emit log_named_uint(string.concat(what_, ": smallest committing gas limit"), gStar);
-        assertGt(gStar, FLOOR, string.concat(what_, ": committed below the removal gas floor"));
+        assertGt(gStar, REMOVAL_GAS_FLOOR, string.concat(what_, ": committed below the removal gas floor"));
 
         uint256 committed;
         uint256 refused;
@@ -208,18 +209,20 @@ contract RemovalGasFloorTest is AutoRelockTestBase {
         assertGt(committed, 0, string.concat(what_, ": vacuous, never committed"));
         assertGt(refused, 0, string.concat(what_, ": vacuous, never refused"));
 
-        uint256[3] memory high = [gStar + 1_000_000, gStar + 5_000_000 < CAP ? gStar + 5_000_000 : CAP, CAP];
-        for (uint256 i = 0; i < high.length; ++i) {
-            (bool ok, ) = _call(c, high[i]);
+        uint256[3] memory generousLimits = [
+            gStar + 1_000_000, gStar + 5_000_000 < GAS_LIMIT_CAP ? gStar + 5_000_000 : GAS_LIMIT_CAP, GAS_LIMIT_CAP
+        ];
+        for (uint256 i = 0; i < generousLimits.length; ++i) {
+            (bool ok, ) = _call(c, generousLimits[i]);
             assertTrue(ok, string.concat(what_, ": refused at a generous limit"));
             _assertExact(op_, c, what_);
             vm.revertToState(snap);
         }
 
-        uint256 est = _estimate(c, snap);
-        emit log_named_uint(string.concat(what_, ": emulated eth_estimateGas"), est);
-        (bool okEst, ) = _call(c, est);
-        assertTrue(okEst, string.concat(what_, ": refused at the estimated limit"));
+        uint256 estimatedLimit = _estimate(c, snap);
+        emit log_named_uint(string.concat(what_, ": emulated eth_estimateGas"), estimatedLimit);
+        (bool estimatedOk, ) = _call(c, estimatedLimit);
+        assertTrue(estimatedOk, string.concat(what_, ": refused at the estimated limit"));
         _assertExact(op_, c, string.concat(what_, " at the estimated limit"));
         vm.revertToState(snap);
     }
@@ -249,10 +252,10 @@ contract RemovalGasFloorTest is AutoRelockTestBase {
     function test_floor_createLockWithAutoRelock_proxied() public {
         _sweep(Op.CreateArmed, true, 0, 0, "createLockWithAutoRelock/proxied");
     }
-    function test_floor_increaseAmountArmed_proxied() public {
+    function test_floor_increaseAmountArmed_proxied_dormant30() public {
         _sweep(Op.IncreaseAmountArmed, true, 30, 0, "increaseAmount(armed)/proxied/dormant30");
     }
-    function test_floor_increaseUnlockTimeArmed_proxied() public {
+    function test_floor_increaseUnlockTimeArmed_proxied_dormant30() public {
         _sweep(Op.IncreaseUnlockTimeArmed, true, 30, 0, "increaseUnlockTime(armed)/proxied/dormant30");
     }
 
@@ -272,49 +275,49 @@ contract RemovalGasFloorTest is AutoRelockTestBase {
     function test_floor_unarmedIncreaseAmount_isNotFloored() public {
         _useProxiedVVD();
         (uint256 id, , ) = createLock(attacker, 1_000 ether, 4 * 365 days);
-        delegateTo(attacker, id, dele);
+        delegateTo(attacker, id, delegateeA);
         vm.warp(block.timestamp + 7200);
         vm.prank(attacker);
         (bool ok, ) = address(veHemi).call{gas: 2_000_000}(abi.encodeCall(veHemi.increaseAmount, (id, 1 ether)));
         assertTrue(ok, "an unarmed increaseAmount must not need the removal gas floor");
         vm.warp(block.timestamp + 2);
-        assertEq(delegation.getVotes(dele), veHemi.balanceOfNFT(id), "unarmed re-booking mis-booked");
+        assertEq(delegation.getVotes(delegateeA), veHemi.balanceOfNFT(id), "unarmed re-booking mis-booked");
     }
 
     // ------------------------------------------------------------------
     // Liveness: the honest paths still work at the default gas budget.
     // ------------------------------------------------------------------
     function test_honestPathsUnaffected() public {
-        uint256 id = _flat(attacker);
+        uint256 id = _flatDelegated(attacker);
         disable(attacker, id);
         vm.warp(((block.timestamp / 1 hours) + 2) * 1 hours);
-        assertEq(delegation.getVotes(dele), veHemi.balanceOfNFT(id), "disable mis-booked");
+        assertEq(delegation.getVotes(delegateeA), veHemi.balanceOfNFT(id), "disable mis-booked");
         assertEq(veHemi.autoRelockRemaining(id), 0, "flag survived disable");
 
-        uint256 id2 = _flat(victim);
+        uint256 id2 = _flatDelegated(victim);
         vm.warp(veHemi.autoRelockStaleAt(id2));
         vm.prank(stranger);
         veHemi.retireStaleAutoRelock(id2);
         assertEq(veHemi.autoRelockRemaining(id2), 0, "flag survived retire");
 
         vm.startPrank(attacker);
-        uint256 fresh = veHemi.createLock(500 ether, 4 * 365 days);
+        uint256 createdId = veHemi.createLock(500 ether, 4 * 365 days);
         vm.stopPrank();
-        assertGt(veHemi.balanceOfNFT(fresh), 0, "createLock broke");
+        assertGt(veHemi.balanceOfNFT(createdId), 0, "createLock broke");
     }
 
     // ------------------------------------------------------------------
-    // Vacuity control: `_flat` really books a flat term at `dele`.
+    // Vacuity control: `_flatDelegated` really books a flat term at `delegateeA`.
     // ------------------------------------------------------------------
     function test_vacuity_theFlatTermIsReallyBooked() public {
-        uint256 id = _flat(attacker);
+        uint256 id = _flatDelegated(attacker);
         vm.warp(((block.timestamp / 1 hours) + 2) * 1 hours);
-        uint256 v = delegation.getVotes(dele);
-        assertGt(v, 900 ether, "probe: no flat term booked at the delegatee");
+        uint256 flatVotes = delegation.getVotes(delegateeA);
+        assertGt(flatVotes, 900 ether, "premise: no flat term booked at the delegatee");
         // and it is FLAT: 200 buckets later it has not moved at all.
         vm.warp(block.timestamp + 200 * SIX_DAYS);
         veHemi.checkpoint();
-        assertEq(delegation.getVotes(dele), v, "probe: the term is not flat");
+        assertEq(delegation.getVotes(delegateeA), flatVotes, "premise: the term is not flat");
     }
 
     // ------------------------------------------------------------------
@@ -322,10 +325,10 @@ contract RemovalGasFloorTest is AutoRelockTestBase {
     // retirement commit silently: the read-back announces it with
     // AutoRelockRetirementUnverified, and the exit stays open.
     // ------------------------------------------------------------------
-    function test_lyingModuleCannotCommitARetirement() public {
-        uint256 id = _flat(attacker);
-        uint256 wFlat = delegation.getVotes(dele);
-        assertGt(wFlat, 0, "probe: no flat term booked");
+    function test_lyingModuleRetirementCommitsAndIsAnnounced() public {
+        uint256 id = _flatDelegated(attacker);
+        uint256 flatVotes = delegation.getVotes(delegateeA);
+        assertGt(flatVotes, 0, "premise: no flat term booked");
         veHemi.updateVoteDelegation(IVeHemiVoteDelegation(address(new LyingVoteDelegation(delegation))));
         vm.recordLogs();
         vm.prank(attacker);
@@ -333,7 +336,7 @@ contract RemovalGasFloorTest is AutoRelockTestBase {
         assertTrue(ok, "the exit must not be closed by a module the contract cannot trust");
         assertEq(veHemi.autoRelockRemaining(id), 0, "the flag survived a committed retirement");
         // VACUITY: the lie really did leave the flat term standing.
-        assertEq(delegation.getVotes(dele), wFlat, "probe: the lying module did not actually lie");
+        assertEq(delegation.getVotes(delegateeA), flatVotes, "premise: the lying module did not actually lie");
         Vm.Log[] memory logs = vm.getRecordedLogs();
         bool announced;
         for (uint256 i = 0; i < logs.length; ++i) {
@@ -346,11 +349,11 @@ contract RemovalGasFloorTest is AutoRelockTestBase {
     // Remediation: with no owner action the principal still comes home;
     // replacing the lying module before withdraw retires the term for real.
     // ------------------------------------------------------------------
-    function test_replacingTheLyingModuleRestoresEverything() public {
-        IVeHemiVoteDelegation good = IVeHemiVoteDelegation(address(delegation));
+    function test_lyingModule_principalReturnsWithoutOwner_andReplacementBeforeWithdrawRetiresTheFlatTerm() public {
+        IVeHemiVoteDelegation realDelegation = IVeHemiVoteDelegation(address(delegation));
 
         // (a) NO OWNER ACTION.
-        uint256 idA = _flat(attacker);
+        uint256 idA = _flatDelegated(attacker);
         veHemi.updateVoteDelegation(IVeHemiVoteDelegation(address(new LyingVoteDelegation(delegation))));
         disable(attacker, idA);
         assertEq(veHemi.autoRelockRemaining(idA), 0, "the exit is still closed");
@@ -361,44 +364,45 @@ contract RemovalGasFloorTest is AutoRelockTestBase {
         assertEq(hemi.balanceOf(attacker) - beforeA, 1_000 ether,
             "principal trapped behind a lying module with no owner-independent exit");
 
-        // (b) THE MODULE IS REPLACED INSIDE THE WINDOW. `dele2`, not `dele`,
-        //     because leg (a) deliberately left a permanent phantom on `dele`.
-        veHemi.updateVoteDelegation(good);
+        // (b) THE MODULE IS REPLACED BEFORE WITHDRAW. `delegateeB`, not `delegateeA`,
+        //     because leg (a) deliberately left a permanent phantom on `delegateeA`.
+        veHemi.updateVoteDelegation(realDelegation);
         (uint256 idB, , ) = createLock(victim, 1_000 ether, 4 * 365 days);
         enable(victim, idB);
-        delegateTo(victim, idB, dele2);
+        delegateTo(victim, idB, delegateeB);
         vm.warp(block.timestamp + 7200);
-        uint256 wFlat = delegation.getVotes(dele2);
-        assertGt(wFlat, 0, "probe: nothing booked at dele2");
+        uint256 flatVotes = delegation.getVotes(delegateeB);
+        assertGt(flatVotes, 0, "premise: nothing booked at delegateeB");
         veHemi.updateVoteDelegation(IVeHemiVoteDelegation(address(new LyingVoteDelegation(delegation))));
         disable(victim, idB);
-        assertEq(delegation.getVotes(dele2), wFlat, "probe: the lie did not strand the term");
-        veHemi.updateVoteDelegation(good);
+        assertEq(delegation.getVotes(delegateeB), flatVotes, "premise: the lie did not strand the term");
+        veHemi.updateVoteDelegation(realDelegation);
         vm.warp(veHemi.getLockedBalance(idB).end + 1);
         uint256 beforeB = hemi.balanceOf(victim);
         vm.prank(victim);
         veHemi.withdraw(idB);
         assertEq(hemi.balanceOf(victim) - beforeB, 1_000 ether, "recovery: principal not returned");
         vm.warp(((block.timestamp / 1 hours) + 2) * 1 hours);
-        assertEq(delegation.getVotes(dele2), 0,
-            "recovery: repairing the module inside the window did NOT retire the flat term");
+        assertEq(delegation.getVotes(delegateeB), 0,
+            "recovery: repairing the module before withdraw did NOT retire the flat term");
     }
 
     // ------------------------------------------------------------------
     // The announcement lands more than a whole SIX_DAYS bucket before the
-    // earliest withdraw (R >= 2 * SIX_DAYS), swept across the bucket phase.
+    // earliest withdraw (`autoRelockRemaining` >= 2 * SIX_DAYS), swept across
+    // the bucket phase.
     // ------------------------------------------------------------------
     function test_unverifiedCommitPrecedesWithdrawByAWholeBucket() public {
         uint256 worst = type(uint256).max;
         for (uint256 phase = 0; phase < SIX_DAYS; phase += SIX_DAYS / 24) {
             uint256 snap = vm.snapshotState();
-            // duration 3 buckets, enabled one bucket in, so R lands on its
-            // MINIMUM legal value of 2 * SIX_DAYS at every phase -- the
-            // worst case for the gap this body bounds.
+            // duration 3 buckets, enabled one bucket in, so `autoRelockRemaining`
+            // lands on its MINIMUM legal value of 2 * SIX_DAYS at every phase --
+            // the worst case for the gap this body bounds.
             (uint256 id, , ) = createLock(attacker, 1_000 ether, 3 * SIX_DAYS);
             warpToPhase(phase);
             enable(attacker, id);
-            delegateTo(attacker, id, dele);
+            delegateTo(attacker, id, delegateeA);
             veHemi.updateVoteDelegation(IVeHemiVoteDelegation(address(new LyingVoteDelegation(delegation))));
             disable(attacker, id);
             uint256 gap = uint256(veHemi.getLockedBalance(id).end) - block.timestamp;

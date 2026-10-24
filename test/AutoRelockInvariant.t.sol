@@ -10,12 +10,17 @@ import {InvariantHandler} from "./InvariantHandler.sol";
 /// @notice Auto-relock invariants, plus the governance-denominator law, over the
 ///         same handler as `InvariantTest` (test/Invariant.t.sol). The handler's
 ///         auto-relock actions keep a per-token `FlatGhost` whose anchors (the
-///         end before enable, the enable and disable instants, the R the handler
-///         computed) are written by the handler at the time of each action.
+///         instant and end of the last enable or flat extension, the disable
+///         instant, the R the handler computed) are written by the handler at
+///         the time of each action.
 ///         `afterInvariant` floors the committed enables, disables and flat
 ///         extensions across the campaigns' runs.
+///
+///         Notation: R = `autoRelockRemaining(id)`;
+///         grid(t) = floor(t / SIX_DAYS) * SIX_DAYS, the start of t's six-day bucket.
 contract AutoRelockInvariantTest is Test {
-    /// @dev Private constants of VeHemi, restated.
+    /// @dev Constants of VeHemi, restated (`MAX_TIME` is private there;
+    ///      `SIX_DAYS` is also `veHemi.SIX_DAYS()`).
     uint256 internal constant MAX_TIME = 4 * 365.25 days;
     uint256 internal constant SIX_DAYS = 365.25 days / (12 * 5);
 
@@ -54,7 +59,7 @@ contract AutoRelockInvariantTest is Test {
 
     /// @dev Every invariant below is vacuous on a build without the
     ///      auto-relock ABI (the handler's auto-relock actions are no-ops).
-    function invariant_autoRelockHarnessIsNotVacuous() public view {
+    function invariant_autoRelockAbiIsPresent() public view {
         assertTrue(
             handler.autoRelockSupported(),
             "this build exposes no auto-relock ABI - every auto-relock invariant is vacuous"
@@ -67,9 +72,9 @@ contract AutoRelockInvariantTest is Test {
     ///      mints even one bucket of weight (e.g. stores `R + SIX_DAYS`) is
     ///      self-consistent across every curve, so only a comparison with the
     ///      weight just before the enable sees it.
-    function invariant_autoRelockEnableMintsNoWeight() public view {
+    function invariant_autoRelockEnableStepIsTheBucketMeanClosedForm() public view {
         assertEq(
-            handler.arEnableJumpViolations(),
+            handler.autoRelockEnableStepViolations(),
             0,
             "the enable step is not slope * ((now - grid(now)) - SIX_DAYS/2) to the wei"
         );
@@ -80,16 +85,16 @@ contract AutoRelockInvariantTest is Test {
     ///      for every position the handler believes is flat. Nothing between
     ///      the owner's enable and disable (top-ups included) may change it.
     function invariant_autoRelockRemainingMatchesAuthored() public {
-        uint256 n = handler.arTouchedIdsLength();
+        uint256 n = handler.everEnabledIdsLength();
         for (uint256 i; i < n; ++i) {
-            uint256 id = handler.arTouchedIds(i);
+            uint256 id = handler.everEnabledIds(i);
             InvariantHandler.FlatGhost memory g = handler.flatGhost(id);
-            if (!g.live) continue;
+            if (!g.enabled) continue;
             if (handler._ownerOf(id) == address(0)) continue;
             assertEq(
-                uint256(handler.arRemaining(id)),
+                uint256(handler.readAutoRelockRemaining(id)),
                 uint256(g.remainingAuthored),
-                "autoRelockRemaining != floor((end - grid(enabledAt)) / SIX_DAYS) * SIX_DAYS computed at enable"
+                "autoRelockRemaining != the R the handler computed at the last enable or flat extension"
             );
         }
     }
@@ -98,11 +103,11 @@ contract AutoRelockInvariantTest is Test {
     ///      weight just after the enable, re-based only by a top-up or a flat
     ///      extension (the actions that legitimately change it).
     function invariant_autoRelockIsFlat() public {
-        uint256 n = handler.arTouchedIdsLength();
+        uint256 n = handler.everEnabledIdsLength();
         for (uint256 i; i < n; ++i) {
-            uint256 id = handler.arTouchedIds(i);
+            uint256 id = handler.everEnabledIds(i);
             InvariantHandler.FlatGhost memory g = handler.flatGhost(id);
-            if (!g.live) continue;
+            if (!g.enabled) continue;
             if (handler._ownerOf(id) == address(0)) continue;
             assertEq(
                 veHemi.balanceOfNFT(id),
@@ -116,7 +121,7 @@ contract AutoRelockInvariantTest is Test {
     ///      only withdraw gate, so a far-future sentinel end (or a disable rule
     ///      that hands back more than it froze, cycle after cycle) would make
     ///      the principal unreachable or the position immortal.
-    function invariant_autoRelockNoSentinelEnd() public {
+    function invariant_noLockEndBeyondNowPlusMaxTime() public {
         uint256 nextId = veHemi.nextTokenId();
         uint256 ceiling = block.timestamp + MAX_TIME;
         for (uint256 id = 1; id < nextId; ++id) {
@@ -129,18 +134,21 @@ contract AutoRelockInvariantTest is Test {
         }
     }
 
-    /// @dev Disable restores the pre-enable end carried forward by the whole
-    ///      buckets served flat, and never more. With `E` the end just before
-    ///      the enable at `t_e` and `D` the disable instant,
+    /// @dev Disable restores the anchor end carried forward by the whole
+    ///      buckets served flat, and never more. The anchor is the handler's
+    ///      last enable or flat extension (`extendFlatPosition`) of the
+    ///      position: `t_e` is its instant (`enabledAt`) and `E` its end
+    ///      (`endBeforeEnable`: the end just before the enable, or the end the
+    ///      extension bought). With `D` the disable instant,
     ///          X = grid(D) + (E - grid(t_e))
     ///      and the restored end must satisfy `X - SIX_DAYS < end <= X`. The
     ///      upper bound is anti-ratchet (a cycle never hands back more time than
     ///      it froze); the lower bound caps the loss below one bucket. `X` is
     ///      built from the handler's anchors only, not from the contract's R.
     function invariant_autoRelockDisableIsAntiRatchet() public view {
-        uint256 n = handler.arTouchedIdsLength();
+        uint256 n = handler.everEnabledIdsLength();
         for (uint256 i; i < n; ++i) {
-            uint256 id = handler.arTouchedIds(i);
+            uint256 id = handler.everEnabledIds(i);
             InvariantHandler.FlatGhost memory g = handler.flatGhost(id);
             if (!g.ownerDisabled) continue;
             uint256 x = (uint256(g.disabledAt) / SIX_DAYS) * SIX_DAYS
@@ -171,30 +179,30 @@ contract AutoRelockInvariantTest is Test {
     // one wei over this bound makes `canExecute()` revert for that proposal.
     // =====================================================================
 
-    /// @dev Final-window records sampled per check: the newest three the
-    ///      handler's ring still holds (`_newestFinalWindowRecs`).
-    uint256 private constant FINAL_WINDOW_SAMPLES = 3;
+    /// @dev Lock-final-hour records sampled per check: the newest three the
+    ///      handler's ring still holds (`_newestLockFinalHourRecordIndices`).
+    uint256 private constant LOCK_FINAL_HOUR_SAMPLES = 3;
 
     /// @dev Checked at `now`, `now - 1`, and at instants relative to recorded
-    ///      final-window operations (`InvariantHandler.finalWindowOp`): around
-    ///      the operation instant and around the subject lock's own end. About
-    ///      twenty times the per-call cost of the other bodies (up to 23
-    ///      instants x 7 history reads), hence the smaller PR budget.
+    ///      lock-final-hour operations (`InvariantHandler.lockFinalHourOp`):
+    ///      around the operation instant and around the subject lock's own
+    ///      end. About twenty times the per-call cost of the other bodies (up
+    ///      to 23 instants x 7 history reads), hence the smaller PR budget.
     /// forge-config: ci.invariant.runs = 32
     function invariant_pastVotesNeverExceedPastTotalSupply() public view {
         _checkPastVotesBound(block.timestamp);
         if (block.timestamp > 1) _checkPastVotesBound(block.timestamp - 1);
 
-        uint256 n = handler.finalWindowRecsLength();
-        uint256 lim = n < FINAL_WINDOW_SAMPLES ? n : FINAL_WINDOW_SAMPLES;
-        uint256[] memory newest = _newestFinalWindowRecs(n, lim);
+        uint256 n = handler.lockFinalHourRecordCount();
+        uint256 lim = n < LOCK_FINAL_HOUR_SAMPLES ? n : LOCK_FINAL_HOUR_SAMPLES;
+        uint256[] memory newest = _newestLockFinalHourRecordIndices(n, lim);
         for (uint256 i; i < lim; ++i) {
-            (uint64 tau, uint64 endBefore) = handler.finalWindowRec(newest[i]);
-            if (tau > 1) _checkPastVotesBound(uint256(tau) - 1);
-            _checkPastVotesBound(tau);
-            _checkPastVotesBound(uint256(tau) + 1);
-            if (endBefore > tau) {
-                _checkPastVotesBound((uint256(tau) + uint256(endBefore)) / 2);
+            (uint64 calledAt, uint64 endBefore) = handler.lockFinalHourRecord(newest[i]);
+            if (calledAt > 1) _checkPastVotesBound(uint256(calledAt) - 1);
+            _checkPastVotesBound(calledAt);
+            _checkPastVotesBound(uint256(calledAt) + 1);
+            if (endBefore > calledAt) {
+                _checkPastVotesBound((uint256(calledAt) + uint256(endBefore)) / 2);
                 _checkPastVotesBound(uint256(endBefore) - 1);
             }
             _checkPastVotesBound(endBefore);
@@ -202,24 +210,24 @@ contract AutoRelockInvariantTest is Test {
         }
     }
 
-    /// @dev Indices of the `k_` records with the largest `tau` among the
+    /// @dev Indices of the `k_` records with the largest `calledAt` among the
     ///      ring's `n_`. Until the ring is full the handler appends, so these
     ///      are its last slots; once it is full each record overwrites the
     ///      oldest slot (the handler's write counter mod 8), so the ring holds
     ///      the last eight records and the newest can sit in any slot. Every
-    ///      record warps to an instant after the previous one, so `tau` grows
-    ///      strictly from record to record and the largest are the newest.
-    function _newestFinalWindowRecs(uint256 n_, uint256 k_) internal view returns (uint256[] memory idx) {
-        uint64[] memory taus = new uint64[](n_);
-        for (uint256 i; i < n_; ++i) (taus[i], ) = handler.finalWindowRec(i);
+    ///      record warps to an instant after the previous one, so `calledAt`
+    ///      grows strictly from record to record and the largest are the newest.
+    function _newestLockFinalHourRecordIndices(uint256 n_, uint256 k_) internal view returns (uint256[] memory idx) {
+        uint64[] memory callInstants = new uint64[](n_);
+        for (uint256 i; i < n_; ++i) (callInstants[i], ) = handler.lockFinalHourRecord(i);
         idx = new uint256[](k_);
         for (uint256 j; j < k_; ++j) {
             uint256 best;
             for (uint256 i = 1; i < n_; ++i) {
-                if (taus[i] > taus[best]) best = i;
+                if (callInstants[i] > callInstants[best]) best = i;
             }
             idx[j] = best;
-            taus[best] = 0; // taken (every recorded tau is > 0)
+            callInstants[best] = 0; // taken (every recorded calledAt is > 0)
         }
     }
 
@@ -246,13 +254,14 @@ contract AutoRelockInvariantTest is Test {
     function _coverage() internal view returns (string[] memory names, uint256[] memory counts) {
         names = new string[](3);
         counts = new uint256[](3);
-        names[0] = "enableSuccesses";  counts[0] = handler.arEnableSuccesses();
-        names[1] = "disableSuccesses"; counts[1] = handler.arDisableSuccesses();
-        names[2] = "extendSuccesses";  counts[2] = handler.arExtendSuccesses();
+        names[0] = "enableSuccesses";  counts[0] = handler.autoRelockEnableSuccesses();
+        names[1] = "disableSuccesses"; counts[1] = handler.autoRelockDisableSuccesses();
+        names[2] = "extendSuccesses";  counts[2] = handler.autoRelockExtendSuccesses();
     }
 
-    /// @notice Coverage floor, as in `ARLInvariantTest.afterInvariant`. Foundry
-    ///         resets all EVM state (the handler's counters included) at every
+    /// @notice Coverage floor, as in
+    ///         `AutoRelockLedgerInvariantTest.afterInvariant`. Foundry resets
+    ///         all EVM state (the handler's counters included) at every
     ///         run boundary and calls `afterInvariant` once per run, so the
     ///         counts are summed across runs in process environment variables,
     ///         which the reset does not touch, and the suite fails once

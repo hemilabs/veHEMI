@@ -78,7 +78,7 @@ contract VeHemiV1ToV2UpgradeTest is Test {
         _assertV2Sentinels();
     }
 
-    function test_AllSlotsSurviveUpgrade() public {
+    function test_V1AndV2SlotsSurviveUpgrade() public {
         _writeV1Sentinels();
         _writeV2Sentinels();
         _upgradeTo(address(v2Impl2));

@@ -15,53 +15,53 @@ import {IVeHemiVoteDelegation} from "../../src/interfaces/IVeHemiVoteDelegation.
 contract HonestDelegateGasTest is AutoRelockTestBase {
     uint256 internal constant DELEGATION_GAS_CEILING = 8_000_000;
 
-    function test_worstCaseHonestDelegateGas() public {
+    function test_worstCaseHonestDelegateStaysBelowTheDelegationGasCeiling() public {
         hemi.mint(attacker, 1_000_000 ether);
         vm.prank(attacker);
         hemi.approve(address(veHemi), type(uint256).max);
 
         // one decaying position per SIX_DAYS bucket (2 .. 239 buckets out),
-        // all delegated to `dele`: the delegatee carries the maximum number of
+        // all delegated to `delegateeA`: the delegatee carries the maximum number of
         // expiration buckets.
         for (uint256 i = 2; i < 240; ++i) {
             (uint256 id, , ) = createLock(attacker, 10 ether, i * SIX_DAYS);
-            delegateTo(attacker, id, dele);
+            delegateTo(attacker, id, delegateeA);
         }
         vm.warp(block.timestamp + 7200);
 
-        // the victim: a FLAT, delegated position on the same delegatee.
-        (uint256 vid, , ) = createLock(attacker, 1_000 ether, 4 * 365 days);
-        enable(attacker, vid);
-        delegateTo(attacker, vid, dele);
+        // the flat position: auto-relock on, delegated to the same delegatee.
+        (uint256 flatId, , ) = createLock(attacker, 1_000 ether, 4 * 365 days);
+        enable(attacker, flatId);
+        delegateTo(attacker, flatId, delegateeA);
 
-        // 240 idle buckets: the next write on `dele` walks the whole clamp,
+        // 240 idle buckets: the next write on `delegateeA` walks the whole clamp,
         // across every populated expiration bucket.
         vm.warp(block.timestamp + 240 * SIX_DAYS);
         veHemi.checkpoint(); // VeHemi's own global catch-up is not the module's work
         uint256 snap = vm.snapshotState();
 
-        // (1) the module's own write, called directly: a move-away from `dele`.
-        uint256 g0 = gasleft();
+        // (1) the module's own write, called directly: a move-away from `delegateeA`.
+        uint256 gasBefore = gasleft();
         vm.prank(attacker);
-        delegation.delegate(vid, dele2);
-        uint256 direct = g0 - gasleft();
+        delegation.delegate(flatId, delegateeB);
+        uint256 direct = gasBefore - gasleft();
         emit log_named_uint("direct VVD.delegate gas, 240 idle buckets", direct);
         assertLt(direct, DELEGATION_GAS_CEILING, "an HONEST delegate exceeded the delegation gas ceiling");
         vm.revertToState(snap);
 
         // (2) the whole holder disable (re-books the flat term as decaying at
-        //     `dele`), which contains that module call.
-        uint256 g1 = gasleft();
+        //     `delegateeA`), which contains that module call.
+        uint256 gasBeforeDisable = gasleft();
         vm.prank(attacker);
-        veHemi.disableAutoRelock(vid);
-        uint256 whole = g1 - gasleft();
+        veHemi.disableAutoRelock(flatId);
+        uint256 whole = gasBeforeDisable - gasleft();
         emit log_named_uint("whole disableAutoRelock gas, 240 idle buckets", whole);
         assertLt(whole, DELEGATION_GAS_CEILING, "the worst-case honest disable used more than the ceiling");
 
         // and it really retired the flat term (the cost is not a cheap swallow):
-        // every other position on `dele` has expired.
-        assertEq(veHemi.autoRelockRemaining(vid), 0, "disable did not disarm");
+        // every other position on `delegateeA` has expired.
+        assertEq(veHemi.autoRelockRemaining(flatId), 0, "disable did not disarm");
         vm.warp(((block.timestamp / 1 hours) + 2) * 1 hours);
-        assertEq(delegation.getVotes(dele), veHemi.balanceOfNFT(vid), "disable mis-booked the delegatee");
+        assertEq(delegation.getVotes(delegateeA), veHemi.balanceOfNFT(flatId), "disable mis-booked the delegatee");
     }
 }

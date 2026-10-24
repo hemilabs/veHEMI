@@ -12,10 +12,10 @@ import "../LockedCurveTestBase.sol";
 contract EnableSeedingGuardTest is LockedCurveTestBase {
     /// @dev Refused for the whole seeding window, accepted the instant the
     ///      latch flips.
-    function test_enableBeforeSeedingIsRefused() public {
+    function test_enableIsRefusedUntilSeedingIsFinalized() public {
         vm.prank(alice);
         uint256 id = veHemi.createLockFor(100 ether, 2 * 365 days, alice, false, false);
-        assertFalse(veHemi.lockedSeedingFinalized(), "precondition: not yet finalized");
+        assertFalse(veHemi.lockedSeedingFinalized(), "premise: not yet finalized");
         vm.prank(alice);
         vm.expectRevert(VeHemi.SeedingNotFinalized.selector);
         veHemi.enableAutoRelock(id);
@@ -40,8 +40,8 @@ contract EnableSeedingGuardTest is LockedCurveTestBase {
     }
 
     /// @dev CONTROL. Enable AFTER `finalizeSeeding`: the non-transferable
-    ///      subcurve carries `slope * (ta - now)` at enable and 180 days later,
-    ///      while the global weight stays at the flat level.
+    ///      subcurve carries `slope * (transferableAfter - now)` at enable and
+    ///      180 days later, while the global weight stays at the flat level.
     function test_control_enableAfterSeedingIsSound() public {
         vm.prank(alice);
         uint256 id = veHemi.createLockFor(100 ether, 2 * 365 days, alice, false, false);
@@ -50,19 +50,25 @@ contract EnableSeedingGuardTest is LockedCurveTestBase {
         veHemi.enableAutoRelock(id);
 
         uint256 slope = 100 ether / MAX_TIME;
-        uint256 ta = veHemi.transferableAfter(id);
-        uint256 w = veHemi.balanceOfNFT(id);
-        uint256 r = veHemi.autoRelockRemaining(id);
-        assertEq(w, slope * (r - SIX_DAYS / 2), "flat level is not the bucket mean");
-        assertEq(veHemi.totalVeHemiSupply(), w, "total != the only position");
-        assertEq(veHemi.nonTransferableTotalVeHemiSupply(), slope * (ta - block.timestamp), "subcurve at enable");
+        uint256 transferableAfter = veHemi.transferableAfter(id);
+        uint256 flatWeight = veHemi.balanceOfNFT(id);
+        uint256 remaining = veHemi.autoRelockRemaining(id);
+        assertEq(flatWeight, slope * (remaining - SIX_DAYS / 2), "flat level is not the bucket mean");
+        assertEq(veHemi.totalVeHemiSupply(), flatWeight, "total != the only position");
+        assertEq(
+            veHemi.nonTransferableTotalVeHemiSupply(),
+            slope * (transferableAfter - block.timestamp),
+            "subcurve at enable"
+        );
         assertEq(veHemi.forfeitableTotalVeHemiSupply(), 0, "non-forfeitable position in the forfeitable subcurve");
 
         vm.warp(block.timestamp + 180 days);
         veHemi.checkpoint();
-        assertEq(veHemi.totalVeHemiSupply(), w, "global droop at +180 days");
+        assertEq(veHemi.totalVeHemiSupply(), flatWeight, "global droop at +180 days");
         assertEq(
-            veHemi.nonTransferableTotalVeHemiSupply(), slope * (ta - block.timestamp), "subcurve at +180 days"
+            veHemi.nonTransferableTotalVeHemiSupply(),
+            slope * (transferableAfter - block.timestamp),
+            "subcurve at +180 days"
         );
     }
 }

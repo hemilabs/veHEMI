@@ -263,13 +263,13 @@ contract VeHemiTest is Test {
     }
 
     /// A third party cannot top up somebody else's lock: NotOwner, lock untouched.
-    function testIncreaseAmountRevertsForNonOwner() public {
+    function testIncreaseAmountRevertsIfNotOwner() public {
         uint256 amount = 10 ether;
         (uint256 tokenId, , ) = createLock(user, amount, 4 weeks);
 
-        address depositor = address(0xCAFE);
-        hemi.mint(depositor, 100 ether);
-        vm.startPrank(depositor);
+        address nonOwner = address(0xCAFE);
+        hemi.mint(nonOwner, 100 ether);
+        vm.startPrank(nonOwner);
         hemi.approve(address(veHemi), type(uint256).max);
         vm.expectRevert(VeHemi.NotOwner.selector);
         veHemi.increaseAmount(tokenId, 15 ether);

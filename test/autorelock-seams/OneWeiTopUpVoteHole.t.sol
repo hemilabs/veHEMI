@@ -10,7 +10,7 @@ import "./AutoRelockSeamsBase.sol";
 contract OneWeiTopUpVoteHoleTest is AutoRelockSeamsBase {
     function setUp() public { _deploy(); }
 
-    function _v(string memory tag) internal {
+    function _logAliceVotes(string memory tag) internal {
         emit log_named_uint(tag, del.getVotes(alice));
     }
 
@@ -28,18 +28,18 @@ contract OneWeiTopUpVoteHoleTest is AutoRelockSeamsBase {
         ve.increaseAmount(id, 1);
         vm.stopPrank();
 
-        _v("votes same block");
+        _logAliceVotes("votes same block");
         vm.warp(block.timestamp + 1);
-        _v("votes +1s");
+        _logAliceVotes("votes +1s");
         vm.warp(block.timestamp + 30 minutes);
-        _v("votes +30m");
-        uint256 mid = del.getVotes(alice);
+        _logAliceVotes("votes +30m");
+        uint256 votesInHole = del.getVotes(alice);
         vm.warp(block.timestamp + 1 hours);
-        _v("votes +1h30m");
+        _logAliceVotes("votes +1h30m");
         emit log_named_uint("weight", ve.balanceOfNFT(id));
         emit log_named_uint("supply", ve.totalVeHemiSupply());
 
-        assertGt(mid, 0, "VOTE HOLE: delegatee lost all votes after a 1-wei owner top-up");
+        assertGt(votesInHole, 0, "VOTE HOLE: delegatee lost all votes after a 1-wei owner top-up");
     }
 
     // same, on a FLAT position
@@ -55,11 +55,11 @@ contract OneWeiTopUpVoteHoleTest is AutoRelockSeamsBase {
         ve.increaseAmount(id, 1);
         vm.stopPrank();
         vm.warp(block.timestamp + 30 minutes);
-        uint256 mid = del.getVotes(alice);
-        _v("votes +30m");
+        uint256 votesInHole = del.getVotes(alice);
+        _logAliceVotes("votes +30m");
         vm.warp(block.timestamp + 2 hours);
-        _v("votes +2h30m");
-        assertGt(mid, 0, "VOTE HOLE on flat position");
+        _logAliceVotes("votes +2h30m");
+        assertGt(votesInHole, 0, "VOTE HOLE on flat position");
     }
 
     // getPastVotes inside the hole (this is what a governance snapshot reads)
@@ -71,10 +71,10 @@ contract OneWeiTopUpVoteHoleTest is AutoRelockSeamsBase {
         hemi.approve(address(ve), type(uint256).max);
         ve.increaseAmount(id, 1);
         vm.stopPrank();
-        uint256 holeTs = block.timestamp + 600;
+        uint256 instantInHole = block.timestamp + 600;
         vm.warp(block.timestamp + 3 hours);
-        emit log_named_uint("getPastVotes(alice, holeTs)", del.getPastVotes(alice, holeTs));
-        emit log_named_uint("getPastTotalSupply(holeTs)", del.getPastTotalSupply(holeTs));
-        assertGt(del.getPastVotes(alice, holeTs), 0, "historical snapshot inside the hole reads zero");
+        emit log_named_uint("getPastVotes(alice, instantInHole)", del.getPastVotes(alice, instantInHole));
+        emit log_named_uint("getPastTotalSupply(instantInHole)", del.getPastTotalSupply(instantInHole));
+        assertGt(del.getPastVotes(alice, instantInHole), 0, "historical snapshot inside the hole reads zero");
     }
 }

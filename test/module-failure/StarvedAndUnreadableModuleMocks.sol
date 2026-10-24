@@ -19,14 +19,14 @@ import {IRewardDistributor} from "../../src/interfaces/IRewardDistributor.sol";
 ///         `AutoRelockRetirementUnverified`.
 contract LyingUnreadableVoteDelegation is IVeHemiVoteDelegation {
     IVeHemiVoteDelegation public immutable REAL;
-    uint256 private immutable ID;
-    address private immutable DELEGATEE;
+    uint256 private immutable SEEDED_ID;
+    address private immutable SEEDED_DELEGATEE;
     mapping(uint256 => bool) public cleared;
 
     error NoSuchDelegation();
 
     constructor(IVeHemiVoteDelegation real_, uint256 id_, address delegatee_) {
-        REAL = real_; ID = id_; DELEGATEE = delegatee_;
+        REAL = real_; SEEDED_ID = id_; SEEDED_DELEGATEE = delegatee_;
     }
 
     function delegate(uint256 id_, address) external override {
@@ -35,7 +35,7 @@ contract LyingUnreadableVoteDelegation is IVeHemiVoteDelegation {
 
     function delegation(uint256 id_) external view override returns (Delegation memory d) {
         if (cleared[id_]) revert NoSuchDelegation();
-        if (id_ == ID) { d.delegatee = DELEGATEE; return d; }
+        if (id_ == SEEDED_ID) { d.delegatee = SEEDED_DELEGATEE; return d; }
         return REAL.delegation(id_);
     }
 
@@ -58,7 +58,7 @@ contract LyingUnreadableVoteDelegation is IVeHemiVoteDelegation {
 ///         `eat` is set it consumes EVERY unit of gas it is handed — the
 ///         starvation signature at the `_updateReward` catch. The recording
 ///         leg is the control for the starving one.
-contract StarvableRewardDistributor is IRewardDistributor {
+contract GasEatingRewardDistributor is IRewardDistributor {
     mapping(uint256 => uint256) public callsForToken;
     bool public eat;
 
@@ -80,22 +80,25 @@ contract StarvableRewardDistributor is IRewardDistributor {
 ///         records what `VeHemi` asks it to delegate so the substitution is
 ///         observable; `eat` is switchable so the healthy leg is the control.
 contract GasEatingAutoDelegate is IVeHemiVoteDelegation {
-    address private immutable WHO;
-    address private immutable TARGET;
+    address private immutable STARVED_ACCOUNT;
+    address private immutable AUTO_DELEGATEE;
     bool public eat = true;
     mapping(uint256 => address) public booked;
 
-    constructor(address who_, address target_) { WHO = who_; TARGET = target_; }
+    constructor(address starvedAccount_, address autoDelegatee_) {
+        STARVED_ACCOUNT = starvedAccount_;
+        AUTO_DELEGATEE = autoDelegatee_;
+    }
 
     function setEat(bool v_) external { eat = v_; }
 
     function autoDelegate(address a_) external view override returns (address) {
-        if (a_ == WHO) {
+        if (a_ == STARVED_ACCOUNT) {
             if (eat) {
                 uint256 x = 1;
                 while (true) { x = uint256(keccak256(abi.encode(x))); }
             }
-            return TARGET;
+            return AUTO_DELEGATEE;
         }
         return address(0);
     }

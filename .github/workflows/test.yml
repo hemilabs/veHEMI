@@ -41,7 +41,7 @@ jobs:
 
             # The OpenZeppelin and solc sources in node_modules must be the ones the
             # deployed contracts were compiled from (deployments/hemi/solcInputs).
-            - name: Library drift gate
+            - name: Dependency-source drift gate
               run: |
                   chmod +x scripts/check-oz-drift.sh
                   scripts/check-oz-drift.sh .
@@ -146,11 +146,11 @@ jobs:
                     -vv
               id: test
 
-            # The auto-relock upgrade on a Hemi mainnet fork, pinned
+            # The auto-relock upgrade on a Hemi mainnet fork at a fixed block
             # (test/autorelock-upgrade/AutoRelockUpgradeForkBase.sol;
             # AUTORELOCK_TEST_FORK_BLOCK defaults to 5,524,738). With the RPC set, a
-            # skipped body in that directory is a fork premise that did not hold (for
-            # example a pin after the upgrade executed), not a pass: it fails the step.
+            # skipped test in that directory is a fork premise that did not hold (for
+            # example a fork block after the upgrade executed), not a pass: it fails the step.
             - name: Hemi-fork tests, auto-relock upgrade (requires HEMI_RPC_URL secret)
               if: env.HAS_HEMI_RPC == 'true'
               timeout-minutes: 30
@@ -176,9 +176,9 @@ jobs:
 
             # The V1 -> V2 upgrade suites replay history: they need a block at or
             # below 4,458,622 (markSeedingStarted ran at 4,458,623). They run only
-            # when the HEMI_FORK_BLOCK repository variable pins such a block. Archival:
-            # known red at such a block (7 failing tests) and too slow on a cold
-            # cache.
+            # when the HEMI_FORK_BLOCK repository variable is set to such a block.
+            # Archival: known red at such a block (7 failing tests) and too slow on a
+            # cold cache.
             - name: Hemi-fork tests, V2 upgrade history (requires HEMI_RPC_URL and HEMI_FORK_BLOCK)
               if: env.HAS_HEMI_RPC == 'true' && vars.HEMI_FORK_BLOCK != ''
               timeout-minutes: 10
@@ -199,7 +199,7 @@ jobs:
               id: fork-test-v2
 
             # The Aragon OSx lifecycle against the real DAOFactory on Ethereum
-            # mainnet (14 bodies; without an RPC URL they skip). Runs when the
+            # mainnet (14 tests; without an RPC URL they skip). Runs when the
             # ETH_RPC_URL repository variable is set, and nightly. It must name a
             # key-less public archive endpoint: repository variables are not masked
             # in logs, so never put a keyed URL here.
@@ -242,8 +242,8 @@ jobs:
                   version: v1.5.1
 
             # Every invariant campaign at the default profile's 1024 runs x 128 depth
-            # (the pull-request job runs them at 128 x 128, except two inline ci
-            # overrides).
+            # (the `Foundry project` job runs them at 128 x 128 on every push and
+            # pull request, except two inline ci overrides).
             - name: Invariant campaigns, full budget
               env:
                   FOUNDRY_PROFILE: default
@@ -266,18 +266,19 @@ jobs:
 
             # deploy/08 end to end on a Hemi mainnet fork (about 35 minutes). It runs
             # even when an earlier nightly step failed; only a cancelled run skips it.
-            # Its pin is the AUTORELOCK_FORK_BLOCK repository variable, passed below as
-            # the HEMI_FORK_BLOCK environment variable (AUTORELOCK_TEST_FORK_BLOCK
-            # pins test/autorelock-upgrade; the repository variable HEMI_FORK_BLOCK
-            # pins only the V2-history step). It loads the deployments/hemi records
-            # of the checked-out tree, which must name the live implementations
-            # (docs/AUTO_RELOCK_UPGRADE.md, section 4).
+            # Its fork block is the AUTORELOCK_REHEARSAL_FORK_BLOCK repository variable,
+            # passed below as the HEMI_FORK_BLOCK environment variable
+            # (AUTORELOCK_TEST_FORK_BLOCK sets the fork block of
+            # test/autorelock-upgrade; the repository variable HEMI_FORK_BLOCK sets
+            # the fork block of the V2-history step only). It loads the
+            # deployments/hemi records of the checked-out tree, which must name the
+            # live implementations (docs/AUTO_RELOCK_UPGRADE.md, section 4).
             - name: Auto-relock deploy rehearsal (requires HEMI_RPC_URL secret)
               if: ${{ !cancelled() && env.HAS_HEMI_RPC == 'true' }}
               timeout-minutes: 90
               env:
                   HEMI_RPC_URL: ${{ secrets.HEMI_RPC_URL }}
-                  HEMI_FORK_BLOCK: ${{ vars.AUTORELOCK_FORK_BLOCK || '5524738' }}
+                  HEMI_FORK_BLOCK: ${{ vars.AUTORELOCK_REHEARSAL_FORK_BLOCK || '5524738' }}
               run: |
                   npm run test:hardhat:fork:autorelock
               id: deploy-rehearsal

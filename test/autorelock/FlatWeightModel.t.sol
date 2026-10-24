@@ -6,9 +6,10 @@ import "../LockedCurveTestBase.sol";
 /// @notice The flat (auto-relock) weight model: no droop, no sentinel end, the
 ///         restored slope is retired at the restored end, a decaying position
 ///         never reads as flat, the flat aggregate lives in the global
-///         `Point.amount`, flat votes survive a past end and the delegation
-///         module's MAX_LOCK_DURATION wipe, enable/disable are owner-only, and
-///         a 1-wei top-up keeps R. Bodies that arm a position run the seeding
+///         `Point.amount`, flat votes survive a past stored end and the
+///         delegation module's MAX_LOCK_DURATION wipe, enable/disable are
+///         owner-only, and a 1-wei top-up keeps R (`autoRelockRemaining`, the
+///         frozen remaining term). Bodies that arm a position run the seeding
 ///         flow first, as on a live deployment.
 contract FlatWeightModelTest is LockedCurveTestBase {
     // ---------------------------------------------------------------------
@@ -29,7 +30,7 @@ contract FlatWeightModelTest is LockedCurveTestBase {
             assertEq(veHemi.balanceOfNFT(id), w0, "position weight drooped");
         }
         // lock.end is now firmly in the PAST and the position is still alive.
-        assertLt(veHemi.getLockedBalance(id).end, block.timestamp, "end should be stale");
+        assertLt(veHemi.getLockedBalance(id).end, block.timestamp, "stored end should be past");
         assertEq(veHemi.balanceOfNFT(id), w0, "flat weight lost");
     }
 
@@ -39,11 +40,11 @@ contract FlatWeightModelTest is LockedCurveTestBase {
         vm.prank(alice);
         veHemi.enableAutoRelock(id);
 
-        uint256 s0 = veHemi.totalVeHemiSupply();
-        assertGt(s0, 0);
+        uint256 supplyAtEnable = veHemi.totalVeHemiSupply();
+        assertGt(supplyAtEnable, 0);
         for (uint256 i = 0; i < 241; ++i) {
             vm.warp(block.timestamp + SIX_DAYS);
-            assertEq(veHemi.totalVeHemiSupply(), s0, "global supply drooped");
+            assertEq(veHemi.totalVeHemiSupply(), supplyAtEnable, "global supply drooped");
         }
     }
 
@@ -54,12 +55,12 @@ contract FlatWeightModelTest is LockedCurveTestBase {
         (uint256 id, , ) = createLock(alice, 100 ether, 2 * 365 days);
         vm.prank(alice);
         veHemi.enableAutoRelock(id);
-        uint256 s0 = veHemi.totalVeHemiSupply();
+        uint256 supplyAtEnable = veHemi.totalVeHemiSupply();
 
         vm.warp(block.timestamp + 200 * SIX_DAYS);
         veHemi.checkpoint();
-        assertEq(veHemi.totalVeHemiSupply(), s0, "flat term lost across catch-up");
-        assertEq(veHemi.balanceOfNFT(id), s0, "position weight lost across catch-up");
+        assertEq(veHemi.totalVeHemiSupply(), supplyAtEnable, "flat term lost across catch-up");
+        assertEq(veHemi.balanceOfNFT(id), supplyAtEnable, "position weight lost across catch-up");
     }
 
     // ---------------------------------------------------------------------
@@ -110,7 +111,7 @@ contract FlatWeightModelTest is LockedCurveTestBase {
     }
 
     /// @dev A disable EARLY ENOUGH that the floor-snapped restored end lands
-    ///      on the SAME bucket as the frozen `lock.end`. A `newEnd_ > oldEnd_`
+    ///      on the SAME bucket as the stored `lock.end`. A `newEnd_ > oldEnd_`
     ///      scheduling guard would skip this case and never retire the
     ///      restored slope.
     ///
@@ -118,19 +119,19 @@ contract FlatWeightModelTest is LockedCurveTestBase {
     ///      position the global bias clamp at 0 hides the leak completely.
     function test_disableWithinSameBucket_stillRetiresSlope() public {
         runSeedingFlow();
-        (uint256 victim, , ) = createLock(bob, 500 ether, 4 * 365 days);
+        (uint256 bobId, , ) = createLock(bob, 500 ether, 4 * 365 days);
         (uint256 id, , uint256 end) = createLock(alice, 100 ether, 2 * 365 days);
 
         vm.prank(alice);
         veHemi.enableAutoRelock(id);
         // Less than one SIX_DAYS bucket, so grid(now) + R == end; the
-        // precondition below pins it.
+        // premise below pins it.
         vm.warp(block.timestamp + 3 days);
         vm.prank(alice);
         veHemi.disableAutoRelock(id);
 
         uint64 newEnd = veHemi.getLockedBalance(id).end;
-        assertEq(newEnd, end, "precondition: restored end must collide with the frozen end");
+        assertEq(newEnd, end, "premise: restored end must collide with the stored end");
 
         int128 expected = -int128(int256(100 ether / MAX_TIME));
         assertEq(veHemi.slopeChanges(newEnd), expected,
@@ -141,21 +142,21 @@ contract FlatWeightModelTest is LockedCurveTestBase {
         // slope keeps subtracting bob's weight forever.
         vm.warp(uint256(newEnd) + 180 days);
         veHemi.checkpoint();
-        assertEq(veHemi.totalVeHemiSupply(), veHemi.balanceOfNFT(victim),
+        assertEq(veHemi.totalVeHemiSupply(), veHemi.balanceOfNFT(bobId),
             "global supply != the only surviving position -- slope leak");
     }
 
     /// @dev Same collision, reached the other way: ENABLE must not leave a
-    ///      stale retirement behind either.
+    ///      leftover slope retirement behind either.
     function test_enableCancelsTheOutgoingRetirement() public {
         runSeedingFlow();
         (uint256 id, , uint256 end) = createLock(alice, 100 ether, 2 * 365 days);
         int128 before = veHemi.slopeChanges(end);
-        assertEq(before, -int128(int256(100 ether / MAX_TIME)), "precondition");
+        assertEq(before, -int128(int256(100 ether / MAX_TIME)), "premise: the slope retirement is not scheduled at the end");
         vm.prank(alice);
         veHemi.enableAutoRelock(id);
         assertEq(veHemi.slopeChanges(end), int128(0),
-            "enable left a stale slope retirement at the frozen end");
+            "enable left the scheduled slope retirement at the stored end");
     }
 
     /// @dev The single-position case above can be satisfied by the bias clamp.
@@ -164,7 +165,7 @@ contract FlatWeightModelTest is LockedCurveTestBase {
     ///      weight measurably.
     function test_disableDoesNotDestroyOtherPositions() public {
         runSeedingFlow();
-        (uint256 victim, , ) = createLock(bob, 500 ether, 4 * 365 days);
+        (uint256 bobId, , ) = createLock(bob, 500 ether, 4 * 365 days);
         (uint256 id, , ) = createLock(alice, 100 ether, 2 * 365 days);
 
         vm.prank(alice);
@@ -177,7 +178,7 @@ contract FlatWeightModelTest is LockedCurveTestBase {
         vm.warp(uint256(aliceEnd) + 180 days);
         veHemi.checkpoint();
 
-        assertEq(veHemi.totalVeHemiSupply(), veHemi.balanceOfNFT(victim),
+        assertEq(veHemi.totalVeHemiSupply(), veHemi.balanceOfNFT(bobId),
             "global supply != the only surviving position -- slope leak");
     }
 
@@ -210,12 +211,12 @@ contract FlatWeightModelTest is LockedCurveTestBase {
             "Point.amount is non-zero while no position is armed");
         vm.prank(alice);
         veHemi.enableAutoRelock(id);
-        uint256 w = veHemi.balanceOfNFT(id);
-        assertEq(veHemi.getGlobalPoint(veHemi.epoch()).amount, w, "flat aggregate not in Point.amount");
+        uint256 flatWeight = veHemi.balanceOfNFT(id);
+        assertEq(veHemi.getGlobalPoint(veHemi.epoch()).amount, flatWeight, "flat aggregate not in Point.amount");
 
         vm.warp(block.timestamp + 40 * SIX_DAYS);
         veHemi.checkpoint();
-        assertEq(veHemi.getGlobalPoint(veHemi.epoch()).amount, w, "flat aggregate not carried");
+        assertEq(veHemi.getGlobalPoint(veHemi.epoch()).amount, flatWeight, "flat aggregate not carried");
 
         vm.prank(alice);
         veHemi.disableAutoRelock(id);
@@ -241,30 +242,30 @@ contract FlatWeightModelTest is LockedCurveTestBase {
     }
 
     // ---------------------------------------------------------------------
-    // The liveness checks. A flat position with a PAST end must still
+    // The liveness checks. A flat position with a PAST stored end must still
     // be delegatable and must still carry voting power.
     // ---------------------------------------------------------------------
-    function test_flatPositionWithPastEndStillHasVotes() public {
+    function test_flatPositionWithPastStoredEndStillHasVotes() public {
         runSeedingFlow();
         (uint256 id, , ) = createLock(alice, 100 ether, 2 * 365 days);
         vm.prank(alice);
         veHemi.enableAutoRelock(id);
-        uint256 w = veHemi.balanceOfNFT(id);
+        uint256 flatWeight = veHemi.balanceOfNFT(id);
 
-        // Warp past the frozen lock.end.
+        // Warp past the stored lock.end.
         vm.warp(block.timestamp + 200 * SIX_DAYS);
-        assertLt(veHemi.getLockedBalance(id).end, block.timestamp, "precondition: end must be past");
+        assertLt(veHemi.getLockedBalance(id).end, block.timestamp, "premise: stored end must be past");
 
         // The liveness checks in VeHemi._delegate and _getNormalizedLockedInfo.
         vm.prank(alice);
         delegation.delegate(id, bob);
 
         vm.warp(block.timestamp + 1 hours);
-        assertEq(delegation.getVotes(bob), w, "flat votes lost");
+        assertEq(delegation.getVotes(bob), flatWeight, "flat votes lost");
 
         // ... and they must not decay.
         vm.warp(block.timestamp + 100 * SIX_DAYS);
-        assertEq(delegation.getVotes(bob), w, "flat votes decayed");
+        assertEq(delegation.getVotes(bob), flatWeight, "flat votes decayed");
     }
 
     /// @dev The MAX_LOCK_DURATION wipe branch of
@@ -275,13 +276,13 @@ contract FlatWeightModelTest is LockedCurveTestBase {
         (uint256 id, , ) = createLock(alice, 100 ether, 2 * 365 days);
         vm.prank(alice);
         veHemi.enableAutoRelock(id);
-        uint256 w = veHemi.balanceOfNFT(id);
+        uint256 flatWeight = veHemi.balanceOfNFT(id);
         vm.prank(alice);
         delegation.delegate(id, bob);
 
         // > MAX_LOCK_DURATION past the checkpoint -> the wipe branch fires.
         vm.warp(block.timestamp + 5 * 365 days);
-        assertEq(delegation.getVotes(bob), w, "flat votes wiped by MAX_LOCK_DURATION branch");
+        assertEq(delegation.getVotes(bob), flatWeight, "flat votes wiped by MAX_LOCK_DURATION branch");
     }
 
     // ---------------------------------------------------------------------
@@ -312,7 +313,7 @@ contract FlatWeightModelTest is LockedCurveTestBase {
         vm.prank(alice);
         veHemi.enableAutoRelock(id);
         uint64 r = veHemi.autoRelockRemaining(id);
-        uint256 w = veHemi.balanceOfNFT(id);
+        uint256 flatWeight = veHemi.balanceOfNFT(id);
         assertGt(r, 0);
 
         vm.startPrank(alice);
@@ -322,8 +323,8 @@ contract FlatWeightModelTest is LockedCurveTestBase {
         vm.stopPrank();
 
         assertEq(veHemi.autoRelockRemaining(id), r, "a 1-wei top-up cleared R");
-        assertGe(veHemi.balanceOfNFT(id), w, "a 1-wei top-up reduced the weight");
+        assertGe(veHemi.balanceOfNFT(id), flatWeight, "a 1-wei top-up reduced the weight");
         vm.warp(block.timestamp + 100 * SIX_DAYS);
-        assertGe(veHemi.balanceOfNFT(id), w, "position resumed decaying after the top-up");
+        assertGe(veHemi.balanceOfNFT(id), flatWeight, "position resumed decaying after the top-up");
     }
 }

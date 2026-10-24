@@ -4,7 +4,7 @@ pragma solidity ^0.8.29;
 import "../LockedCurveTestBase.sol";
 import {Vm} from "forge-std/Vm.sol";
 
-/// @title E-ORDER on the auto-relock event stream.
+/// @title Flag events precede their checkpoint on the auto-relock event stream.
 ///
 /// The event-order rule documented on `IVeHemi::AutoRelockEnabled` (called
 /// E-ORDER here): both flag events (`AutoRelockEnabled`, `AutoRelockDisabled`)
@@ -25,6 +25,8 @@ import {Vm} from "forge-std/Vm.sol";
 ///
 /// Scope: the ABI / log surface only. Emit order cannot move a balance, a
 /// weight or a vote; the subject is what an indexer derives from the stream.
+///
+/// Names: R = `autoRelockRemaining(id)`.
 
 /// @notice The reference OFF-CHAIN INDEXER. It holds NO reference to
 ///         VeHemi: every byte of its state comes from a decoded log plus that
@@ -36,7 +38,7 @@ contract StreamIndexer {
     uint256 internal constant MAX_TIME = 4 * 365.25 days;
     uint256 internal constant SIX_DAYS = (4 * 365.25 days) / 4 / 12 / 5;
 
-    uint256 public immutable token;
+    uint256 public immutable tokenId;
 
     uint64 public remaining; // R, learned from the flag events
     int128 public bias;
@@ -48,46 +50,46 @@ contract StreamIndexer {
     uint256 public flagEventsApplied;
 
     constructor(uint256 tokenId_) {
-        token = tokenId_;
+        tokenId = tokenId_;
     }
 
     /// @param logs_ one transaction's logs, IN STREAM ORDER
     /// @param t_    that transaction's block timestamp
     function feed(Vm.Log[] memory logs_, uint64 t_) external {
         for (uint256 i; i < logs_.length; ++i) {
-            bytes32 _t0 = logs_[i].topics[0];
-            if (_t0 == IVeHemi.AutoRelockEnabled.selector) {
-                if (uint256(logs_[i].topics[1]) != token) continue;
+            bytes32 _topic0 = logs_[i].topics[0];
+            if (_topic0 == IVeHemi.AutoRelockEnabled.selector) {
+                if (uint256(logs_[i].topics[1]) != tokenId) continue;
                 remaining = abi.decode(logs_[i].data, (uint64));
                 flagEventsApplied += 1;
-            } else if (_t0 == IVeHemi.AutoRelockDisabled.selector) {
-                if (uint256(logs_[i].topics[1]) != token) continue;
+            } else if (_topic0 == IVeHemi.AutoRelockDisabled.selector) {
+                if (uint256(logs_[i].topics[1]) != tokenId) continue;
                 remaining = 0;
                 flagEventsApplied += 1;
-            } else if (_t0 == IVeHemi.Checkpoint.selector) {
+            } else if (_topic0 == IVeHemi.Checkpoint.selector) {
                 (, uint256 _id, , IVeHemi.LockedBalance memory _new) = abi.decode(
                     logs_[i].data,
                     (uint256, uint256, IVeHemi.LockedBalance, IVeHemi.LockedBalance)
                 );
-                if (_id != token) continue;
+                if (_id != tokenId) continue;
                 _applyPoint(_new, t_);
                 checkpointsApplied += 1;
             }
         }
     }
 
-    /// @dev The branch structure of the curve library's Phase A, and nothing
-    ///      else. The flat level is the bucket mean:
+    /// @dev The branch structure of `VeHemiCurveLib.checkpoint`'s Phase A, and
+    ///      nothing else. The flat level is the bucket mean:
     ///      `slope * (R - SIX_DAYS/2)`.
     function _applyPoint(IVeHemi.LockedBalance memory new_, uint64 t_) internal {
-        uint64 _r = remaining;
+        uint64 _remaining = remaining;
         int128 _slope;
         int128 _bias;
-        if (_r != 0 && new_.amount > 0) {
+        if (_remaining != 0 && new_.amount > 0) {
             // flat: stored slope stays 0, so the decay walk never touches it
             _bias =
                 (new_.amount / int128(int256(MAX_TIME))) *
-                int128(int256(uint256(_r) - SIX_DAYS / 2));
+                int128(int256(uint256(_remaining) - SIX_DAYS / 2));
         } else if (new_.end > t_ && new_.amount > 0) {
             _slope = new_.amount / int128(int256(MAX_TIME));
             _bias = _slope * int128(int256(uint256(new_.end) - uint256(t_)));
@@ -99,8 +101,8 @@ contract StreamIndexer {
     ///      clamped at zero.
     function balanceOf(uint64 t_) external view returns (uint256) {
         if (!exists) return 0;
-        int128 _b = bias - slope * int128(int256(uint256(t_) - uint256(ts)));
-        return _b < 0 ? 0 : uint256(uint128(_b));
+        int128 _balance = bias - slope * int128(int256(uint256(t_) - uint256(ts)));
+        return _balance < 0 ? 0 : uint256(uint128(_balance));
     }
 }
 
@@ -112,7 +114,7 @@ contract FlagEventOrderTest is LockedCurveTestBase {
     // helpers
     // ------------------------------------------------------------------
 
-    function _armedPosition() internal returns (uint256 _id) {
+    function _unarmedPositionAtOffGridTime() internal returns (uint256 _id) {
         // Seeding is finalized first. (The seeding guard refuses
         // `enableAutoRelock` only on a subcurve position; this one is
         // transferable.)
@@ -145,11 +147,11 @@ contract FlagEventOrderTest is LockedCurveTestBase {
         _idx = type(uint256).max;
         for (uint256 i; i < logs_.length; ++i) {
             if (logs_[i].topics[0] != IVeHemi.Checkpoint.selector) continue;
-            (, uint256 _tid, , ) = abi.decode(
+            (, uint256 _tokenId, , ) = abi.decode(
                 logs_[i].data,
                 (uint256, uint256, IVeHemi.LockedBalance, IVeHemi.LockedBalance)
             );
-            if (_tid != id_) continue;
+            if (_tokenId != id_) continue;
             if (_count == 0) _idx = i;
             _count += 1;
         }
@@ -175,27 +177,31 @@ contract FlagEventOrderTest is LockedCurveTestBase {
     }
 
     // ------------------------------------------------------------------
-    // E1 / E2 -- THE POSITIONAL GATE.
+    // E1 / E2 -- THE POSITIONAL CHECK.
     // ------------------------------------------------------------------
 
     function test_E1_enableEmitsTheFlagBeforeItsCheckpoint() public {
-        uint256 _id = _armedPosition();
+        uint256 _id = _unarmedPositionAtOffGridTime();
 
         vm.recordLogs();
         vm.prank(alice);
         veHemi.enableAutoRelock(_id);
         Vm.Log[] memory _logs = vm.getRecordedLogs();
 
-        uint256 _flag = _flagIndex(_logs, IVeHemi.AutoRelockEnabled.selector, _id);
-        (uint256 _chk, uint256 _n) = _checkpointIndex(_logs, _id);
+        uint256 _flagIdx = _flagIndex(_logs, IVeHemi.AutoRelockEnabled.selector, _id);
+        (uint256 _checkpointIdx, uint256 _checkpointLogCount) = _checkpointIndex(_logs, _id);
 
-        assertTrue(_flag != type(uint256).max, "E-ORDER: no AutoRelockEnabled log for this token at all");
-        assertEq(_n, 1, "E-ORDER: enable must publish exactly one Checkpoint for this token");
-        assertLt(_flag, _chk, "E-ORDER VIOLATED: AutoRelockEnabled is emitted AFTER the Checkpoint it describes");
+        assertTrue(_flagIdx != type(uint256).max, "E-ORDER: no AutoRelockEnabled log for this token at all");
+        assertEq(_checkpointLogCount, 1, "E-ORDER: enable must publish exactly one Checkpoint for this token");
+        assertLt(
+            _flagIdx,
+            _checkpointIdx,
+            "E-ORDER VIOLATED: AutoRelockEnabled is emitted AFTER the Checkpoint it describes"
+        );
     }
 
     function test_E2_disableEmitsTheFlagBeforeItsCheckpoint() public {
-        uint256 _id = _armedPosition();
+        uint256 _id = _unarmedPositionAtOffGridTime();
         vm.prank(alice);
         veHemi.enableAutoRelock(_id);
         vm.warp(block.timestamp + 10 * SIX_DAYS + 777);
@@ -205,73 +211,77 @@ contract FlagEventOrderTest is LockedCurveTestBase {
         veHemi.disableAutoRelock(_id);
         Vm.Log[] memory _logs = vm.getRecordedLogs();
 
-        uint256 _flag = _flagIndex(_logs, IVeHemi.AutoRelockDisabled.selector, _id);
-        (uint256 _chk, uint256 _n) = _checkpointIndex(_logs, _id);
+        uint256 _flagIdx = _flagIndex(_logs, IVeHemi.AutoRelockDisabled.selector, _id);
+        (uint256 _checkpointIdx, uint256 _checkpointLogCount) = _checkpointIndex(_logs, _id);
 
-        assertTrue(_flag != type(uint256).max, "E-ORDER: no AutoRelockDisabled log for this token at all");
-        assertEq(_n, 1, "E-ORDER: disable must publish exactly one Checkpoint for this token");
-        assertLt(_flag, _chk, "E-ORDER VIOLATED: AutoRelockDisabled is emitted AFTER the Checkpoint it describes");
+        assertTrue(_flagIdx != type(uint256).max, "E-ORDER: no AutoRelockDisabled log for this token at all");
+        assertEq(_checkpointLogCount, 1, "E-ORDER: disable must publish exactly one Checkpoint for this token");
+        assertLt(
+            _flagIdx,
+            _checkpointIdx,
+            "E-ORDER VIOLATED: AutoRelockDisabled is emitted AFTER the Checkpoint it describes"
+        );
     }
 
     // ------------------------------------------------------------------
     // OB / OA -- THE ENABLE TRANSITION.
     // ------------------------------------------------------------------
 
-    /// @notice O-B. The shipped order. The stream-ordered indexer is EXACT --
+    /// @notice OB. The emitted order. The stream-ordered indexer is EXACT --
     ///         25 buckets later, with no transaction in between and no chain
     ///         access at all.
-    function test_OB_streamIndexerIsExactOnTheShippedOrder() public {
-        uint256 _id = _armedPosition();
+    function test_OB_streamIndexerIsExactOnTheEmittedOrder() public {
+        uint256 _id = _unarmedPositionAtOffGridTime();
 
         vm.recordLogs();
         vm.prank(alice);
         veHemi.enableAutoRelock(_id);
         Vm.Log[] memory _logs = vm.getRecordedLogs();
-        uint64 _t0 = uint64(block.timestamp);
+        uint64 _enableAt = uint64(block.timestamp);
 
-        StreamIndexer _ix = new StreamIndexer(_id);
-        _ix.feed(_logs, _t0);
-        assertEq(_ix.checkpointsApplied(), 1, "vacuity: the indexer saw no checkpoint for this token");
-        assertEq(_ix.flagEventsApplied(), 1, "vacuity: the indexer saw no flag event for this token");
+        StreamIndexer _indexer = new StreamIndexer(_id);
+        _indexer.feed(_logs, _enableAt);
+        assertEq(_indexer.checkpointsApplied(), 1, "vacuity: the indexer saw no checkpoint for this token");
+        assertEq(_indexer.flagEventsApplied(), 1, "vacuity: the indexer saw no flag event for this token");
 
         // Walk 25 buckets forward with no transaction at all. A correct
         // reconstruction is FLAT; a mis-derived one decays.
         vm.warp(block.timestamp + 25 * SIX_DAYS);
-        uint64 _t1 = uint64(block.timestamp);
+        uint64 _readAt = uint64(block.timestamp);
         uint256 _truth = veHemi.balanceOfNFT(_id);
-        uint256 _derived = _ix.balanceOf(_t1);
+        uint256 _derived = _indexer.balanceOf(_readAt);
 
         emit log_named_uint("truth   (flat)", _truth);
         emit log_named_uint("stream-derived", _derived);
         assertGt(_truth, 0, "vacuity: the position carries no weight");
-        assertEq(_derived, _truth, "E-ORDER: the stream-ordered indexer must be EXACT on the shipped order");
+        assertEq(_derived, _truth, "E-ORDER: the stream-ordered indexer must be EXACT on the emitted order");
     }
 
-    /// @notice O-A. THE CONTROL. The SAME indexer, the same logs, with the flag
+    /// @notice OA. THE CONTROL. The SAME indexer, the same logs, with the flag
     ///         log moved after the `Checkpoint` -- and it is wrong. If this body
-    ///         ever goes green by equality, O-B above is vacuous.
+    ///         ever goes green by equality, OB above is vacuous.
     function test_OA_streamIndexerIsWrongWhenTheFlagTrailsTheCheckpoint() public {
-        uint256 _id = _armedPosition();
+        uint256 _id = _unarmedPositionAtOffGridTime();
 
         vm.recordLogs();
         vm.prank(alice);
         veHemi.enableAutoRelock(_id);
         Vm.Log[] memory _logs = vm.getRecordedLogs();
-        uint64 _t0 = uint64(block.timestamp);
+        uint64 _enableAt = uint64(block.timestamp);
 
-        StreamIndexer _ix = new StreamIndexer(_id);
-        _ix.feed(_flagTrailingStream(_logs), _t0);
+        StreamIndexer _indexer = new StreamIndexer(_id);
+        _indexer.feed(_flagTrailingStream(_logs), _enableAt);
 
         vm.warp(block.timestamp + 25 * SIX_DAYS);
-        uint64 _t1 = uint64(block.timestamp);
+        uint64 _readAt = uint64(block.timestamp);
         uint256 _truth = veHemi.balanceOfNFT(_id);
-        uint256 _derived = _ix.balanceOf(_t1);
+        uint256 _derived = _indexer.balanceOf(_readAt);
 
         emit log_named_uint("truth   (flat)", _truth);
         emit log_named_uint("stream-derived", _derived);
         uint256 _bps = ((_truth - _derived) * 10_000) / _truth;
         emit log_named_uint("under-report bps", _bps);
-        assertLt(_derived, _truth, "the flag-trailing stream must under-report; if it does not, O-B proves nothing");
+        assertLt(_derived, _truth, "the flag-trailing stream must under-report; if it does not, OB proves nothing");
         assertGt(_bps, 0, "vacuity: the mis-derivation is below one basis point");
     }
 
@@ -282,41 +292,53 @@ contract FlagEventOrderTest is LockedCurveTestBase {
 
     function _twoTransitionStreams()
         internal
-        returns (uint256 _id, Vm.Log[] memory _l1, uint64 _t1, Vm.Log[] memory _l2, uint64 _t2)
+        returns (
+            uint256 _id,
+            Vm.Log[] memory _enableLogs,
+            uint64 _enableAt,
+            Vm.Log[] memory _disableLogs,
+            uint64 _disableAt
+        )
     {
-        _id = _armedPosition();
+        _id = _unarmedPositionAtOffGridTime();
 
         vm.recordLogs();
         vm.prank(alice);
         veHemi.enableAutoRelock(_id);
-        _l1 = vm.getRecordedLogs();
-        _t1 = uint64(block.timestamp);
+        _enableLogs = vm.getRecordedLogs();
+        _enableAt = uint64(block.timestamp);
 
         vm.warp(block.timestamp + 10 * SIX_DAYS + 777);
 
         vm.recordLogs();
         vm.prank(alice);
         veHemi.disableAutoRelock(_id);
-        _l2 = vm.getRecordedLogs();
-        _t2 = uint64(block.timestamp);
+        _disableLogs = vm.getRecordedLogs();
+        _disableAt = uint64(block.timestamp);
 
         vm.warp(block.timestamp + 5 * SIX_DAYS);
     }
 
-    /// @notice O-C. Enable, then disable, then five more buckets of pure decay.
+    /// @notice OC. Enable, then disable, then five more buckets of pure decay.
     ///         The stream-ordered indexer is exact across BOTH transitions.
     function test_OC_bothTransitionsAreExactInStreamOrder() public {
-        (uint256 _id, Vm.Log[] memory _l1, uint64 _t1, Vm.Log[] memory _l2, uint64 _t2) = _twoTransitionStreams();
+        (
+            uint256 _id,
+            Vm.Log[] memory _enableLogs,
+            uint64 _enableAt,
+            Vm.Log[] memory _disableLogs,
+            uint64 _disableAt
+        ) = _twoTransitionStreams();
 
-        StreamIndexer _ix = new StreamIndexer(_id);
-        _ix.feed(_l1, _t1);
-        _ix.feed(_l2, _t2);
-        assertEq(_ix.checkpointsApplied(), 2, "vacuity: two checkpoints expected");
-        assertEq(_ix.flagEventsApplied(), 2, "vacuity: two flag events expected");
+        StreamIndexer _indexer = new StreamIndexer(_id);
+        _indexer.feed(_enableLogs, _enableAt);
+        _indexer.feed(_disableLogs, _disableAt);
+        assertEq(_indexer.checkpointsApplied(), 2, "vacuity: two checkpoints expected");
+        assertEq(_indexer.flagEventsApplied(), 2, "vacuity: two flag events expected");
 
-        uint64 _t3 = uint64(block.timestamp);
+        uint64 _readAt = uint64(block.timestamp);
         uint256 _truth = veHemi.balanceOfNFT(_id);
-        uint256 _derived = _ix.balanceOf(_t3);
+        uint256 _derived = _indexer.balanceOf(_readAt);
 
         emit log_named_uint("truth   (decaying again)", _truth);
         emit log_named_uint("stream-derived          ", _derived);
@@ -324,25 +346,31 @@ contract FlagEventOrderTest is LockedCurveTestBase {
         assertEq(_derived, _truth, "E-ORDER: both transitions must reconstruct exactly in stream order");
     }
 
-    /// @notice O-D. THE CONTROL for O-C. Both flag logs moved after their
+    /// @notice OD. THE CONTROL for OC. Both flag logs moved after their
     ///         checkpoints: the indexer now believes the position is still flat
     ///         at the old R and OVER-reports.
     function test_OD_bothTransitionsAreWrongWhenTheFlagsTrail() public {
-        (uint256 _id, Vm.Log[] memory _l1, uint64 _t1, Vm.Log[] memory _l2, uint64 _t2) = _twoTransitionStreams();
+        (
+            uint256 _id,
+            Vm.Log[] memory _enableLogs,
+            uint64 _enableAt,
+            Vm.Log[] memory _disableLogs,
+            uint64 _disableAt
+        ) = _twoTransitionStreams();
 
-        StreamIndexer _ix = new StreamIndexer(_id);
-        _ix.feed(_flagTrailingStream(_l1), _t1);
-        _ix.feed(_flagTrailingStream(_l2), _t2);
+        StreamIndexer _indexer = new StreamIndexer(_id);
+        _indexer.feed(_flagTrailingStream(_enableLogs), _enableAt);
+        _indexer.feed(_flagTrailingStream(_disableLogs), _disableAt);
 
-        uint64 _t3 = uint64(block.timestamp);
+        uint64 _readAt = uint64(block.timestamp);
         uint256 _truth = veHemi.balanceOfNFT(_id);
-        uint256 _derived = _ix.balanceOf(_t3);
+        uint256 _derived = _indexer.balanceOf(_readAt);
 
         emit log_named_uint("truth   (decaying again)", _truth);
         emit log_named_uint("stream-derived          ", _derived);
         uint256 _bps = ((_derived - _truth) * 10_000) / _truth;
         emit log_named_uint("over-report bps         ", _bps);
-        assertGt(_derived, _truth, "the flag-trailing stream must over-report; if it does not, O-C proves nothing");
+        assertGt(_derived, _truth, "the flag-trailing stream must over-report; if it does not, OC proves nothing");
         assertGt(_bps, 0, "vacuity: the mis-derivation is below one basis point");
     }
 }

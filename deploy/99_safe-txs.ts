@@ -4,10 +4,10 @@ import { HardhatRuntimeEnvironment } from "hardhat/types";
 import { DeployFunction } from "hardhat-deploy/types";
 import { MULTI_SIG_TXS_FILE, executeBatchUsingSafe, quarantineRefusedBatch } from "../helpers/safe";
 import {
-    BOUNDARY_DATING_VVD_IMPLS,
     EIP1967_IMPL_SLOT,
     GateRefusal,
     LIVE_VEHEMI_IMPLS,
+    LIVE_VVD_IMPLS,
     VVD_ARM_DATA,
     assertBatchOrder,
     assertNothingArmedBeforeForward,
@@ -31,10 +31,10 @@ const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
 // leg with the VVD already on this build, is refused), then by deploy/08's
 // `assertBatchOrder` (order, targets, payloads, value, both proxies'
 // from-implementations, leg count). Both run only while the auto-relock
-// transition is incomplete (the VVD on the boundary-dating implementation, or
+// forward is incomplete (the VVD on the boundary-dating implementation, or
 // VeHemi on the live one) or when the batch itself arms the window
 // (`upgradeAndCall(VVD, ..., armLegacyDatingWindow())`). Outside that scope
-// deploy/08's matcher is the wrong one (it refuses every plain VVD leg), so later
+// `assertBatchOrder` is the wrong check (it refuses every plain VVD leg), so later
 // upgrades and deploy/04's V2 batch pass through, with a line saying so. A file
 // is moved to `.refused-*` only on a `GateRefusal`; a provider error or a missing
 // record propagates as itself and leaves the file in place (the exit guard and
@@ -57,36 +57,36 @@ async function assertProxyAdminBatchAgainstChain(hre: HardhatRuntimeEnvironment)
     const vvd = await getOrNull("VeHemiVoteDelegation");
     if (!proxyAdmin || !veHemi || !vvd) return;
     const eq = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
-    let upgradesOurs = false;
-    let arms = false;
+    let upgradesVeHemiOrVvd = false;
+    let armsWindow = false;
     for (const l of legs) {
         if (!eq(l.to, proxyAdmin.address)) continue;
-        let d;
+        let decoded;
         try {
-            d = PROXY_ADMIN_IFACE.parseTransaction({ data: l.data });
+            decoded = PROXY_ADMIN_IFACE.parseTransaction({ data: l.data });
         } catch {
             continue;
         }
-        if (!d) continue;
-        const proxy = d.args[0] as string;
-        if (eq(proxy, veHemi.address) || eq(proxy, vvd.address)) upgradesOurs = true;
+        if (!decoded) continue;
+        const proxy = decoded.args[0] as string;
+        if (eq(proxy, veHemi.address) || eq(proxy, vvd.address)) upgradesVeHemiOrVvd = true;
         // A payload that starts with the arm's selector counts as arming; trailing
         // bytes are ignored here and refused by `assertBatchOrder`.
-        if (d.name === "upgradeAndCall" && eq(proxy, vvd.address) && String(d.args[2]).slice(0, 10).toLowerCase() === VVD_ARM_DATA.toLowerCase()) {
-            arms = true;
+        if (decoded.name === "upgradeAndCall" && eq(proxy, vvd.address) && String(decoded.args[2]).slice(0, 10).toLowerCase() === VVD_ARM_DATA.toLowerCase()) {
+            armsWindow = true;
         }
     }
-    if (!upgradesOurs) return;
+    if (!upgradesVeHemiOrVvd) return;
     // Read outside the try below: a provider error here is not a verdict.
-    const slot = async (p: string) => "0x" + (await hre.ethers.provider.getStorage(p, EIP1967_IMPL_SLOT)).slice(-40);
-    const veNow = await slot(veHemi.address);
-    const vvdNow = await slot(vvd.address);
-    const pending =
-        BOUNDARY_DATING_VVD_IMPLS.some((a) => eq(a, vvdNow)) || LIVE_VEHEMI_IMPLS.some((a) => eq(a, veNow));
-    if (!pending && !arms) {
+    const implementationOf = async (proxy: string) => "0x" + (await hre.ethers.provider.getStorage(proxy, EIP1967_IMPL_SLOT)).slice(-40);
+    const veImplNow = await implementationOf(veHemi.address);
+    const vvdImplNow = await implementationOf(vvd.address);
+    const forwardIncomplete =
+        LIVE_VVD_IMPLS.some((a) => eq(a, vvdImplNow)) || LIVE_VEHEMI_IMPLS.some((a) => eq(a, veImplNow));
+    if (!forwardIncomplete && !armsWindow) {
         console.log(
-            `deploy/99: this batch upgrades the VeHemi/VVD proxies while neither is on its pre-upgrade implementation ` +
-                `(VeHemi on ${veNow}, VVD on ${vvdNow}) and does not arm the window: outside deploy/08's transition; ` +
+            `deploy/99: this batch upgrades the VeHemi/VVD proxies while neither is on its live implementation ` +
+                `(VeHemi on ${veImplNow}, VVD on ${vvdImplNow}) and does not arm the window: outside deploy/08's forward; ` +
                 "proposed WITHOUT deploy/08's re-check."
         );
         return;
@@ -97,8 +97,8 @@ async function assertProxyAdminBatchAgainstChain(hre: HardhatRuntimeEnvironment)
             {
                 veHemiProxy: veHemi.address,
                 vvdProxy: vvd.address,
-                vvdImplNow: vvdNow,
-                vvdBuildImpl: (await getOrNull("VeHemiVoteDelegation_Implementation"))?.address,
+                vvdImplNow,
+                vvdImpl: (await getOrNull("VeHemiVoteDelegation_Implementation"))?.address,
             },
             "Refusing to propose this batch."
         );

@@ -16,7 +16,7 @@ import "./LockedCurveTestBase.sol";
 contract CheckpointGrowthTest is LockedCurveTestBase {
     address internal constant MALLORY = address(0xBAD0);
     address internal constant DEL_A   = address(0xA1);
-    address internal constant DEL_J   = address(0x3417);
+    address internal constant DEL_B   = address(0x3417);
     address internal constant VICTIM  = address(0x1C70);
 
     /// A 30M block gas limit is the reference ceiling this project uses.
@@ -30,7 +30,7 @@ contract CheckpointGrowthTest is LockedCurveTestBase {
     /// storage reads, over 400,000 gas even warm (as here).
     uint256 internal constant READ_GAS_BOUND = 100_000;
 
-    function _b(uint256 t) internal pure returns (uint256) { return (t / 1 hours) * 1 hours + 1 hours; }
+    function _nextHourBoundary(uint256 t) internal pure returns (uint256) { return (t / 1 hours) * 1 hours + 1 hours; }
 
     function _mk(address o, uint256 a, uint256 d) internal returns (uint256 id) {
         hemi.mint(o, a);
@@ -38,42 +38,42 @@ contract CheckpointGrowthTest is LockedCurveTestBase {
         vm.prank(o); id = veHemi.createLock(a, d);
     }
 
-    function _grind(uint256 mid, uint256 t0, uint256 n) internal returns (uint256 gas) {
+    function _grind(uint256 malloryId, uint256 t0, uint256 n) internal returns (uint256 gas) {
         for (uint256 i = 0; i < n; ++i) {
             vm.warp(t0 + i);
             vm.prank(MALLORY);
             uint256 g = gasleft();
-            delegation.delegate(mid, (i % 2 == 0) ? DEL_A : DEL_J);
+            delegation.delegate(malloryId, (i % 2 == 0) ? DEL_A : DEL_B);
             gas += g - gasleft();
         }
     }
 
-    function _setup() internal returns (uint256 mid, uint256 T0) {
+    function _victimAndGrinderPositions() internal returns (uint256 malloryId, uint256 T0) {
         vm.warp(((block.timestamp / SIX_DAYS) + 2) * SIX_DAYS + 1);
-        uint256 vid = _mk(VICTIM, 500 ether, 60 * SIX_DAYS);
-        vm.prank(VICTIM); delegation.delegate(vid, DEL_A);
-        mid = _mk(MALLORY, 10 ether, 60 * SIX_DAYS);
-        vm.warp(_b(block.timestamp) + 1 hours);
+        uint256 victimId = _mk(VICTIM, 500 ether, 60 * SIX_DAYS);
+        vm.prank(VICTIM); delegation.delegate(victimId, DEL_A);
+        malloryId = _mk(MALLORY, 10 ether, 60 * SIX_DAYS);
+        vm.warp(_nextHourBoundary(block.timestamp) + 1 hours);
         T0 = block.timestamp;
     }
 
     // ── G1 ────────────────────────────────────────────────────────────────
-    // THE COST CURVE. `getPastVotes` stays cheap at depth (both consensus
-    // reads are logged), and the attacker cannot touch the VICTIM's own
+    // THE COST CURVE. `getPastVotes` stays cheap at depth (both vote reads
+    // are logged), and the attacker cannot touch the VICTIM's own
     // delegatee record.
-    function test_G1_consensusReadsStayCheapAtDepth() public {
-        (uint256 mid, uint256 T0) = _setup();
+    function test_G1_voteReadsStayCheapAtDepth() public {
+        (uint256 malloryId, uint256 T0) = _victimAndGrinderPositions();
         uint256 readAt = T0 - 300;
         // VICTIM's own address carries ONE checkpoint already: `createLock`
         // auto-delegates the position to its owner. The claim under test is
         // that the grind does not change THAT number.
         uint256 victimLenBefore = delegation.getDelegationCheckpoints(VICTIM).length;
-        assertEq(victimLenBefore, 1, "G1: construction -- VICTIM self-delegation checkpoint");
+        assertEq(victimLenBefore, 1, "G1 premise: VICTIM self-delegation checkpoint");
 
         uint256[4] memory marks = [uint256(0), 256, 1024, 4096];
         uint256 done; uint256 attackerGas; uint256 gPastAt4096; uint256 gLiveAt4096;
         for (uint256 s = 0; s < marks.length; ++s) {
-            if (marks[s] > done) { attackerGas += _grind(mid, T0 + done, marks[s] - done); done = marks[s]; }
+            if (marks[s] > done) { attackerGas += _grind(malloryId, T0 + done, marks[s] - done); done = marks[s]; }
             vm.warp(T0 + done + 10);
 
             uint256 g = gasleft(); delegation.getPastVotes(DEL_A, readAt);
@@ -90,7 +90,7 @@ contract CheckpointGrowthTest is LockedCurveTestBase {
         emit log_named_uint("G1 attacker gas PER element    ", attackerGas / 4096);
 
         assertGt(delegation.getDelegationCheckpointsLength(DEL_A), 4000,
-            "G1: construction -- the array must actually be deep");
+            "G1 premise: the array must actually be deep");
         assertLt(gPastAt4096, READ_GAS_BOUND, "G1: getPastVotes must stay cheap at depth (it is O(log n))");
         // `getVotes` is the live read: an O(n) walk here would let a stranger
         // raise the cost of every current-vote read of the delegatee without
@@ -103,8 +103,8 @@ contract CheckpointGrowthTest is LockedCurveTestBase {
     // ── G2 ────────────────────────────────────────────────────────────────
     // PAGINATION, PRICED AND PROVEN EQUIVALENT.
     function test_G2_paginationIsBoundedAndFaithful() public {
-        (uint256 mid, uint256 T0) = _setup();
-        _grind(mid, T0, 4096);
+        (uint256 malloryId, uint256 T0) = _victimAndGrinderPositions();
+        _grind(malloryId, T0, 4096);
         vm.warp(T0 + 4200);
 
         uint256 len = delegation.getDelegationCheckpointsLength(DEL_A);
@@ -112,7 +112,7 @@ contract CheckpointGrowthTest is LockedCurveTestBase {
         IVeHemiVoteDelegation.DelegateCheckpoint[] memory all =
             delegation.getDelegationCheckpoints(DEL_A);
         assertEq(len, all.length, "G2: length view disagrees with the array");
-        assertGt(len, 4000, "G2: construction -- the array must actually be deep");
+        assertGt(len, 4000, "G2 premise: the array must actually be deep");
 
         uint256 g = gasleft();
         IVeHemiVoteDelegation.DelegateCheckpoint[] memory page =

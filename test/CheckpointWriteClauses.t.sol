@@ -11,7 +11,8 @@ import {VeHemiVoteDelegation} from "../src/VeHemiVoteDelegation.sol";
  *         `CheckpointLayoutViolated` cannot check them and no `vm.store` can install a
  *         violation; these two bodies defend them.
  *         L4: no write mutates an element dated at or before `now` (a sealed reading
- *             never moves).
+ *             never moves; "sealed" is defined in the header of
+ *             test/delegation-votes/VoteContinuityLaw.sol).
  *         L5: a delta applied to the live element is also applied to the pending one
  *             (the two-leg `_pendingNew` path). The body reaches that state through
  *             honest code only: the permissionless `writeNewCheckpointForExpiredDelegations`
@@ -24,10 +25,10 @@ contract CheckpointWriteClausesTest is LockedCurveTestBase {
         vm.prank(o); hemi.approve(address(veHemi), type(uint256).max);
         vm.prank(o); id = veHemi.createLock(a, d);
     }
-    function _cps(address d) internal view returns (VeHemiVoteDelegation.DelegateCheckpoint[] memory) {
+    function _checkpoints(address d) internal view returns (VeHemiVoteDelegation.DelegateCheckpoint[] memory) {
         return delegation.getDelegationCheckpoints(d);
     }
-    function _nb(uint256 t) internal pure returns (uint256) { return (t / 1 hours) * 1 hours + 1 hours; }
+    function _nextHourBoundary(uint256 t) internal pure returns (uint256) { return (t / 1 hours) * 1 hours + 1 hours; }
 
     // ===================================================================== L4
     /// *** L4 APPEND-ONLY AT OR BELOW `now`: a sealed reading must not move. ***
@@ -41,15 +42,15 @@ contract CheckpointWriteClausesTest is LockedCurveTestBase {
 
         uint256 S = block.timestamp + 1;
         vm.warp(block.timestamp + 900);
-        uint256 v1 = delegation.getPastVotes(bob, S);
-        assertGt(v1, 0, "L4 premise: the sealed reading must be non-zero");
-        uint256 lenBefore = _cps(bob).length;
+        uint256 sealedReading = delegation.getPastVotes(bob, S);
+        assertGt(sealedReading, 0, "L4 premise: the sealed reading must be non-zero");
+        uint256 lenBefore = _checkpoints(bob).length;
 
         vm.prank(charlie); delegation.delegate(idC, bob);
 
-        assertEq(delegation.getPastVotes(bob, S), v1, "L4: a SEALED reading was rewritten");
-        assertEq(_cps(bob).length, lenBefore + 1, "L4: the write must APPEND, not overwrite");
-        emit log_named_uint("L4 sealed reading", v1);
+        assertEq(delegation.getPastVotes(bob, S), sealedReading, "L4: a SEALED reading was rewritten");
+        assertEq(_checkpoints(bob).length, lenBefore + 1, "L4: the write must APPEND, not overwrite");
+        emit log_named_uint("L4 sealed reading", sealedReading);
     }
 
     // ===================================================================== L5
@@ -82,16 +83,18 @@ contract CheckpointWriteClausesTest is LockedCurveTestBase {
 
         // The two-leg path is entered iff the tail is dated strictly after
         // `now + 1` at the write AND a live element exists below it AND
-        // `imm < B` (no early deferred-only return). All asserted on storage.
-        VeHemiVoteDelegation.DelegateCheckpoint[] memory a = _cps(bob);
-        assertEq(a.length, 2, "L5 premise: the array must be [live, pending]");
-        uint256 B = _nb(block.timestamp);
-        assertGt(uint256(a[1].timestamp), block.timestamp + 1, "L5 premise: the tail really is PENDING");
-        assertEq(uint256(a[1].timestamp), B, "L5 premise: the pending element sits at B");
-        assertLe(uint256(a[0].timestamp), block.timestamp + 1,
+        // `now + 1 < B` (no early deferred-only return). All asserted on storage.
+        VeHemiVoteDelegation.DelegateCheckpoint[] memory checkpointsAfterExpiryWrite = _checkpoints(bob);
+        assertEq(checkpointsAfterExpiryWrite.length, 2, "L5 premise: the array must be [live, pending]");
+        uint256 B = _nextHourBoundary(block.timestamp);
+        assertGt(uint256(checkpointsAfterExpiryWrite[1].timestamp), block.timestamp + 1,
+            "L5 premise: the tail really is PENDING");
+        assertEq(uint256(checkpointsAfterExpiryWrite[1].timestamp), B,
+            "L5 premise: the pending element sits at B");
+        assertLe(uint256(checkpointsAfterExpiryWrite[0].timestamp), block.timestamp + 1,
             "L5 premise: the element below it is LIVE, so `len > 1` and the guard branch is entered");
         assertLt(block.timestamp + 1, B,
-            "L5 premise: `imm < B`, so the write does not take the early deferred return");
+            "L5 premise: `now + 1 < the next hour boundary`, so the write does not take the early deferred return");
 
         uint256 votesBefore = delegation.getVotes(bob);
         assertGt(votesBefore, 0, "L5 premise: bob must actually hold weight to lose");
@@ -101,8 +104,9 @@ contract CheckpointWriteClausesTest is LockedCurveTestBase {
         vm.prank(charlie); delegation.delegate(idLong, address(0xC0DE));
 
         // The array must still be legal after it.
-        VeHemiVoteDelegation.DelegateCheckpoint[] memory b = _cps(bob);
-        assertEq(uint256(b[b.length - 1].timestamp), B, "L5: the tail is still the pending element at B");
+        VeHemiVoteDelegation.DelegateCheckpoint[] memory checkpointsAfterMove = _checkpoints(bob);
+        assertEq(uint256(checkpointsAfterMove[checkpointsAfterMove.length - 1].timestamp), B,
+            "L5: the tail is still the pending element at B");
 
         vm.warp(B + 1);
         assertGt(veHemi.balanceOfNFTAt(idLong, B + 1), 0,

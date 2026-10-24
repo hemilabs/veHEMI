@@ -3,7 +3,8 @@ pragma solidity ^0.8.29;
 
 // ============================================================================
 // The weight step of `enableAutoRelock` onto the bucket-mean flat level
-// `slope * (R - SIX_DAYS/2)`.
+// `slope * (R - SIX_DAYS/2)`, where R = `autoRelockRemaining(id)`, the frozen
+// remaining term.
 // ----------------------------------------------------------------------------
 // Enabling at phase `off` inside a SIX_DAYS bucket moves the weight by the
 // signed closed form `slope * (off - SIX_DAYS/2)`: a LOSS in the first half of
@@ -16,7 +17,7 @@ pragma solidity ^0.8.29;
 import "./TwinOracle.sol";
 
 contract EnableWeightStepTest is TwinOracle {
-    address internal constant OWN = address(0x0FFE);
+    address internal constant OWNER = address(0x0FFE);
     uint256 internal constant AMT = 1000 ether;
 
     function setUp() public { setUpTwinOracle(); }
@@ -36,9 +37,9 @@ contract EnableWeightStepTest is TwinOracle {
     function _measureOneEnable(uint256 n, uint256 off) internal returns (uint256 loss) {
         vm.warp(t0 + off);
         vm.roll(block.number + 1);
-        uint256 id = _id(spawn(true, OWN, AMT, n, Cadence.NEVER, false, false));
+        uint256 id = _id(spawn(true, OWNER, AMT, n, Cadence.NEVER, false, false));
         uint256 before_ = X.ve.balanceOfNFT(id);
-        vm.prank(OWN);
+        vm.prank(OWNER);
         X.ve.enableAutoRelock(id);
         uint256 after_ = X.ve.balanceOfNFT(id);
 
@@ -49,15 +50,15 @@ contract EnableWeightStepTest is TwinOracle {
         uint256 rise = slopeOf(AMT) * off;
         uint256 half = slopeOf(AMT) * (SIX_DAYS / 2);
         if (rise >= half) {
-            assertEq(after_ - before_, rise - half, "E1 enable RISE onto the bucket-mean level != slope*off - slope*S/2");
+            assertEq(after_ - before_, rise - half, "E1 enable RISE onto the bucket-mean level != slope*off - slope*SIX_DAYS/2");
             return 0;
         }
         loss = before_ - after_;
-        assertEq(loss, half - rise, "E1 enable LOSS onto the bucket-mean level != slope*S/2 - slope*off");
+        assertEq(loss, half - rise, "E1 enable LOSS onto the bucket-mean level != slope*SIX_DAYS/2 - slope*off");
         assertLe(loss, half, "E1 loss exceeded slope * SIX_DAYS/2");   // THE BOUND
         uint256 bps = (loss * 10_000) / before_;
         // The tightest closed bound on the RELATIVE loss:
-        //   loss/before = (S/2 - off) / (n*S - off) <= 1/(2n)
+        //   loss/before = (SIX_DAYS/2 - off) / (n*SIX_DAYS - off) <= 1/(2n)
         assertLe(bps, 10_000 / (2 * n) + 1, "E1 relative loss exceeded 1/(2N)");
     }
 
@@ -92,14 +93,14 @@ contract EnableWeightStepTest is TwinOracle {
             uint256 off = (p * SIX_DAYS) / 12;
             vm.warp(t0 + off);
             vm.roll(block.number + 1);
-            uint256 i = spawn(true, OWN, AMT, 6, Cadence.NEVER, false, false);
+            uint256 i = spawn(true, OWNER, AMT, 6, Cadence.NEVER, false, false);
             uint256 id = _id(i);
-            vm.prank(OWN);
+            vm.prank(OWNER);
             X.ve.enableAutoRelock(id);
             // one full bucket later, at the SAME phase
             vm.warp(t0 + SIX_DAYS + off);
             vm.roll(block.number + 8766);
-            vm.prank(OWN);
+            vm.prank(OWNER);
             X.ve.disableAutoRelock(id);
             uint256 restored = X.ve.balanceOfNFT(id);
             uint256 end = uint256(X.ve.getLockedBalance(id).end);
@@ -114,11 +115,12 @@ contract EnableWeightStepTest is TwinOracle {
     /// @notice ZERO-SUM OVER A BUCKET -- the reason the loss is acceptable, and
     ///         the reason a compensating mint is not needed.
     ///
-    /// @dev SAMPLED AT MIDPOINTS, and that is not cosmetic. The bucket-mean
-    ///      step is `slope*(off - S/2)`, so a LEFT-ENDPOINT 12-sample sum over
-    ///      off = p*S/12 is `-slope*S/2` exactly -- a sampling artefact of the
-    ///      grid. The midpoint grid off = (2p+1)*S/24 has mean exactly S/2
-    ///      (S/24 = 21,915 s, an exact integer), so its sum is EXACTLY ZERO.
+    /// @dev SAMPLED AT MIDPOINTS, and that is not cosmetic. With S = SIX_DAYS,
+    ///      the bucket-mean step is `slope*(off - S/2)`, so a LEFT-ENDPOINT
+    ///      12-sample sum over off = p*S/12 is `-slope*S/2` exactly -- an
+    ///      artefact of left-endpoint sampling. The midpoint samples
+    ///      off = (2p+1)*S/24 have mean exactly S/2 (S/24 = 21,915 s, an exact
+    ///      integer), so their sum is EXACTLY ZERO.
     function test_E3_the_step_is_zero_sum_across_the_bucket() public {
         int256 net;
         uint256 losses;
@@ -128,10 +130,10 @@ contract EnableWeightStepTest is TwinOracle {
             uint256 off = ((2 * p + 1) * SIX_DAYS) / 24;   // MIDPOINT of phase p
             vm.warp(t0 + off);
             vm.roll(block.number + 1);
-            uint256 i = spawn(true, OWN, AMT, 6, Cadence.NEVER, false, false);
+            uint256 i = spawn(true, OWNER, AMT, 6, Cadence.NEVER, false, false);
             uint256 id = _id(i);
             uint256 before_ = X.ve.balanceOfNFT(id);
-            vm.prank(OWN);
+            vm.prank(OWNER);
             X.ve.enableAutoRelock(id);
             uint256 after_ = X.ve.balanceOfNFT(id);
             if (after_ >= before_) { net += int256(after_ - before_); if (after_ > before_) rises += 1; }

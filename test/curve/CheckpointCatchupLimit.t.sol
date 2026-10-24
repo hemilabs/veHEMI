@@ -18,25 +18,26 @@ import "../LockedCurveTestBase.sol";
 contract CheckpointCatchupLimitTest is LockedCurveTestBase {
     uint256[] internal ids;
 
-    function _sumBalances() internal view returns (uint256 s) {
-        for (uint256 i; i < ids.length; ++i) s += veHemi.balanceOfNFT(ids[i]);
+    function _sumBalances() internal view returns (uint256 sum) {
+        for (uint256 i; i < ids.length; ++i) sum += veHemi.balanceOfNFT(ids[i]);
     }
 
-    function _sumBalancesWhere(bool wantForfeitable) internal view returns (uint256 s) {
+    function _sumSubcurveBalances(bool wantForfeitable) internal view returns (uint256 sum) {
         for (uint256 i; i < ids.length; ++i) {
             uint256 id = ids[i];
-            uint256 ta = veHemi.transferableAfter(id);
-            if (ta == 0 || block.timestamp >= ta) continue; // outside the subcurve window
+            uint256 transferableAfter = veHemi.transferableAfter(id);
+            // outside the subcurve window
+            if (transferableAfter == 0 || block.timestamp >= transferableAfter) continue;
             if (wantForfeitable && !veHemi.forfeitable(id)) continue;
             // subcurve weight is bounded by min(lock.end, transferableAfter)
-            IVeHemi.LockedBalance memory L = veHemi.getLockedBalance(id);
-            uint256 eff = L.end < ta ? L.end : ta;
-            if (eff <= block.timestamp) continue;
-            s += uint256(uint128(L.amount / int128(int256(MAX_TIME)))) * (eff - block.timestamp);
+            IVeHemi.LockedBalance memory lock = veHemi.getLockedBalance(id);
+            uint256 subcurveEnd = lock.end < transferableAfter ? lock.end : transferableAfter;
+            if (subcurveEnd <= block.timestamp) continue;
+            sum += uint256(uint128(lock.amount / int128(int256(MAX_TIME)))) * (subcurveEnd - block.timestamp);
         }
     }
 
-    function _mkCohort() internal {
+    function _createCohort() internal {
         runSeedingFlow();
         vm.startPrank(address(this));
         hemi.mint(address(this), 10_000 ether);
@@ -49,7 +50,7 @@ contract CheckpointCatchupLimitTest is LockedCurveTestBase {
 
     function _assertConsistentAtGap(uint256 buckets) internal {
         uint256 snap = vm.snapshotState();
-        _mkCohort();
+        _createCohort();
         // silence: no state-mutating call for `buckets` SIX_DAYS periods
         vm.warp(block.timestamp + buckets * SIX_DAYS);
         // the first lifecycle call after the silence performs the catch-up.
@@ -75,23 +76,23 @@ contract CheckpointCatchupLimitTest is LockedCurveTestBase {
         );
         assertEq(
             veHemi.nonTransferableTotalVeHemiSupply(),
-            _sumBalancesWhere(false),
+            _sumSubcurveBalances(false),
             string.concat("locked subcurve != reconstruction at gap ", vm.toString(buckets))
         );
         assertEq(
             veHemi.forfeitableTotalVeHemiSupply(),
-            _sumBalancesWhere(true),
+            _sumSubcurveBalances(true),
             string.concat("forfeitable subcurve != reconstruction at gap ", vm.toString(buckets))
         );
-        (uint256 tot, uint256 lk, uint256 fo, ) = veHemi.supplyBreakdown();
-        assertLe(fo, lk, "ordering forfeitable <= locked");
-        assertLe(lk, tot, "ordering locked <= total");
+        (uint256 total, uint256 locked_, uint256 forfeitable_, ) = veHemi.supplyBreakdown();
+        assertLe(forfeitable_, locked_, "ordering forfeitable <= locked");
+        assertLe(locked_, total, "ordering locked <= total");
 
         delete ids;
         vm.revertToState(snap);
     }
 
-    function test_gap_250_belowCap() public { _assertConsistentAtGap(250); }
+    function test_gap_250_belowLimit() public { _assertConsistentAtGap(250); }
     function test_gap_299() public { _assertConsistentAtGap(299); }
     function test_gap_300() public { _assertConsistentAtGap(300); }
     function test_gap_305() public { _assertConsistentAtGap(305); }
@@ -106,7 +107,7 @@ contract CheckpointCatchupLimitTest is LockedCurveTestBase {
     ///         catch-up longer than the limit. Both subcurve heads are advanced by
     ///         the same loop, so an unclamped loop would leave them stale too.
     function test_subcurvesAfterTruncatingCatchup() public {
-        _mkCohort();
+        _createCohort();
         vm.warp(block.timestamp + 480 * SIX_DAYS);
         hemi.mint(address(this), 10_000 ether);
         vm.startPrank(address(this));
@@ -114,15 +115,15 @@ contract CheckpointCatchupLimitTest is LockedCurveTestBase {
         ids.push(veHemi.createLockFor(300 ether, 3 * 365 days, charlie, false, false));
         vm.stopPrank();
 
-        assertEq(veHemi.nonTransferableTotalVeHemiSupply(), _sumBalancesWhere(false), "locked subcurve");
-        assertEq(veHemi.forfeitableTotalVeHemiSupply(), _sumBalancesWhere(true), "forfeitable subcurve");
+        assertEq(veHemi.nonTransferableTotalVeHemiSupply(), _sumSubcurveBalances(false), "locked subcurve");
+        assertEq(veHemi.forfeitableTotalVeHemiSupply(), _sumSubcurveBalances(true), "forfeitable subcurve");
 
         // and it stays exact as the curve decays forward
         for (uint256 i; i < 6; ++i) {
             vm.warp(block.timestamp + 20 * SIX_DAYS);
             veHemi.checkpoint();
             assertEq(veHemi.totalVeHemiSupply(), _sumBalances(), "global drift after catch-up");
-            assertEq(veHemi.nonTransferableTotalVeHemiSupply(), _sumBalancesWhere(false), "locked drift");
+            assertEq(veHemi.nonTransferableTotalVeHemiSupply(), _sumSubcurveBalances(false), "locked drift");
         }
     }
 
@@ -130,15 +131,15 @@ contract CheckpointCatchupLimitTest is LockedCurveTestBase {
     ///         700-bucket gap: unclamped, the first two would truncate and leave
     ///         `locked > total`.
     function test_doubleTruncation_orderingHolds() public {
-        _mkCohort();
+        _createCohort();
         vm.warp(block.timestamp + 700 * SIX_DAYS);
         hemi.mint(address(this), 10_000 ether);
         for (uint256 i; i < 3; ++i) {
             ids.push(veHemi.createLockFor(100 ether, 2 * 365 days, alice, true, false));
         }
-        (uint256 tot, uint256 lk, uint256 fo, ) = veHemi.supplyBreakdown();
-        assertLe(fo, lk, "forfeitable <= locked");
-        assertLe(lk, tot, "locked <= total");
+        (uint256 total, uint256 locked_, uint256 forfeitable_, ) = veHemi.supplyBreakdown();
+        assertLe(forfeitable_, locked_, "forfeitable <= locked");
+        assertLe(locked_, total, "locked <= total");
         assertEq(veHemi.totalVeHemiSupply(), _sumBalances(), "supply != sum after double truncation");
     }
 
@@ -146,7 +147,7 @@ contract CheckpointCatchupLimitTest is LockedCurveTestBase {
     ///         the gap. The VVD's `getPastTotalSupply` (Aragon's quorum
     ///         denominator, frozen into a proposal for its whole life) reads it.
     function test_historicalQueryInsideGap_isNotPhantom() public {
-        _mkCohort();
+        _createCohort();
         uint256 t0 = block.timestamp;
         vm.warp(t0 + 600 * SIX_DAYS);
         hemi.mint(address(this), 10_000 ether);
@@ -165,7 +166,7 @@ contract CheckpointCatchupLimitTest is LockedCurveTestBase {
 
     /// @notice Repeated checkpoints after a long gap stay exact and keep the head current.
     function test_repeatedCheckpointsStayExact() public {
-        _mkCohort();
+        _createCohort();
         vm.warp(block.timestamp + 480 * SIX_DAYS);
         veHemi.checkpoint();
         for (uint256 i; i < 4; ++i) {
@@ -177,35 +178,37 @@ contract CheckpointCatchupLimitTest is LockedCurveTestBase {
 
     /// @notice A 299-bucket catch-up (below the limit) leaves the head current. The
     ///         fingerprint of every global Point is logged for comparison only.
-    function test_fingerprintBelowThreshold() public {
-        _mkCohort();
+    function test_catchupBelowLimit_leavesHeadCurrent() public {
+        _createCohort();
         vm.warp(block.timestamp + 299 * SIX_DAYS);
         veHemi.checkpoint();
-        uint256 e = veHemi.epoch();
-        bytes32 fp;
-        for (uint256 i; i <= e; ++i) {
-            IVeHemi.Point memory p = veHemi.getGlobalPoint(i);
-            fp = keccak256(abi.encodePacked(fp, p.bias, p.slope, p.timestamp, p.blockNumber));
+        uint256 headEpoch = veHemi.epoch();
+        bytes32 fingerprint;
+        for (uint256 i; i <= headEpoch; ++i) {
+            IVeHemi.Point memory point = veHemi.getGlobalPoint(i);
+            fingerprint = keccak256(
+                abi.encodePacked(fingerprint, point.bias, point.slope, point.timestamp, point.blockNumber)
+            );
         }
-        emit log_named_uint("epochs", e);
-        emit log_named_bytes32("fingerprint", fp);
+        emit log_named_uint("epochs", headEpoch);
+        emit log_named_bytes32("fingerprint", fingerprint);
         // the head must be current; the epoch count depends on CATCHUP_LIMIT and is logged only
-        assertEq(veHemi.getGlobalPoint(e).timestamp, uint64(block.timestamp), "head not current");
+        assertEq(veHemi.getGlobalPoint(headEpoch).timestamp, uint64(block.timestamp), "head not current");
     }
 
     /// @notice Randomised gaps and sub-bucket phases.
     /// forge-config: default.fuzz.runs = 256
-    function testFuzz_anyGapAndPhase(uint16 gapRaw, uint32 phaseRaw) public {
+    function testFuzz_catchupAfterAnyGapAndPhase_headCurrentAndCurvesExact(uint16 gapRaw, uint32 phaseRaw) public {
         uint256 gap = 250 + (uint256(gapRaw) % 600);
         uint256 phase = uint256(phaseRaw) % SIX_DAYS;
-        _mkCohort();
+        _createCohort();
         vm.warp(block.timestamp + gap * SIX_DAYS + phase);
         hemi.mint(address(this), 10_000 ether);
         ids.push(veHemi.createLockFor(100 ether, 3 * 365 days, alice, true, false));
 
         assertEq(veHemi.getGlobalPoint(veHemi.epoch()).timestamp, uint64(block.timestamp), "stale head");
         assertEq(veHemi.totalVeHemiSupply(), _sumBalances(), "supply != sum");
-        assertEq(veHemi.nonTransferableTotalVeHemiSupply(), _sumBalancesWhere(false), "locked subcurve");
-        assertEq(veHemi.forfeitableTotalVeHemiSupply(), _sumBalancesWhere(true), "forfeitable subcurve");
+        assertEq(veHemi.nonTransferableTotalVeHemiSupply(), _sumSubcurveBalances(false), "locked subcurve");
+        assertEq(veHemi.forfeitableTotalVeHemiSupply(), _sumSubcurveBalances(true), "forfeitable subcurve");
     }
 }

@@ -15,22 +15,34 @@ import {VeHemiVoteDelegation} from "src/VeHemiVoteDelegation.sol";
  *
  *        C1 QUIET CONTINUITY  — a window in which NOBODY wrote to the witnessed
  *                               positions has no shortfall in the delegatee's
- *                               sealed history.
+ *                               sealed ledger.
  *        C2 CONFINEMENT       — a write to ONE position never reaches an
  *                               UNTOUCHED co-delegator of the same delegatee:
  *                               its full weight survives, to the wei.
- *        C3 HEALED IN FULL    — at the first checkpoint boundary at or after a
- *                               write, the delegatee's SEALED history covers the
- *                               FULL floor, touched position included.
- *        C4 ACCESS PAIRING    — from ONE snapshot, three arms: the delegatee's
+ *        C3 HEALED IN FULL    — at the next hour boundary after the write, the
+ *                               delegatee's SEALED votes cover the FULL floor,
+ *                               touched position included.
+ *        C4 ACCESS PAIRING    — from ONE snapshot, three runs: the delegatee's
  *                               sealed ledger with NO call made (the
  *                               counterfactual), the same ledger after the
  *                               OWNER's call, which must succeed AND differ from
  *                               the counterfactual, and only then the identical
  *                               call by a NON-OWNER, which must REVERT. The owner
- *                               arm is the stranger arm's non-vacuity witness: a
+ *                               run is the stranger run's non-vacuity witness: a
  *                               lone "the stranger reverts" assertion also passes
  *                               if the call never reached the ledger.
+ *
+ * @dev SEALED: the `getPastVotes(d, t)` answer for an instant `t` that has
+ *      already passed; layout clause L4 (test/CheckpointLayout.t.sol) forbids
+ *      any later write from changing it. "Sealed votes" (a "sealed reading")
+ *      is one such reading, the "sealed ledger" a sampled series of them.
+ *
+ * @dev `VoteHoleLaw` (test/autorelock-ledger/VoteHoleLaw.sol) bounds the same
+ *      harm from the inside: it is a state predicate at `block.timestamp` on
+ *      `delegationBookedAt` and the delegation records, and its "hole" is one
+ *      position's missing contribution while its booking is pending, whereas
+ *      this law reads only the public vote surface, over elapsed windows, and
+ *      measures a shortfall against records the caller witnessed.
  *
  * @dev Construction rules:
  *      * NO COUNTERS. Every number computed is an argument to an assertion.
@@ -54,7 +66,7 @@ library VoteContinuityLaw {
 
     /// @dev `VeHemiVoteDelegation.CHECKPOINT_INTERVAL` is `private constant`,
     ///      so it is restated here and pinned from the PUBLIC surface by
-    ///      `test_L0_boundaryIsWhereTheContractSaysItIs` in
+    ///      `test_lawBoundaryMatchesTheContract` in
     ///      `VoteContinuityClauses.t.sol`.
     uint256 internal constant CHECKPOINT_INTERVAL = 1 hours;
     uint256 internal constant EPOCH_OFFSET = 0;
@@ -77,20 +89,20 @@ library VoteContinuityLaw {
 
     /// @notice Read a position's CURRENT delegation record off the public
     ///         getter.
-    function readTerm(VeHemiVoteDelegation d_, uint256 id_) internal view returns (Term memory w) {
-        (address rd, uint48 end, uint96 bias, , uint64 slope) = d_.delegations(id_);
-        w.id = id_;
-        w.delegatee = rd;
-        w.bias = uint256(bias);
-        w.slope = uint256(slope);
-        w.end = uint256(end);
+    function readTerm(VeHemiVoteDelegation delegation_, uint256 id_) internal view returns (Term memory term) {
+        (address delegatee, uint48 end, uint96 bias, , uint64 slope) = delegation_.delegations(id_);
+        term.id = id_;
+        term.delegatee = delegatee;
+        term.bias = uint256(bias);
+        term.slope = uint256(slope);
+        term.end = uint256(end);
     }
 
-    function readTerms(VeHemiVoteDelegation d_, uint256[] memory ids_)
+    function readTerms(VeHemiVoteDelegation delegation_, uint256[] memory ids_)
         internal view returns (Term[] memory out)
     {
         out = new Term[](ids_.length);
-        for (uint256 i; i < ids_.length; ++i) out[i] = readTerm(d_, ids_[i]);
+        for (uint256 i; i < ids_.length; ++i) out[i] = readTerm(delegation_, ids_[i]);
     }
 
     /// @dev The per-record contribution `_getDelegateVotesAt` aggregates
@@ -106,12 +118,12 @@ library VoteContinuityLaw {
 
     /// @dev The summed weight, at `t_`, of every supplied term still pointing
     ///      at `delegatee_`.
-    function _floorAt(Term[] memory ws_, address delegatee_, uint256 t_)
+    function _floorAt(Term[] memory terms_, address delegatee_, uint256 t_)
         private pure returns (uint256 sum)
     {
-        for (uint256 i; i < ws_.length; ++i) {
-            if (ws_[i].delegatee != delegatee_) continue;   // not a member of the set at all
-            sum += contributionAt(ws_[i].slope, ws_[i].bias, ws_[i].end, t_);
+        for (uint256 i; i < terms_.length; ++i) {
+            if (terms_[i].delegatee != delegatee_) continue;   // not a member of the set at all
+            sum += contributionAt(terms_[i].slope, terms_[i].bias, terms_[i].end, t_);
         }
     }
 
@@ -119,43 +131,43 @@ library VoteContinuityLaw {
     /**
      * @notice CLAUSE 1 — QUIET CONTINUITY. Over a window in which the supplied
      *         delegator set was demonstrably NOT written to, the delegatee's
-     *         SEALED history covers that set's full weight at every instant.
+     *         SEALED ledger covers that set's full weight at every instant.
      *
-     * @dev Red on any shortfall a write did not cause: a hole opened by the
-     *      passage of time, or on a position nobody touched.
+     * @dev Red on any shortfall a write did not cause: a shortfall opened by
+     *      the passage of time, or on a position nobody touched.
      *
      * @dev QUIETNESS IS VERIFIED, NOT ASSUMED, AND A NON-QUIET WINDOW FAILS.
      *      The law re-reads each record now and requires it identical to the
      *      witnessed one. If a record moved, this body cannot answer the
      *      question it was asked, so it goes RED rather than skipping.
      *
-     * @param ws_ records witnessed BEFORE `from_`. Taken with `readTerms`.
+     * @param witnessed_ records witnessed BEFORE `from_`. Taken with `readTerms`.
      */
     function assertQuietWindowContinuous(
         VeHemi ve_,
-        VeHemiVoteDelegation d_,
-        Term[] memory ws_,
+        VeHemiVoteDelegation delegation_,
+        Term[] memory witnessed_,
         address delegatee_,
         uint256 from_,
         uint256 to_
     ) internal view {
         _requireHistorical(to_);
-        _requireQuiet(d_, ws_);
+        _requireQuiet(delegation_, witnessed_);
 
         // COVERAGE, ASSERTED: a floor of zero would make every later assertion
         // trivially satisfiable, which is the degenerate shape this whole file
         // exists to avoid. Checked at BOTH ends so a term expiring mid-window
         // cannot hollow the law out silently.
-        uint256 f0 = _floorAt(ws_, delegatee_, from_);
-        uint256 f1 = _floorAt(ws_, delegatee_, to_);
-        vm.assertGt(f0, 0, _vacuous("C1", delegatee_, from_));
-        vm.assertGt(f1, 0, _vacuous("C1", delegatee_, to_));
+        uint256 floorAtFrom = _floorAt(witnessed_, delegatee_, from_);
+        uint256 floorAtTo = _floorAt(witnessed_, delegatee_, to_);
+        vm.assertGt(floorAtFrom, 0, _vacuous("C1", delegatee_, from_));
+        vm.assertGt(floorAtTo, 0, _vacuous("C1", delegatee_, to_));
 
         for (uint256 t = from_; t <= to_; ++t) {
-            uint256 floor_ = _floorAt(ws_, delegatee_, t);
-            uint256 votes = d_.getPastVotes(delegatee_, t);
+            uint256 floor_ = _floorAt(witnessed_, delegatee_, t);
+            uint256 votes = delegation_.getPastVotes(delegatee_, t);
             if (votes < floor_) {
-                vm.assertGe(votes, floor_, _shortfall(ve_, ws_, delegatee_, t, floor_, votes, "QUIET"));
+                vm.assertGe(votes, floor_, _shortfall(ve_, witnessed_, delegatee_, t, floor_, votes, "QUIET"));
             }
         }
     }
@@ -164,7 +176,7 @@ library VoteContinuityLaw {
     /**
      * @notice CLAUSE 2 — CONFINEMENT. Over a window containing a write to ONE
      *         position, every UNTOUCHED position delegating to the same
-     *         delegatee keeps its full weight in SEALED history, at every
+     *         delegatee keeps its full weight in the SEALED ledger, at every
      *         instant, to the wei.
      *
      * @dev Alice's write to her own position may change Alice's weight inside
@@ -178,23 +190,23 @@ library VoteContinuityLaw {
      */
     function assertConfinedToTouchedPosition(
         VeHemi ve_,
-        VeHemiVoteDelegation d_,
+        VeHemiVoteDelegation delegation_,
         Term[] memory untouched_,
         address delegatee_,
         uint256 from_,
         uint256 to_
     ) internal view {
         _requireHistorical(to_);
-        _requireQuiet(d_, untouched_);
+        _requireQuiet(delegation_, untouched_);
 
-        uint256 f0 = _floorAt(untouched_, delegatee_, from_);
-        uint256 f1 = _floorAt(untouched_, delegatee_, to_);
-        vm.assertGt(f0, 0, _vacuous("C2", delegatee_, from_));
-        vm.assertGt(f1, 0, _vacuous("C2", delegatee_, to_));
+        uint256 floorAtFrom = _floorAt(untouched_, delegatee_, from_);
+        uint256 floorAtTo = _floorAt(untouched_, delegatee_, to_);
+        vm.assertGt(floorAtFrom, 0, _vacuous("C2", delegatee_, from_));
+        vm.assertGt(floorAtTo, 0, _vacuous("C2", delegatee_, to_));
 
         for (uint256 t = from_; t <= to_; ++t) {
             uint256 floor_ = _floorAt(untouched_, delegatee_, t);
-            uint256 votes = d_.getPastVotes(delegatee_, t);
+            uint256 votes = delegation_.getPastVotes(delegatee_, t);
             if (votes < floor_) {
                 vm.assertGe(votes, floor_, _shortfall(ve_, untouched_, delegatee_, t, floor_, votes, "CONFINEMENT"));
             }
@@ -203,10 +215,10 @@ library VoteContinuityLaw {
 
     // ==================================================================== C3
     /**
-     * @notice CLAUSE 3 — HEALED IN FULL, AT THE BOUNDARY, IN SEALED HISTORY.
-     *         At the first checkpoint boundary at or after `writeAt_`, the
-     *         delegatee's historical votes cover the full floor of the supplied
-     *         set INCLUDING the position that was written.
+     * @notice CLAUSE 3 — HEALED IN FULL, AT THE BOUNDARY, IN SEALED VOTES.
+     *         At the next hour boundary after `writeAt_`, the delegatee's
+     *         sealed votes cover the full floor of the supplied set INCLUDING
+     *         the position that was written.
      *
      * @dev Any effect of a write on the delegatee is bounded IN TIME by the
      *      boundary fixed the moment the write lands. It goes RED if the
@@ -221,21 +233,23 @@ library VoteContinuityLaw {
      */
     function assertHealedInFullAtBoundary(
         VeHemi ve_,
-        VeHemiVoteDelegation d_,
+        VeHemiVoteDelegation delegation_,
         uint256[] memory ids_,
         address delegatee_,
         uint256 writeAt_
     ) internal view {
-        uint256 bnd = nextBoundary(writeAt_);
-        _requireHistorical(bnd);
+        uint256 nextHourBoundary = nextBoundary(writeAt_);
+        _requireHistorical(nextHourBoundary);
 
-        Term[] memory now_ = readTerms(d_, ids_);
-        uint256 floor_ = _floorAt(now_, delegatee_, bnd);
-        vm.assertGt(floor_, 0, _vacuous("C3", delegatee_, bnd));
+        Term[] memory currentTerms = readTerms(delegation_, ids_);
+        uint256 floor_ = _floorAt(currentTerms, delegatee_, nextHourBoundary);
+        vm.assertGt(floor_, 0, _vacuous("C3", delegatee_, nextHourBoundary));
 
-        uint256 votes = d_.getPastVotes(delegatee_, bnd);
+        uint256 votes = delegation_.getPastVotes(delegatee_, nextHourBoundary);
         if (votes < floor_) {
-            vm.assertGe(votes, floor_, _notHealed(ve_, now_, delegatee_, bnd, writeAt_, floor_, votes));
+            vm.assertGe(
+                votes, floor_, _notHealed(ve_, currentTerms, delegatee_, nextHourBoundary, writeAt_, floor_, votes)
+            );
         }
     }
 
@@ -244,11 +258,11 @@ library VoteContinuityLaw {
      * @notice CLAUSE 4 — ACCESS PAIRING. The caller-conditional property,
      *         asserted on the surface where the caller is actually the subject.
      *
-     *         ARM N: NOBODY calls anything. The delegatee's SEALED ledger is
+     *         RUN N: NOBODY calls anything. The delegatee's SEALED ledger is
      *                swept and kept. This is the counterfactual.
-     *         ARM O: from the SAME state, `owner_` makes the call; it MUST
-     *                succeed, AND the same sweep MUST DIFFER from arm N's.
-     *         ARM S: from the SAME state again, `stranger_` makes the
+     *         RUN O: from the SAME state, `owner_` makes the call; it MUST
+     *                succeed, AND the same sweep MUST DIFFER from run N's.
+     *         RUN S: from the SAME state again, `stranger_` makes the
      *                IDENTICAL call, and it MUST REVERT.
      *
      * @dev THE WITNESS IS "THE OWNER'S CALL MUTATES THE DELEGATEE'S LEDGER",
@@ -258,13 +272,13 @@ library VoteContinuityLaw {
      *          #{ t in W : getPastVotes(delegatee, t) after the owner's call
      *                   != getPastVotes(delegatee, t) with no call at all }  > 0
      *
-     *      and the law is RED if that count is zero, before arm S is reached.
+     *      and the law is RED if that count is zero, before run S is reached.
      *
      * @dev WHY A DIFFERENTIAL AND NOT A COMPARISON AGAINST THE FLOOR.
      *      `_floorAt` sums only the CALLER-SUPPLIED records, so a delegatee with
      *      any co-delegator the caller did not name reads ABOVE its floor at
      *      every instant WITH NO CALL MADE AT ALL, and a "moved away from the
-     *      floor" witness would fire on nothing. Both arms of the differential
+     *      floor" witness would fire on nothing. Both runs of the differential
      *      carry the same co-delegators and the same decay, so the ONLY thing
      *      that can separate them is the call.
      *
@@ -283,7 +297,7 @@ library VoteContinuityLaw {
      *      call through this same body.
      */
     function assertOnlyOwnerCanMutate(
-        VeHemiVoteDelegation d_,
+        VeHemiVoteDelegation delegation_,
         address target_,
         bytes memory call_,
         address stranger_,
@@ -296,28 +310,29 @@ library VoteContinuityLaw {
         // escrow-backed weight from the witnessed set, or this body has no
         // subject and every later assertion is trivially satisfiable.
         vm.assertGt(
-            _floorAt(readTerms(d_, ids_), delegatee_, block.timestamp), 0,
+            _floorAt(readTerms(delegation_, ids_), delegatee_, block.timestamp), 0,
             _vacuous(string.concat("C4/", label_), delegatee_, block.timestamp)
         );
 
         uint256 snap = vm.snapshotState();
 
-        // ---- ARM N. THE COUNTERFACTUAL. Nobody calls anything; the ledger is
-        //      swept exactly as arm O will sweep it. EVM memory survives
+        // ---- RUN N. THE COUNTERFACTUAL. Nobody calls anything; the ledger is
+        //      swept exactly as run O will sweep it. EVM memory survives
         //      `revertToState` (only storage, balances and nonces roll back),
-        //      so this vector is still here when arm O's is taken.
-        uint256[] memory ctl = _sealedLedger(d_, delegatee_);
+        //      so this vector is still here when run O's is taken.
+        uint256[] memory noCallLedger = _sealedLedger(delegation_, delegatee_);
         vm.revertToState(snap);
 
-        // ---- ARM O RUNS BEFORE ARM S, AND THE ORDER IS LOAD-BEARING.
-        // Running arm O first makes the gate assertion UNREACHABLE unless this
+        // ---- RUN O COMES BEFORE RUN S, AND THE ORDER IS LOAD-BEARING.
+        // Doing run O first makes the gate assertion UNREACHABLE unless this
         // entry point demonstrably moves the ledger; a body that
         // cannot evaluate its own subject is RED, not green.
-        uint256[] memory own = _armOwner(d_, target_, call_, owner_, delegatee_, label_);
+        uint256[] memory ownerCallLedger =
+            _sealedLedgerAfterOwnerCall(delegation_, target_, call_, owner_, delegatee_, label_);
         vm.revertToState(snap);
 
         vm.assertGt(
-            _movedInstants(ctl, own), 0,
+            _movedInstants(noCallLedger, ownerCallLedger), 0,
             string.concat(
                 "C4 [", label_, "] NOT APPLICABLE / VACUOUS. The OWNER made this exact call"
                 " and ", vm.toString(delegatee_), "'s sealed ledger is IDENTICAL to the"
@@ -326,23 +341,23 @@ library VoteContinuityLaw {
                 " there is nothing here for a gate to close and asserting the stranger's revert"
                 " from here would prove NOTHING - it is the failure mode where a"
                 " permission check turns a body green without touching any defect. This is"
-                " deliberately RED and not a pass. Either point this probe at calldata that"
+                " deliberately RED and not a pass. Either point this C4 check at calldata that"
                 " does mutate the ledger, or delete it on purpose and say so."
             )
         );
 
-        // ---- ARM S. Only now, with the mutation proved, is the
+        // ---- RUN S. Only now, with the mutation proved, is the
         //      stranger's refusal a statement about anything.
-        _armStranger(target_, call_, stranger_, delegatee_, label_);
+        _assertStrangerCallReverts(target_, call_, stranger_, delegatee_, label_);
 
         vm.revertToState(snap);
     }
 
-    /// @dev ARM O, split out because the paired body runs out of EVM stack
+    /// @dev RUN O, split out because the paired body runs out of EVM stack
     ///      otherwise. The owner's call MUST succeed; the sweep it returns is
     ///      half of the non-vacuity differential.
-    function _armOwner(
-        VeHemiVoteDelegation d_,
+    function _sealedLedgerAfterOwnerCall(
+        VeHemiVoteDelegation delegation_,
         address target_,
         bytes memory call_,
         address owner_,
@@ -350,20 +365,20 @@ library VoteContinuityLaw {
         string memory label_
     ) private returns (uint256[] memory) {
         vm.prank(owner_);
-        (bool okO, ) = target_.call(call_);
+        (bool ownerCallOk, ) = target_.call(call_);
         vm.assertEq(
-            okO, true,
+            ownerCallOk, true,
             string.concat(
                 "C4 [", label_, "] OWNER LOCKED OUT. The gate refused the position's own"
                 " owner. The gate is for STRANGERS, not owners."
             )
         );
-        return _sealedLedger(d_, delegatee_);
+        return _sealedLedger(delegation_, delegatee_);
     }
 
-    /// @dev ARM S, split out for the same reason. Reached ONLY after arm O has
+    /// @dev RUN S, split out for the same reason. Reached ONLY after run O has
     ///      proved that the refused call mutates the ledger.
-    function _armStranger(
+    function _assertStrangerCallReverts(
         address target_,
         bytes memory call_,
         address stranger_,
@@ -371,16 +386,16 @@ library VoteContinuityLaw {
         string memory label_
     ) private {
         vm.prank(stranger_);
-        (bool okS, ) = target_.call(call_);
+        (bool strangerCallOk, ) = target_.call(call_);
         vm.assertEq(
-            okS, false,
+            strangerCallOk, false,
             string.concat(
                 "C4 [", label_, "] GATE OPEN. ", vm.toString(stranger_),
-                " does not own the position and was allowed to write to it. The owner arm of"
+                " does not own the position and was allowed to write to it. The owner run of"
                 " this same body has already demonstrated, against a no-call counterfactual"
                 " replayed from the same snapshot, that this exact call MUTATES ",
                 vm.toString(delegatee_),
-                "'s SEALED voting record - so this is not a bare permission check. A party with"
+                "'s SEALED ledger - so this is not a bare permission check. A party with"
                 " no authority over the position can move a third account's governance weight,"
                 " irreversibly and without the consent of either. Only the owner may make this call."
             )
@@ -393,28 +408,31 @@ library VoteContinuityLaw {
     ///      otherwise. The warp is undone by the caller's snapshot restore, so
     ///      the clock is left where it was found.
     ///
-    ///      THE WINDOW. `[T+1 .. min(nextBoundary(T)-1, T+600)]`, plus THREE
-    ///      post-boundary instants — the boundary itself, one hour later and
-    ///      one day later. The contiguous part costs at most 600 `getPastVotes`
-    ///      reads and is a LOWER bound on the evidence, which is the safe
-    ///      direction for a vacuity guard. The three tail samples exist so that
-    ///      a call whose ONLY effect lands at or after the boundary (a deferred
-    ///      re-booking) is still witnessed rather than mistaken for a no-op.
-    function _sealedLedger(VeHemiVoteDelegation d_, address delegatee_)
+    ///      THE WINDOW. `[callAt+1 .. min(nextBoundary(callAt)-1, callAt+600)]`,
+    ///      plus THREE post-boundary instants — the boundary itself, one hour
+    ///      later and one day later. The contiguous part costs at most 600
+    ///      `getPastVotes` reads and is a LOWER bound on the evidence, which is
+    ///      the safe direction for a vacuity guard. The three tail samples exist
+    ///      so that a call whose ONLY effect lands at or after the boundary (a
+    ///      deferred re-booking) is still witnessed rather than mistaken for a
+    ///      no-op.
+    function _sealedLedger(VeHemiVoteDelegation delegation_, address delegatee_)
         private returns (uint256[] memory out)
     {
-        uint256 T = block.timestamp;
-        uint256 bnd = nextBoundary(T);
-        uint256 end = bnd - 1;
-        if (end > T + 600) end = T + 600;
+        uint256 callAt = block.timestamp;
+        uint256 nextHourBoundary = nextBoundary(callAt);
+        uint256 lastContiguousSample = nextHourBoundary - 1;
+        if (lastContiguousSample > callAt + 600) lastContiguousSample = callAt + 600;
 
-        uint256 n = end - T;
+        uint256 n = lastContiguousSample - callAt;
         out = new uint256[](n + 3);
-        vm.warp(bnd + 86401);   // `getPastVotes` refuses the future
-        for (uint256 t = T + 1; t <= end; ++t) out[t - T - 1] = d_.getPastVotes(delegatee_, t);
-        out[n]     = d_.getPastVotes(delegatee_, bnd);
-        out[n + 1] = d_.getPastVotes(delegatee_, bnd + 3600);
-        out[n + 2] = d_.getPastVotes(delegatee_, bnd + 86400);
+        vm.warp(nextHourBoundary + 86401);   // `getPastVotes` refuses the future
+        for (uint256 t = callAt + 1; t <= lastContiguousSample; ++t) {
+            out[t - callAt - 1] = delegation_.getPastVotes(delegatee_, t);
+        }
+        out[n]     = delegation_.getPastVotes(delegatee_, nextHourBoundary);
+        out[n + 1] = delegation_.getPastVotes(delegatee_, nextHourBoundary + 3600);
+        out[n + 2] = delegation_.getPastVotes(delegatee_, nextHourBoundary + 86400);
     }
 
     /// @dev C4's non-vacuity witness, half two: how many sampled instants the
@@ -423,13 +441,15 @@ library VoteContinuityLaw {
     ///      asserted rather than assumed — two sweeps of different lengths
     ///      would mean the window moved under the law, and a law that cannot
     ///      answer must fail rather than guess.
-    function _movedInstants(uint256[] memory a_, uint256[] memory b_)
+    function _movedInstants(uint256[] memory noCallLedger_, uint256[] memory ownerCallLedger_)
         private returns (uint256 moved)
     {
-        vm.assertEq(a_.length, b_.length, "C4 INTERNAL: the two sweeps have different lengths.");
-        vm.assertGt(a_.length, 0, "C4 INTERNAL: the sweep window is EMPTY - this body proved nothing.");
-        for (uint256 i; i < a_.length; ++i) {
-            if (a_[i] != b_[i]) { unchecked { ++moved; } }
+        vm.assertEq(
+            noCallLedger_.length, ownerCallLedger_.length, "C4 INTERNAL: the two sweeps have different lengths."
+        );
+        vm.assertGt(noCallLedger_.length, 0, "C4 INTERNAL: the sweep window is EMPTY - this body proved nothing.");
+        for (uint256 i; i < noCallLedger_.length; ++i) {
+            if (noCallLedger_[i] != ownerCallLedger_[i]) { unchecked { ++moved; } }
         }
     }
 
@@ -449,17 +469,17 @@ library VoteContinuityLaw {
 
     /// @dev A record that MOVED is not a reference. A law that cannot answer
     ///      goes RED; it does not decline to look.
-    function _requireQuiet(VeHemiVoteDelegation d_, Term[] memory ws_) private view {
-        vm.assertGt(ws_.length, 0, "VACUOUS: the witnessed set is EMPTY - this body proved nothing.");
-        for (uint256 i; i < ws_.length; ++i) {
-            Term memory n = readTerm(d_, ws_[i].id);
-            bool same = n.delegatee == ws_[i].delegatee
-                && n.bias == ws_[i].bias
-                && n.slope == ws_[i].slope
-                && n.end == ws_[i].end;
+    function _requireQuiet(VeHemiVoteDelegation delegation_, Term[] memory witnessed_) private view {
+        vm.assertGt(witnessed_.length, 0, "VACUOUS: the witnessed set is EMPTY - this body proved nothing.");
+        for (uint256 i; i < witnessed_.length; ++i) {
+            Term memory current = readTerm(delegation_, witnessed_[i].id);
+            bool same = current.delegatee == witnessed_[i].delegatee
+                && current.bias == witnessed_[i].bias
+                && current.slope == witnessed_[i].slope
+                && current.end == witnessed_[i].end;
             if (!same) {
                 vm.assertTrue(same, string.concat(
-                    "WINDOW NOT QUIET: position #", vm.toString(ws_[i].id),
+                    "WINDOW NOT QUIET: position #", vm.toString(witnessed_[i].id),
                     "'s delegation record MOVED between the witness and now, so it is not a"
                     " reference for this window and this body proved nothing. Re-witness, or pass"
                     " it as the TOUCHED position to clause 2 instead. (This is deliberately a"
@@ -479,14 +499,14 @@ library VoteContinuityLaw {
         return string.concat(
             clause_, " VACUOUS: the floor for delegatee ", vm.toString(delegatee_),
             " at t=", vm.toString(t_),
-            " is ZERO, so the clause would be satisfied by any reading whatsoever, including a"
-            " total blackout. A body that evaluated nothing FAILS here; it does not pass."
+            " is ZERO, so the clause would be satisfied by any reading whatsoever, including"
+            " zero votes at every instant. A body that evaluated nothing FAILS here; it does not pass."
         );
     }
 
     function _shortfall(
         VeHemi ve_,
-        Term[] memory ws_,
+        Term[] memory witnessed_,
         address delegatee_,
         uint256 t_,
         uint256 floor_,
@@ -503,8 +523,8 @@ library VoteContinuityLaw {
             ),
             string.concat(
                 " Every position in that floor was still delegated to it and the escrow still"
-                " held them: position #", vm.toString(ws_[0].id), " alone carried ",
-                vm.toString(ve_.balanceOfNFTAt(ws_[0].id, t_)),
+                " held them: position #", vm.toString(witnessed_[0].id), " alone carried ",
+                vm.toString(ve_.balanceOfNFTAt(witnessed_[0].id, t_)),
                 " wei of escrow weight at that instant."
             ),
             " The instant has ALREADY ELAPSED, so any governance proposal snapshotted at it"
@@ -514,9 +534,9 @@ library VoteContinuityLaw {
 
     function _notHealed(
         VeHemi ve_,
-        Term[] memory ws_,
+        Term[] memory terms_,
         address delegatee_,
-        uint256 bnd_,
+        uint256 nextHourBoundary_,
         uint256 writeAt_,
         uint256 floor_,
         uint256 votes_
@@ -524,15 +544,15 @@ library VoteContinuityLaw {
         return string.concat(
             string.concat(
                 "NOT HEALED AT THE BOUNDARY. A write landed at timestamp ", vm.toString(writeAt_),
-                ". By the checkpoint boundary at ", vm.toString(bnd_),
+                ". By the next hour boundary at ", vm.toString(nextHourBoundary_),
                 " its effect must have landed in full. At that boundary delegatee ", vm.toString(delegatee_),
                 " should hold ", vm.toString(floor_), " wei."
             ),
             string.concat(
                 " getPastVotes answers ", vm.toString(votes_), " wei, short by ",
                 vm.toString(floor_ - votes_),
-                " wei, with ", vm.toString(ve_.balanceOfNFTAt(ws_[0].id, bnd_)),
-                " wei of escrow still backing position #", vm.toString(ws_[0].id), "."
+                " wei, with ", vm.toString(ve_.balanceOfNFTAt(terms_[0].id, nextHourBoundary_)),
+                " wei of escrow still backing position #", vm.toString(terms_[0].id), "."
             ),
             " Either the re-booking was skipped, or it landed low, or the shortfall outlived its"
             " own boundary."

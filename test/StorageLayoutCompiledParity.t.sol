@@ -47,9 +47,9 @@ contract StorageLayoutCompiledParityTest is Test {
         );
     }
 
-    // ─── probes (external so they can be try/caught) ────────────────────────
+    // ─── readers (external so they can be try/caught) ───────────────────────
 
-    function probeEntry(string calldata json, string calldata base, uint256 i)
+    function readEntryLabel(string calldata json, string calldata base, uint256 i)
         external
         view
         returns (string memory)
@@ -57,7 +57,7 @@ contract StorageLayoutCompiledParityTest is Test {
         return vm.parseJsonString(json, string.concat(base, "[", vm.toString(i), "].label"));
     }
 
-    function probeStructMember(string calldata json, string calldata typePath, uint256 i)
+    function readMemberLabel(string calldata json, string calldata typePath, uint256 i)
         external
         view
         returns (string memory)
@@ -65,9 +65,9 @@ contract StorageLayoutCompiledParityTest is Test {
         return vm.parseJsonString(json, string.concat(typePath, ".members[", vm.toString(i), "].label"));
     }
 
-    function _count(string memory json, string memory base) internal returns (uint256) {
+    function _countStorageEntries(string memory json, string memory base) internal returns (uint256) {
         for (uint256 i; i < 256; ++i) {
-            try this.probeEntry(json, base, i) {
+            try this.readEntryLabel(json, base, i) {
                 // exists
             } catch {
                 return i;
@@ -78,7 +78,7 @@ contract StorageLayoutCompiledParityTest is Test {
 
     function _countMembers(string memory json, string memory typePath) internal returns (uint256) {
         for (uint256 i; i < 64; ++i) {
-            try this.probeStructMember(json, typePath, i) {
+            try this.readMemberLabel(json, typePath, i) {
                 // exists
             } catch {
                 return i;
@@ -87,7 +87,7 @@ contract StorageLayoutCompiledParityTest is Test {
         revert("struct member count exceeds 64");
     }
 
-    // ─── GATE 1: top-level entries ──────────────────────────────────────────
+    // ─── CHECK 1: top-level entries ─────────────────────────────────────────
 
     function _assertTopLevelParity(Target memory t) internal {
         string memory fixture = vm.readFile(t.fixturePath);
@@ -102,8 +102,8 @@ contract StorageLayoutCompiledParityTest is Test {
             )
         );
 
-        uint256 fixtureCount = _count(fixture, ".storage");
-        uint256 artifactCount = _count(artifact, ".storageLayout.storage");
+        uint256 fixtureCount = _countStorageEntries(fixture, ".storage");
+        uint256 artifactCount = _countStorageEntries(artifact, ".storageLayout.storage");
 
         assertEq(
             artifactCount,
@@ -150,29 +150,29 @@ contract StorageLayoutCompiledParityTest is Test {
     ///      legitimately empty — that is asserted separately.)
     function test_ParityIsNotVacuous() public {
         Target[3] memory ts = _targets();
-        assertGt(_count(vm.readFile(ts[0].fixturePath), ".storage"), 0, "VeHemi fixture is empty");
+        assertGt(_countStorageEntries(vm.readFile(ts[0].fixturePath), ".storage"), 0, "VeHemi fixture is empty");
         assertGt(
-            _count(vm.readFile(ts[0].artifactPath), ".storageLayout.storage"),
+            _countStorageEntries(vm.readFile(ts[0].artifactPath), ".storageLayout.storage"),
             0,
             "VeHemi artifact layout is empty - the parity test would pass on nothing"
         );
-        assertGt(_count(vm.readFile(ts[1].fixturePath), ".storage"), 0, "VVD fixture is empty");
+        assertGt(_countStorageEntries(vm.readFile(ts[1].fixturePath), ".storage"), 0, "VVD fixture is empty");
         assertGt(
-            _count(vm.readFile(ts[1].artifactPath), ".storageLayout.storage"),
+            _countStorageEntries(vm.readFile(ts[1].artifactPath), ".storageLayout.storage"),
             0,
             "VVD artifact layout is empty - the parity test would pass on nothing"
         );
         assertEq(
-            _count(vm.readFile(ts[2].artifactPath), ".storageLayout.storage"),
+            _countStorageEntries(vm.readFile(ts[2].artifactPath), ".storageLayout.storage"),
             0,
             "VeHemiAragonAdapter must remain stateless"
         );
     }
 
-    // ─── GATE 2: struct shapes ──────────────────────────────────────────────
+    // ─── CHECK 2: struct shapes ─────────────────────────────────────────────
     //
     // A member appended into a struct's FREE PADDING moves no top-level entry,
-    // no member offset and no `numberOfBytes` — Gate 1 cannot see it. Compare
+    // no member offset and no `numberOfBytes` — Check 1 cannot see it. Compare
     // member COUNT and per-member label/slot/offset against the compiler.
     //
     // Type keys differ between the two files (the artifact keeps AST ids), so
@@ -180,7 +180,7 @@ contract StorageLayoutCompiledParityTest is Test {
     // the key whose `.label` matches the fixture type's `.label` — labels
     // ("struct IVeHemi.Point") carry no AST id.
 
-    function probeTypeKeyByLabel(string calldata artifact, string calldata wantLabel)
+    function findTypePath(string calldata artifact, string calldata wantLabel)
         external
         view
         returns (string memory)
@@ -203,12 +203,12 @@ contract StorageLayoutCompiledParityTest is Test {
         string memory fixtureTypeKey,
         string memory ctxName
     ) internal {
-        string memory fixturePath = string.concat(".types.[\"", fixtureTypeKey, "\"]");
-        string memory wantLabel = vm.parseJsonString(fixture, string.concat(fixturePath, ".label"));
-        string memory artifactPath = this.probeTypeKeyByLabel(artifact, wantLabel);
+        string memory fixtureTypePath = string.concat(".types.[\"", fixtureTypeKey, "\"]");
+        string memory wantLabel = vm.parseJsonString(fixture, string.concat(fixtureTypePath, ".label"));
+        string memory artifactTypePath = this.findTypePath(artifact, wantLabel);
 
-        uint256 fixtureMembers = _countMembers(fixture, fixturePath);
-        uint256 artifactMembers = _countMembers(artifact, artifactPath);
+        uint256 fixtureMembers = _countMembers(fixture, fixtureTypePath);
+        uint256 artifactMembers = _countMembers(artifact, artifactTypePath);
 
         assertGt(fixtureMembers, 0, string.concat(ctxName, ": fixture struct has no members - vacuous"));
         assertEq(
@@ -225,8 +225,8 @@ contract StorageLayoutCompiledParityTest is Test {
         );
 
         for (uint256 i; i < fixtureMembers; ++i) {
-            string memory fi = string.concat(fixturePath, ".members[", vm.toString(i), "]");
-            string memory ai = string.concat(artifactPath, ".members[", vm.toString(i), "]");
+            string memory fi = string.concat(fixtureTypePath, ".members[", vm.toString(i), "]");
+            string memory ai = string.concat(artifactTypePath, ".members[", vm.toString(i), "]");
             string memory ctx = string.concat(ctxName, " member ", vm.toString(i), " ");
             assertEq(
                 vm.parseJsonString(artifact, string.concat(ai, ".label")),
@@ -246,8 +246,8 @@ contract StorageLayoutCompiledParityTest is Test {
         }
 
         assertEq(
-            vm.parseJsonString(artifact, string.concat(artifactPath, ".numberOfBytes")),
-            vm.parseJsonString(fixture, string.concat(fixturePath, ".numberOfBytes")),
+            vm.parseJsonString(artifact, string.concat(artifactTypePath, ".numberOfBytes")),
+            vm.parseJsonString(fixture, string.concat(fixtureTypePath, ".numberOfBytes")),
             string.concat(ctxName, ": numberOfBytes drifted from the compiled struct")
         );
     }

@@ -28,7 +28,7 @@ contract AutoRelockSeedingWindowTest is Test {
 
     MockERC20 internal hemi;
     VeHemi internal ve;
-    VeHemiVoteDelegation internal del;
+    VeHemiVoteDelegation internal delegation;
     address internal constant BOB = address(0xB0B);
     address internal constant KEEPER = address(0xCAFE);
 
@@ -41,8 +41,8 @@ contract AutoRelockSeedingWindowTest is Test {
             address(logic), abi.encodeWithSelector(VeHemi.initialize.selector, address(this))
         );
         ve = VeHemi(address(proxy));
-        del = new VeHemiVoteDelegation(address(ve));
-        ve.updateVoteDelegation(IVeHemiVoteDelegation(address(del)));
+        delegation = new VeHemiVoteDelegation(address(ve));
+        ve.updateVoteDelegation(IVeHemiVoteDelegation(address(delegation)));
     }
 
     function _mint(address who, uint256 amt, uint256 buckets) internal returns (uint256 id) {
@@ -59,61 +59,62 @@ contract AutoRelockSeedingWindowTest is Test {
         hemi.mint(BOB, 1000 ether);
         vm.startPrank(BOB);
         hemi.approve(address(ve), type(uint256).max);
-        uint256 nt = ve.createLockFor(1000 ether, 6 * SIX_DAYS, BOB, false, false); // NON-transferable
+        uint256 nonTransferableId = ve.createLockFor(1000 ether, 6 * SIX_DAYS, BOB, false, false);
         vm.stopPrank();
         ve.markSeedingStarted();                       // window OPEN
         assertTrue(ve.seedingStarted(), "window did not open");
         assertFalse(ve.lockedSeedingFinalized(), "window already finalized");
-        assertGt(ve.transferableAfter(nt), block.timestamp, "position is not subcurve-enrolled");
+        assertGt(ve.transferableAfter(nonTransferableId), block.timestamp, "position is not subcurve-enrolled");
 
         vm.prank(BOB);
         vm.expectRevert(VeHemi.SeedingNotFinalized.selector);
-        ve.enableAutoRelock(nt);
-        assertEq(uint256(ve.autoRelockRemaining(nt)), 0, "a subcurve member went flat during the window");
-        assertEq(uint256(ve.autoRelockRefreshedAt(nt)), 0, "a STAMP exists on a subcurve member");
+        ve.enableAutoRelock(nonTransferableId);
+        assertEq(uint256(ve.autoRelockRemaining(nonTransferableId)), 0, "a subcurve member went flat during the window");
+        assertEq(uint256(ve.autoRelockRefreshedAt(nonTransferableId)), 0, "a refresh stamp exists on a subcurve member");
 
-        // and the retire is not a back door: with no flat term the view itself
-        // refuses, so the entry point is unreachable on this position.
+        // and the retire is not a back door: with auto-relock not enabled the
+        // view itself refuses, so the entry point is unreachable on this
+        // position.
         vm.prank(KEEPER);
         vm.expectRevert(VeHemi.AutoRelockNotEnabled.selector);
-        ve.retireStaleAutoRelock(nt);
+        ve.retireStaleAutoRelock(nonTransferableId);
     }
 
-    /// @notice S3. A transferable flat position (the seeding gate lets it
+    /// @notice S3. A transferable flat position (the seeding guard lets it
     ///         through, by design) retired by a stranger while the window is
     ///         open. The seeding accumulator only enrolls subcurve members, the
     ///         retire touches none of them, the totals reconcile, and
     ///         `finalizeSeeding` still lands.
     function test_S3_a_stranger_may_retire_a_transferable_flat_position_midwindow() public {
-        uint256 tr = _mint(BOB, 1000 ether, 6);             // transferable
+        uint256 transferableId = _mint(BOB, 1000 ether, 6); // transferable
         hemi.mint(BOB, 500 ether);
         vm.startPrank(BOB);
-        uint256 nt = ve.createLockFor(500 ether, 8 * SIX_DAYS, BOB, false, false); // subcurve member
+        uint256 nonTransferableId = ve.createLockFor(500 ether, 8 * SIX_DAYS, BOB, false, false); // subcurve member
         vm.stopPrank();
 
         vm.prank(BOB);
-        ve.enableAutoRelock(tr);                            // flat BEFORE the window
-        assertGt(uint256(ve.autoRelockRefreshedAt(tr)), 0, "not flat");
+        ve.enableAutoRelock(transferableId);                // flat BEFORE the window
+        assertGt(uint256(ve.autoRelockRefreshedAt(transferableId)), 0, "not flat");
 
         ve.markSeedingStarted();                            // window OPEN, flat position live
-        uint256 open = ve.autoRelockStaleAt(tr);
-        vm.warp(open); vm.roll(block.number + 1);
+        uint256 staleAt = ve.autoRelockStaleAt(transferableId);
+        vm.warp(staleAt); vm.roll(block.number + 1);
 
-        uint256 ntWeightBefore = ve.balanceOfNFT(nt);
+        uint256 nonTransferableWeightBefore = ve.balanceOfNFT(nonTransferableId);
         vm.prank(KEEPER);
-        ve.retireStaleAutoRelock(tr);                       // A STRANGER, MID-WINDOW
-        assertEq(uint256(ve.autoRelockRemaining(tr)), 0, "retire did not execute");
-        assertEq(uint256(ve.autoRelockRefreshedAt(tr)), 0, "stamp survived");
-        assertEq(ve.balanceOfNFT(nt), ntWeightBefore, "the retire moved a SUBCURVE MEMBER's weight");
+        ve.retireStaleAutoRelock(transferableId);           // A STRANGER, MID-WINDOW
+        assertEq(uint256(ve.autoRelockRemaining(transferableId)), 0, "retire did not execute");
+        assertEq(uint256(ve.autoRelockRefreshedAt(transferableId)), 0, "refresh stamp survived");
+        assertEq(ve.balanceOfNFT(nonTransferableId), nonTransferableWeightBefore, "the retire moved a SUBCURVE MEMBER's weight");
 
         // the window still completes, and the subcurve totals it publishes are
         // the ones the untouched member owns.
         ve.seedBatch(type(uint256).max);
         ve.finalizeSeeding();
         assertTrue(ve.lockedSeedingFinalized(), "finalizeSeeding did not land after a mid-window retire");
-        assertEq(ve.nonTransferableTotalVeHemiSupply(), ve.balanceOfNFT(nt),
+        assertEq(ve.nonTransferableTotalVeHemiSupply(), ve.balanceOfNFT(nonTransferableId),
             "the non-transferable subcurve total is not the one surviving member");
-        assertEq(ve.totalVeHemiSupply(), ve.balanceOfNFT(nt) + ve.balanceOfNFT(tr),
+        assertEq(ve.totalVeHemiSupply(), ve.balanceOfNFT(nonTransferableId) + ve.balanceOfNFT(transferableId),
             "global supply != sum of the two positions after a mid-window retire");
     }
 
@@ -129,7 +130,7 @@ contract AutoRelockSeedingWindowTest is Test {
 
         vm.prank(BOB);
         ve.enableAutoRelock(id);
-        assertGt(uint256(ve.autoRelockRefreshedAt(id)), 0, "stamp not written");
+        assertGt(uint256(ve.autoRelockRefreshedAt(id)), 0, "refresh stamp not written");
 
         // the latch refuses a second window
         vm.expectRevert();
@@ -137,15 +138,15 @@ contract AutoRelockSeedingWindowTest is Test {
         assertTrue(ve.lockedSeedingFinalized(), "finalization was cleared");
 
         // and the retire behaves exactly as it does outside any window
-        uint256 open = ve.autoRelockStaleAt(id);
-        vm.warp(open - 1); vm.roll(block.number + 1);
+        uint256 staleAt = ve.autoRelockStaleAt(id);
+        vm.warp(staleAt - 1); vm.roll(block.number + 1);
         vm.prank(KEEPER);
         vm.expectRevert(VeHemi.AutoRelockNotStale.selector);
         ve.retireStaleAutoRelock(id);
-        vm.warp(open); vm.roll(block.number + 1);
+        vm.warp(staleAt); vm.roll(block.number + 1);
         vm.prank(KEEPER);
         ve.retireStaleAutoRelock(id);
         assertEq(uint256(ve.autoRelockRemaining(id)), 0, "retire did not execute");
-        assertEq(uint256(ve.autoRelockRefreshedAt(id)), 0, "stamp survived");
+        assertEq(uint256(ve.autoRelockRefreshedAt(id)), 0, "refresh stamp survived");
     }
 }

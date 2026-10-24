@@ -10,7 +10,7 @@ import "../AutoRelockTestBase.sol";
 ///         never-decaying share of the denominator (the heartbeat bounds it:
 ///         STALE_FLAT_BUCKETS of silence and anyone may retire it); a seller
 ///         loses the votes from the next second; a flat position does not
-///         decay; a fresh delegation votes from the next block, not the same
+///         decay; a fresh delegation votes from the next second, not the same
 ///         one.
 contract PerpetuityAndVoteSaleTest is AutoRelockTestBase {
     // ------------------------------------------------------------------
@@ -38,7 +38,7 @@ contract PerpetuityAndVoteSaleTest is AutoRelockTestBase {
         }
     }
 
-    /// @dev 100 enable/disable cycles alternating the two hostile phases.
+    /// @dev B1b — 100 enable/disable cycles alternating the two hostile phases.
     function test_B1b_noWeightRatchetOverCycles() public {
         (uint256 id, , ) = createLock(attacker, 1_000 ether, 4 * 365 days);
         for (uint256 i = 0; i < 100; ++i) {
@@ -57,46 +57,48 @@ contract PerpetuityAndVoteSaleTest is AutoRelockTestBase {
     //      silence and any stranger ends it.
     // ------------------------------------------------------------------
     function test_B3_perpetuityIsBoundedByTheHeartbeat() public {
-        (uint256 atk, , ) = createLock(attacker, 1_000 ether, 4 * 365 days);
+        (uint256 squatId, , ) = createLock(attacker, 1_000 ether, 4 * 365 days);
         (uint256 honest, , ) = createLock(victim, 9_000 ether, 4 * 365 days);
-        enable(attacker, atk);
+        enable(attacker, squatId);
 
         // the honest book decays away; the squat does not.
         vm.warp(block.timestamp + 241 * SIX_DAYS);
-        assertEq(veHemi.balanceOfNFT(honest), 0, "probe: honest arm did not decay");
-        assertGt(veHemi.balanceOfNFT(atk), 0, "probe: squat already gone");
-        assertEq(veHemi.totalVeHemiSupply(), veHemi.balanceOfNFT(atk), "probe: squatter is not the whole book");
+        assertEq(veHemi.balanceOfNFT(honest), 0, "premise: the honest position did not decay");
+        assertGt(veHemi.balanceOfNFT(squatId), 0, "premise: squat already gone");
+        assertEq(veHemi.totalVeHemiSupply(), veHemi.balanceOfNFT(squatId), "premise: squatter is not the whole book");
 
         // ...but it has been retirable since 60 buckets after the last touch.
         vm.prank(stranger);
-        veHemi.retireStaleAutoRelock(atk);
+        veHemi.retireStaleAutoRelock(squatId);
         vm.warp(block.timestamp + 400 * SIX_DAYS);
-        assertEq(veHemi.balanceOfNFT(atk), 0, "PERPETUITY: the squat outlived the retire");
+        assertEq(veHemi.balanceOfNFT(squatId), 0, "PERPETUITY: the squat outlived the retire");
         assertEq(veHemi.totalVeHemiSupply(), 0, "PERPETUITY: the denominator never healed");
     }
 
-    /// @dev The PRICE of the perpetuity, which is the whole point: upkeep is
-    ///      not zero. A squatter must heartbeat at least once every
+    /// @dev B3b — the PRICE of the perpetuity, which is the whole point: upkeep
+    ///      is not zero. A squatter must heartbeat at least once every
     ///      STALE_FLAT_BUCKETS buckets or lose the squat to any stranger.
     function test_B3b_upkeepCadenceIsExactlySixtyBuckets() public {
-        (uint256 atk, , ) = createLock(attacker, 1_000 ether, 4 * 365 days);
-        enable(attacker, atk);
-        uint256 K = veHemi.STALE_FLAT_BUCKETS();
+        (uint256 squatId, , ) = createLock(attacker, 1_000 ether, 4 * 365 days);
+        enable(attacker, squatId);
+        uint256 staleBuckets = veHemi.STALE_FLAT_BUCKETS();
         for (uint256 round = 0; round < 4; ++round) {
-            uint256 due = veHemi.autoRelockStaleAt(atk);
-            assertEq(due, block.timestamp + K * SIX_DAYS, "cadence is not K buckets from the last touch");
+            uint256 due = veHemi.autoRelockStaleAt(squatId);
+            assertEq(
+                due, block.timestamp + staleBuckets * SIX_DAYS, "cadence is not STALE_FLAT_BUCKETS buckets from the last touch"
+            );
             vm.warp(due - 1);
             vm.prank(stranger);
             vm.expectRevert(VeHemi.AutoRelockNotStale.selector);
-            veHemi.retireStaleAutoRelock(atk); // one second early: refused
+            veHemi.retireStaleAutoRelock(squatId); // one second early: refused
             vm.prank(attacker);
-            veHemi.refreshAutoRelock(atk); // pay the upkeep
+            veHemi.refreshAutoRelock(squatId); // pay the upkeep
         }
         // stop paying, and the squat dies.
-        vm.warp(veHemi.autoRelockStaleAt(atk));
+        vm.warp(veHemi.autoRelockStaleAt(squatId));
         vm.prank(stranger);
-        veHemi.retireStaleAutoRelock(atk);
-        assertEq(veHemi.autoRelockRemaining(atk), 0, "unpaid squat survived");
+        veHemi.retireStaleAutoRelock(squatId);
+        assertEq(veHemi.autoRelockRemaining(squatId), 0, "unpaid squat survived");
     }
 
     // ------------------------------------------------------------------
@@ -108,16 +110,16 @@ contract PerpetuityAndVoteSaleTest is AutoRelockTestBase {
     function test_B4_sellerLosesTheVotesAtTheNextSecond() public {
         (uint256 id, , ) = createLock(attacker, 1_000 ether, 4 * 365 days);
         enable(attacker, id);
-        delegateTo(attacker, id, dele);
+        delegateTo(attacker, id, delegateeA);
         vm.warp(block.timestamp + 7200); // let the booking land
 
-        assertGt(delegation.getVotes(dele), 0, "probe: nothing to rent");
+        assertGt(delegation.getVotes(delegateeA), 0, "premise: nothing to rent");
 
         // sell at the last second of an hour
         vm.warp((block.timestamp / 3600) * 3600 + 3599);
         vm.prank(attacker);
         veHemi.transferFrom(attacker, bob, id);
-        assertEq(veHemi.balanceOf(attacker), 0, "probe: seller still holds escrow");
+        assertEq(veHemi.balanceOf(attacker), 0, "premise: seller still holds escrow");
         // The transfer disarmed the position (the vote-conservation asserts
         // below do not discriminate that).
         assertEq(veHemi.autoRelockRemaining(id), 0, "transfer did not disarm the position");
@@ -125,7 +127,7 @@ contract PerpetuityAndVoteSaleTest is AutoRelockTestBase {
         // ONE second later the rent is over, and it never comes back.
         for (uint256 i = 1; i <= 3700; i += 149) {
             vm.warp(block.timestamp + (i == 1 ? 1 : 149));
-            assertEq(delegation.getVotes(dele), 0, "SELLER KEPT THE VOTES after the sale");
+            assertEq(delegation.getVotes(delegateeA), 0, "SELLER KEPT THE VOTES after the sale");
         }
         // The buyer's side is credited, so the weight is not destroyed. The
         // buyer holds a DECAYING (disarmed) lock: its votes equal the live
@@ -135,8 +137,8 @@ contract PerpetuityAndVoteSaleTest is AutoRelockTestBase {
     }
 
     // ------------------------------------------------------------------
-    // B5 — THE FLAT DISCRIMINATOR: a flat position does not decay, and the
-    //      aggregate agrees with the position.
+    // B5 — A FLAT POSITION DOES NOT DECAY, and the aggregate agrees with the
+    //      position.
     // ------------------------------------------------------------------
     function test_B5_flatDoesNotDecay() public {
         (uint256 id, , ) = createLock(attacker, 1_000 ether, 4 * 365 days);
@@ -154,7 +156,7 @@ contract PerpetuityAndVoteSaleTest is AutoRelockTestBase {
     //      max extensions keep R <= MAX_TIME and the weight <= principal. This
     //      body pins the reachability argument, not the guard.
     // ------------------------------------------------------------------
-    function test_B2_maxTimeIsUnreachableFromAFlatPosition() public {
+    function test_B2_termAboveMaxTimeIsUnreachableFromAFlatPosition() public {
         uint256[4] memory phases = [uint256(0), 1, SIX_DAYS - 1, HALF_BUCKET];
         for (uint256 p = 0; p < phases.length; ++p) {
             warpToPhase(phases[p]);
@@ -175,25 +177,25 @@ contract PerpetuityAndVoteSaleTest is AutoRelockTestBase {
     // not vote in its own block (`getPastVotes` reverts `TimestampInFuture`
     // past `block.timestamp`, so same-block flash delegation is impossible),
     // and is live at full weight from the next second.
-    function test_B6_additionsAreLiveFromTheNextBlock() public {
+    function test_B6_freshDelegationIsLiveFromTheNextSecond() public {
         (uint256 id, , ) = createLock(attacker, 1_000 ether, 4 * 365 days);
         enable(attacker, id);
-        // land inside an hourly epoch, not on its edge
+        // land inside an hour, not on its edge
         vm.warp((block.timestamp / 3600) * 3600 + 3600 + 7);
-        uint256 boundary = ((block.timestamp / 3600) * 3600) + 3600;
+        uint256 nextHourBoundary = ((block.timestamp / 3600) * 3600) + 3600;
         uint256 tDelegate = block.timestamp;
-        delegateTo(attacker, id, dele);
+        delegateTo(attacker, id, delegateeA);
 
         // (1) Not in the delegation's own block.
-        assertEq(delegation.getVotes(dele), 0, "a fresh delegation voted IMMEDIATELY -- addition not deferred");
+        assertEq(delegation.getVotes(delegateeA), 0, "a fresh delegation voted IMMEDIATELY -- addition not deferred");
 
-        // (2) Live from the next block, at full weight.
+        // (2) Live from the next second, at full weight.
         vm.warp(tDelegate + 1);
-        assertEq(delegation.getVotes(dele), veHemi.balanceOfNFT(id),
-            "t+1: the addition must be live, and at full weight, in the NEXT block");
+        assertEq(delegation.getVotes(delegateeA), veHemi.balanceOfNFT(id),
+            "t+1: the addition must be live, and at full weight, at the NEXT second");
 
         // (3) And it is still exactly right at the boundary.
-        vm.warp(boundary);
-        assertEq(delegation.getVotes(dele), veHemi.balanceOfNFT(id), "addition did not land AT the boundary");
+        vm.warp(nextHourBoundary);
+        assertEq(delegation.getVotes(delegateeA), veHemi.balanceOfNFT(id), "addition did not land AT the boundary");
     }
 }

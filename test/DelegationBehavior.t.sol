@@ -702,7 +702,8 @@ contract DelegationBehaviorTest is Test {
         veHemi.forfeit(tokenId);
 
         // Voting power already zero (the only delegated weight was alice's
-        // own, which we just removed at the next epoch boundary).
+        // own, which the forfeit just removed; the removal lands at the next
+        // second).
         // Now warp PAST lockEnd. If the bucket retained ANY residual
         // entries, the rollover walk would either revert (underflow) or
         // produce a checkpoint with phantom negative deltas applied to a
@@ -823,47 +824,47 @@ contract DelegationBehaviorTest is Test {
         address eve = makeAddr("eve");
 
         uint256 e0 = block.timestamp;
-        uint256 jid1 = _createLock(eve, LOCK_AMOUNT, 90 days);
+        uint256 eveId1 = _createLock(eve, LOCK_AMOUNT, 90 days);
         vm.warp(e0 + 30 days);
-        uint256 jid2 = _createLock(eve, LOCK_AMOUNT, 180 days);
+        uint256 eveId2 = _createLock(eve, LOCK_AMOUNT, 180 days);
         vm.warp(e0 + 60 days);
-        uint256 jid3 = _createLock(eve, LOCK_AMOUNT, 270 days);
+        uint256 eveId3 = _createLock(eve, LOCK_AMOUNT, 270 days);
 
-        assertEq(delegation.delegation(jid1).delegatee, eve, "jid1 self-delegated by mint");
-        assertEq(delegation.delegation(jid2).delegatee, eve, "jid2 self-delegated by mint");
-        assertEq(delegation.delegation(jid3).delegatee, eve, "jid3 self-delegated by mint");
+        assertEq(delegation.delegation(eveId1).delegatee, eve, "eveId1 self-delegated by mint");
+        assertEq(delegation.delegation(eveId2).delegatee, eve, "eveId2 self-delegated by mint");
+        assertEq(delegation.delegation(eveId3).delegatee, eve, "eveId3 self-delegated by mint");
 
         VeHemiAragonAdapter adapter = new VeHemiAragonAdapter(address(veHemi));
 
-        // Warp past jid1 only.
-        uint256 jend1 = veHemi.getLockedBalance(jid1).end;
-        vm.warp(jend1 + 1 hours);
+        // Warp past eveId1 only.
+        uint256 eveEnd1 = veHemi.getLockedBalance(eveId1).end;
+        vm.warp(eveEnd1 + 1 hours);
 
         // Snapshot eve's adapter.getVotes at the EXACT pre-withdraw timestamp.
         uint256 votesPre = adapter.getVotes(eve);
-        assertGt(votesPre, 0, "eve has votes from (still-live) jid2 + jid3");
+        assertGt(votesPre, 0, "eve has votes from (still-live) eveId2 + eveId3");
 
-        // jid1 is past its end → its bias has fully decayed to zero on the
+        // eveId1 is past its end → its bias has fully decayed to zero on the
         // veHEMI curve. Its "residual contribution" at this timestamp is 0,
         // so the withdraw's cleanup should be a vote-balance no-op for eve
-        // (it merely zeroes already-zero bookkeeping for jid1).
+        // (it merely zeroes already-zero bookkeeping for eveId1).
         vm.prank(eve);
-        veHemi.withdraw(jid1);
+        veHemi.withdraw(eveId1);
 
         uint256 votesPost = adapter.getVotes(eve);
 
-        // STRICT property: the drop is exactly jid1's residual (≈ 0 post-expiry).
+        // STRICT property: the drop is exactly eveId1's residual (≈ 0 post-expiry).
         // Tolerate ≤1% slippage to absorb any rounding inside the
         // checkpoint write at the SAME block (in practice this is 0).
         assertLe(votesPost, votesPre, "votes monotone non-increasing across withdraw");
         uint256 minExpected = (votesPre * 99) / 100;
-        assertGe(votesPost, minExpected, "drop bounded by jid1's residual (~0 post-expiry)");
+        assertGe(votesPost, minExpected, "drop bounded by eveId1's residual (~0 post-expiry)");
 
-        // jid2 and jid3 still self-delegated to eve → eve still has votes.
-        assertGt(votesPost, 0, "eve still has votes from jid2 + jid3");
-        assertEq(delegation.delegation(jid1).delegatee, address(0), "jid1 cleared");
-        assertEq(delegation.delegation(jid2).delegatee, eve, "jid2 still eve");
-        assertEq(delegation.delegation(jid3).delegatee, eve, "jid3 still eve");
+        // eveId2 and eveId3 still self-delegated to eve → eve still has votes.
+        assertGt(votesPost, 0, "eve still has votes from eveId2 + eveId3");
+        assertEq(delegation.delegation(eveId1).delegatee, address(0), "eveId1 cleared");
+        assertEq(delegation.delegation(eveId2).delegatee, eve, "eveId2 still eve");
+        assertEq(delegation.delegation(eveId3).delegatee, eve, "eveId3 still eve");
     }
 
     // -------------------------------------------------------------------------
@@ -910,7 +911,7 @@ contract DelegationBehaviorTest is Test {
         veHemi.withdraw(tokenId);
         Vm.Log[] memory logs = vm.getRecordedLogs();
 
-        // Canonical topic0 hashes for the three events we expect, in order.
+        // Canonical topic0 hashes for the three events we expect.
         bytes32 dvcSig = keccak256("DelegateVotesChanged(address,uint256,uint256)");
         bytes32 dcSig = keccak256("DelegateChanged(uint256,address,address)");
         bytes32 wSig = keccak256("Withdraw(address,uint256,uint256,uint256)");

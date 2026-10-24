@@ -28,7 +28,8 @@ contract AbandonedFlatPositionTest is TwinOracle {
         mi = spawn(false, ALICE, AMT, N, Cadence.MANUAL, false, false);
         xi = spawn(true,  BOB,   AMT, N, Cadence.NEVER,  false, false);
         vm.prank(BOB);
-        // R is derived from the lock end, which spawn() put exactly N buckets out.
+        // autoRelockRemaining is derived from the lock end, which spawn() put
+        // exactly N buckets out.
         X.ve.enableAutoRelock(positions[xi].tokenId);
     }
 
@@ -38,7 +39,7 @@ contract AbandonedFlatPositionTest is TwinOracle {
     /// @notice Both owners vanish at bucket 3. The twin is dead at bucket 9
     ///         (3 + N). The flat position still holds its bucket-mean level
     ///         at bucket 400, and it is the whole supply of its universe.
-    function test_abandonment_gap() public {
+    function test_abandonedFlatPositionKeepsItsLevelWhileTheManualTwinDecays() public {
         // 3 buckets of normal life, both extending / flat.
         for (uint256 k = 1; k <= 3; ++k) step(t0 + k * SIX_DAYS);
         // BOTH owners now lose their keys.
@@ -47,21 +48,21 @@ contract AbandonedFlatPositionTest is TwinOracle {
         uint256 twinDeadAt = M.ve.getLockedBalance(positions[mi].tokenId).end;
         assertEq(twinDeadAt, (t0 + 3 * SIX_DAYS) + N * SIX_DAYS, "twin end");
 
-        uint256 W = meanLevelOf(AMT, N);
+        uint256 flatLevel = meanLevelOf(AMT, N);
         uint256 firstTwinZero;
         uint256 firstFlatZero;
         for (uint256 k = 4; k <= 400; ++k) {
             vm.warp(t0 + k * SIX_DAYS);
             vm.roll(block.number + 43830);
-            uint256 wm = M.ve.balanceOfNFT(positions[mi].tokenId);
-            uint256 wx = X.ve.balanceOfNFT(positions[xi].tokenId);
-            if (wm == 0 && firstTwinZero == 0) firstTwinZero = k;
-            if (wx == 0 && firstFlatZero == 0) firstFlatZero = k;
+            uint256 twinWeight = M.ve.balanceOfNFT(positions[mi].tokenId);
+            uint256 flatWeight = X.ve.balanceOfNFT(positions[xi].tokenId);
+            if (twinWeight == 0 && firstTwinZero == 0) firstTwinZero = k;
+            if (flatWeight == 0 && firstFlatZero == 0) firstFlatZero = k;
         }
         assertEq(firstTwinZero, 9, "twin must die at 3+N");
         assertEq(firstFlatZero, 0, "abandoned flat position decayed to zero");
-        assertEq(X.ve.balanceOfNFT(positions[xi].tokenId), W, "flat not at the bucket-mean level at +400");
-        assertEq(X.ve.totalVeHemiSupply(), W, "supply != the one flat position");
+        assertEq(X.ve.balanceOfNFT(positions[xi].tokenId), flatLevel, "flat not at the bucket-mean level at +400");
+        assertEq(X.ve.totalVeHemiSupply(), flatLevel, "supply != the one flat position");
         assertEq(M.ve.totalVeHemiSupply(), 0, "twin universe supply must be 0");
     }
 }

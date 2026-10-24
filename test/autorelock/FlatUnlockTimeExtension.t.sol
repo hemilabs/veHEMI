@@ -3,7 +3,8 @@ pragma solidity ^0.8.29;
 import "../LockedCurveTestBase.sol";
 
 /// @notice `increaseUnlockTime` on a FLAT position folds the extension into R
-///         (whole buckets from `grid(now)`), lifts the flat level to
+///         (`autoRelockRemaining`, the frozen remaining term: whole buckets
+///         from `grid(now)`), lifts the flat level to
 ///         `slope * (R - SIX_DAYS/2)`, and the extension survives a disable.
 contract FlatUnlockTimeExtensionTest is LockedCurveTestBase {
     function test_increaseUnlockTimeOnFlatFoldsIntoR() public {
@@ -13,7 +14,7 @@ contract FlatUnlockTimeExtensionTest is LockedCurveTestBase {
         veHemi.enableAutoRelock(id);
         uint256 gridNow = (block.timestamp / SIX_DAYS) * SIX_DAYS;
         uint64 r0 = veHemi.autoRelockRemaining(id);
-        assertEq(uint256(r0), end0 - gridNow, "precondition: R is the whole-bucket remainder");
+        assertEq(uint256(r0), end0 - gridNow, "premise: R is the whole-bucket remainder");
 
         uint256 dur = 4 * 365 days - 1 days;
         uint256 newEnd = ((block.timestamp + dur) / SIX_DAYS) * SIX_DAYS;
@@ -24,7 +25,7 @@ contract FlatUnlockTimeExtensionTest is LockedCurveTestBase {
         uint256 r1 = veHemi.autoRelockRemaining(id);
         assertEq(r1, newEnd - gridNow, "increaseUnlockTime did not fold the extension into R");
         assertGt(r1, r0, "R did not grow");
-        assertEq(veHemi.balanceOfNFT(id), slope * (r1 - SIX_DAYS / 2), "flat level is not slope * (R - S/2)");
+        assertEq(veHemi.balanceOfNFT(id), slope * (r1 - SIX_DAYS / 2), "flat level is not slope * (R - SIX_DAYS/2)");
 
         // ...and it survives a disable: the restored end is grid(now) + R.
         vm.prank(alice);

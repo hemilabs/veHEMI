@@ -10,7 +10,7 @@ import "./BrokenModules.sol";
 ///         record VeHemi reads back is a genuine flat booking made by the
 ///         genuine module. ONLY `delegate()` is broken. No contrived record,
 ///         no hand-seeded bias.
-contract WriteBrokenPassthroughModule is IVeHemiVoteDelegation {
+contract WriteRevertingPassthroughModule is IVeHemiVoteDelegation {
     error ModuleBroken();
     IVeHemiVoteDelegation public immutable REAL;
     bool public breakWrites;
@@ -48,17 +48,15 @@ contract WriteBrokenPassthroughModule is IVeHemiVoteDelegation {
 ///         it opens. A module that answers a still-flat record for every id
 ///         and silently drops writes is covered as well. A decaying control
 ///         runs on the read-passthrough module.
-contract WriteBrokenModuleTest is AutoRelockTestBase {
-    uint256 constant MT = 4 * 365.25 days;
-
+contract ReadableWriteRevertingModuleTest is AutoRelockTestBase {
     /// @dev 100 HEMI, 4-year lock, auto-relock on, a readable write-failing
-    ///      module (`HalfBrokenModule`).
-    function test_halfBrokenModule_flatPositionIsNotTrapped() public {
-        (uint256 id, , ) = createLock(attacker, 100 ether, MT);
-        HalfBrokenModule hb = new HalfBrokenModule();
-        veHemi.updateVoteDelegation(IVeHemiVoteDelegation(address(hb)));
+    ///      module (`WriteRevertingModule`).
+    function test_writeRevertingModule_flatPositionIsNotTrapped() public {
+        (uint256 id, , ) = createLock(attacker, 100 ether, MAX_TIME);
+        WriteRevertingModule writeReverting = new WriteRevertingModule();
+        veHemi.updateVoteDelegation(IVeHemiVoteDelegation(address(writeReverting)));
         enable(attacker, id);
-        hb.seedFlat(id, dele, uint96(veHemi.balanceOfNFT(id)));
+        writeReverting.seedFlat(id, delegateeA, uint96(veHemi.balanceOfNFT(id)));
 
         // 1. the holder's own disable COMMITS.
         disable(attacker, id);
@@ -74,12 +72,12 @@ contract WriteBrokenModuleTest is AutoRelockTestBase {
 
     /// @dev The PERMISSIONLESS keeper remedy must work too, since it is the
     ///      only exit that does not need the position's owner to be alive.
-    function test_halfBrokenModule_permissionlessRetireIsAccepted() public {
-        (uint256 id, , ) = createLock(attacker, 100 ether, MT);
-        HalfBrokenModule hb = new HalfBrokenModule();
-        veHemi.updateVoteDelegation(IVeHemiVoteDelegation(address(hb)));
+    function test_writeRevertingModule_permissionlessRetireIsAccepted() public {
+        (uint256 id, , ) = createLock(attacker, 100 ether, MAX_TIME);
+        WriteRevertingModule writeReverting = new WriteRevertingModule();
+        veHemi.updateVoteDelegation(IVeHemiVoteDelegation(address(writeReverting)));
         enable(attacker, id);
-        hb.seedFlat(id, dele, uint96(veHemi.balanceOfNFT(id)));
+        writeReverting.seedFlat(id, delegateeA, uint96(veHemi.balanceOfNFT(id)));
         vm.warp(veHemi.autoRelockStaleAt(id));
         vm.prank(stranger);
         veHemi.retireStaleAutoRelock(id);
@@ -92,9 +90,9 @@ contract WriteBrokenModuleTest is AutoRelockTestBase {
     ///      owner needs no such trick. It is the ACCIDENT: one module that
     ///      answers `delegation()` with a still-flat record for every id.
     ///      Two independent holders, neither of whom did anything.
-    function test_silentFreezeModule_doesNotFreezeEveryHolder() public {
-        (uint256 idA, , ) = createLock(attacker, 100 ether, MT);
-        (uint256 idB, , ) = createLock(victim, 250 ether, MT);
+    function test_silentFreezeModule_trapsNoHolder() public {
+        (uint256 idA, , ) = createLock(attacker, 100 ether, MAX_TIME);
+        (uint256 idB, , ) = createLock(victim, 250 ether, MAX_TIME);
         enable(attacker, idA);
         enable(victim, idB);
 
@@ -106,27 +104,28 @@ contract WriteBrokenModuleTest is AutoRelockTestBase {
         assertEq(veHemi.autoRelockRemaining(idB), 0, "B still frozen");
 
         vm.warp(uint256(veHemi.getLockedBalance(idA).end) + 1);
-        uint256 a0 = hemi.balanceOf(attacker);
+        uint256 attackerBefore = hemi.balanceOf(attacker);
         vm.prank(attacker);
         veHemi.withdraw(idA);
-        assertEq(hemi.balanceOf(attacker) - a0, 100 ether, "A principal still trapped");
-        uint256 b0 = hemi.balanceOf(victim);
+        assertEq(hemi.balanceOf(attacker) - attackerBefore, 100 ether, "A principal still trapped");
+        uint256 victimBefore = hemi.balanceOf(victim);
         vm.prank(victim);
         veHemi.withdraw(idB);
-        assertEq(hemi.balanceOf(victim) - b0, 250 ether, "B principal still trapped");
+        assertEq(hemi.balanceOf(victim) - victimBefore, 250 ether, "B principal still trapped");
     }
 
     /// @dev Reads pass through to the REAL VVD (so the flat record is genuine,
     ///      not seeded); only `delegate()` reverts. The holder's disable and
     ///      then withdraw must both succeed, with the full principal back.
-    function test_realPassthroughModuleTrapsNothing() public {
-        uint256 id = _flatGenuine(attacker);
-        uint256 booked = delegation.getVotes(dele);
-        assertGt(booked, 0, "probe: the REAL module booked no flat term");
+    function test_writeRevertingPassthroughModule_flatPositionIsNotTrapped() public {
+        uint256 id = _flatDelegated(attacker);
+        uint256 booked = delegation.getVotes(delegateeA);
+        assertGt(booked, 0, "premise: the REAL module booked no flat term");
 
-        WriteBrokenPassthroughModule pt = new WriteBrokenPassthroughModule(IVeHemiVoteDelegation(address(delegation)));
-        veHemi.updateVoteDelegation(IVeHemiVoteDelegation(address(pt)));
-        pt.setBreakWrites(true);
+        WriteRevertingPassthroughModule passthrough =
+            new WriteRevertingPassthroughModule(IVeHemiVoteDelegation(address(delegation)));
+        veHemi.updateVoteDelegation(IVeHemiVoteDelegation(address(passthrough)));
+        passthrough.setBreakWrites(true);
 
         // exit 1 -- the holder's own disable
         disable(attacker, id);
@@ -141,11 +140,12 @@ contract WriteBrokenModuleTest is AutoRelockTestBase {
     }
 
     /// @dev The permissionless leg, on the same passthrough module.
-    function test_realPassthroughPermissionlessRetire() public {
-        uint256 id = _flatGenuine(victim);
-        WriteBrokenPassthroughModule pt = new WriteBrokenPassthroughModule(IVeHemiVoteDelegation(address(delegation)));
-        veHemi.updateVoteDelegation(IVeHemiVoteDelegation(address(pt)));
-        pt.setBreakWrites(true);
+    function test_writeRevertingPassthroughModule_permissionlessRetireAcceptedFiveYearsLate() public {
+        uint256 id = _flatDelegated(victim);
+        WriteRevertingPassthroughModule passthrough =
+            new WriteRevertingPassthroughModule(IVeHemiVoteDelegation(address(delegation)));
+        veHemi.updateVoteDelegation(IVeHemiVoteDelegation(address(passthrough)));
+        passthrough.setBreakWrites(true);
         vm.warp(veHemi.autoRelockStaleAt(id) + 5 * 365 days);
         vm.prank(stranger);
         veHemi.retireStaleAutoRelock(id);
@@ -155,12 +155,13 @@ contract WriteBrokenModuleTest is AutoRelockTestBase {
 
     /// @dev DECAYING control: it must still return the full principal. If this
     ///      is red the failure is in the harness.
-    function test_realPassthroughDecayingControl() public {
+    function test_writeRevertingPassthroughModule_decayingPositionWithdrawsInFull() public {
         (uint256 id, , ) = createLock(attacker, 1_000 ether, 2 * 365 days);
-        delegateTo(attacker, id, dele);
-        WriteBrokenPassthroughModule pt = new WriteBrokenPassthroughModule(IVeHemiVoteDelegation(address(delegation)));
-        veHemi.updateVoteDelegation(IVeHemiVoteDelegation(address(pt)));
-        pt.setBreakWrites(true);
+        delegateTo(attacker, id, delegateeA);
+        WriteRevertingPassthroughModule passthrough =
+            new WriteRevertingPassthroughModule(IVeHemiVoteDelegation(address(delegation)));
+        veHemi.updateVoteDelegation(IVeHemiVoteDelegation(address(passthrough)));
+        passthrough.setBreakWrites(true);
         vm.warp(uint256(veHemi.getLockedBalance(id).end) + 1);
         uint256 before = hemi.balanceOf(attacker);
         vm.prank(attacker);
@@ -168,10 +169,10 @@ contract WriteBrokenModuleTest is AutoRelockTestBase {
         assertEq(hemi.balanceOf(attacker) - before, 1_000 ether, "control: decaying principal trapped");
     }
 
-    function _flatGenuine(address who_) internal returns (uint256 id) {
+    function _flatDelegated(address who_) internal returns (uint256 id) {
         (id, , ) = createLock(who_, 1_000 ether, 4 * 365 days);
         enable(who_, id);
-        delegateTo(who_, id, dele);
+        delegateTo(who_, id, delegateeA);
         vm.warp(block.timestamp + 7200);
     }
 }

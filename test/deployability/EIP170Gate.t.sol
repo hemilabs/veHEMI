@@ -70,8 +70,8 @@ contract EIP170GateTest is Test {
         return json.readString(".deployedBytecode.object");
     }
 
-    function _sizeOf(string memory obj) internal pure returns (uint256) {
-        uint256 n = bytes(obj).length;
+    function _sizeOf(string memory runtimeHex) internal pure returns (uint256) {
+        uint256 n = bytes(runtimeHex).length;
         require(n >= 2, "empty artifact object");
         return (n - 2) / 2; // strip "0x"; library placeholders are address-width, so this is exact
     }
@@ -101,7 +101,7 @@ contract EIP170GateTest is Test {
 
     // ------------------------------------------------------------ 2. IDENTITY
     /// The size we gate must be the size of the code the suite actually runs.
-    function test_executedRuntimeCodeMatchesGatedArtifact() public {
+    function test_executedRuntimeSizeMatchesGatedArtifact() public {
         VeHemi veHemi = new VeHemi(address(0xBEEF));
         _assertExecutedMatches("src/VeHemi.sol:VeHemi", "out/VeHemi.sol/VeHemi.json", address(veHemi));
 
@@ -137,9 +137,9 @@ contract EIP170GateTest is Test {
 
     // ---------------------------------------------- 3. BINDING + 4. COVERAGE
     function test_artifactsAreTheOnesTheGateAttested() public {
-        string memory att;
+        string memory attestation;
         try vm.readFile(ATTESTATION) returns (string memory s) {
-            att = s;
+            attestation = s;
         } catch {
             revert(
                 "no test/fixtures/eip170-attestation.json. The EIP-170 gate has not "
@@ -147,25 +147,25 @@ contract EIP170GateTest is Test {
                 "attestation ONLY when every src/ contract fits."
             );
         }
-        require(bytes(att).length > 0, "empty attestation");
+        require(bytes(attestation).length > 0, "empty attestation");
 
-        assertEq(att.readUint(".limit"), EIP170_LIMIT, "attestation limit is not EIP-170");
-        assertEq(att.readUint(".contractCount"), _ids().length, "gated-set size drifted from this test");
-        emit log_named_string("attested srcTreeSha256", att.readString(".srcTreeSha256"));
+        assertEq(attestation.readUint(".limit"), EIP170_LIMIT, "attestation limit is not EIP-170");
+        assertEq(attestation.readUint(".contractCount"), _ids().length, "gated-set size drifted from this test");
+        emit log_named_string("attested srcTreeSha256", attestation.readString(".srcTreeSha256"));
 
         // Rebuild the canonical blob from out/, independently of the script.
         string[9] memory ids = _ids();
         string[9] memory paths = _paths();
         string memory blob = "";
         for (uint256 i = 0; i < ids.length; i++) {
-            string memory obj = _runtimeObject(paths[i]);
+            string memory runtimeHex = _runtimeObject(paths[i]);
             blob = string.concat(
                 blob,
                 ids[i],
                 "\n",
-                vm.toString(_sizeOf(obj)),
+                vm.toString(_sizeOf(runtimeHex)),
                 "\n",
-                vm.toString(sha256(bytes(obj))),
+                vm.toString(sha256(bytes(runtimeHex))),
                 "\n"
             );
         }
@@ -173,7 +173,7 @@ contract EIP170GateTest is Test {
         emit log_named_bytes32("recomputed digest", recomputed);
         assertEq(
             recomputed,
-            att.readBytes32(".digest"),
+            attestation.readBytes32(".digest"),
             "the artifacts in out/ are NOT the ones the EIP-170 gate measured. "
             "Re-run ./scripts/check-eip170.sh; if it fails, this build is not deployable."
         );

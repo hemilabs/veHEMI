@@ -395,9 +395,9 @@ contract VeHemiLockedCurveTest is LockedCurveTestBase {
         assertEq(total, locked_ + transferable, "total = locked + transferable");
     }
 
-    function test_SupplyBreakdown_LockedCappedAtTotal() public {
-        // Edge case: with rounding, locked could theoretically exceed total.
-        // The contract caps locked <= total.
+    function test_SupplyBreakdown_LockedDoesNotExceedTotalWithoutAutoRelock() public {
+        // `supplyBreakdown` returns `locked_` uncapped: with an auto-relock
+        // position it may exceed `total`. With none, `locked_ <= total` holds.
         (uint256 t1,,) = createLockedPosition(alice, 100 ether, LOCK_2Y);
         seedAndFinalize(_toArray(t1));
 

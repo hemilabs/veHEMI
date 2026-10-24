@@ -22,28 +22,28 @@ contract StaleRetireZeroesVotesTest is TwinOracle {
     uint256 internal constant AMT = 1000 ether;
     uint256 internal constant N   = 6;
 
-    uint256 internal K;
+    uint256 internal staleBuckets;
     uint256 internal bi; // BOB's flat position (universe X)
 
     function setUp() public {
         setUpTwinOracle();
-        K = X.ve.STALE_FLAT_BUCKETS();
+        staleBuckets = X.ve.STALE_FLAT_BUCKETS();
         bi = spawn(true, BOB,  AMT, N,  Cadence.NEVER, false, false);
         // BOB delegates to a THIRD PARTY before going flat, then abandons.
         vm.prank(BOB);
         X.del.delegate(_id(bi), CAROL);
         vm.prank(BOB);
         X.ve.enableAutoRelock(_id(bi));
-        assertEq(uint256(X.ve.autoRelockRemaining(_id(bi))), N * SIX_DAYS, "R != N buckets");
+        assertEq(uint256(X.ve.autoRelockRemaining(_id(bi))), N * SIX_DAYS, "autoRelockRemaining != N buckets");
     }
 
     function _driveCandidate(uint256) internal override {}
     function _id(uint256 i) internal view returns (uint256) { return positions[i].tokenId; }
 
     function _toStale() internal {
-        uint256 open = X.ve.autoRelockStaleAt(_id(bi));
-        for (uint256 k = 1; k <= K; ++k) { vm.warp(t0 + k * SIX_DAYS); vm.roll(block.number + 43_830); }
-        assertEq(block.timestamp, open, "clock did not land on staleAt");
+        uint256 staleAt = X.ve.autoRelockStaleAt(_id(bi));
+        for (uint256 k = 1; k <= staleBuckets; ++k) { vm.warp(t0 + k * SIX_DAYS); vm.roll(block.number + 43_830); }
+        assertEq(block.timestamp, staleAt, "clock did not land on staleAt");
     }
 
     // ===================================================================
@@ -59,9 +59,9 @@ contract StaleRetireZeroesVotesTest is TwinOracle {
     ///               delegatee's live votes equal the position's escrow weight.
     function test_retire_moves_the_delegatee_votes_to_the_escrow() public {
         _toStale();
-        uint256 flat = X.ve.balanceOfNFT(_id(bi));
-        assertEq(flat, meanLevelOf(AMT, N), "not flat at the bucket-mean level");
-        assertEq(X.del.getVotes(CAROL), flat, "delegatee is not carrying the flat level");
+        uint256 flatLevel = X.ve.balanceOfNFT(_id(bi));
+        assertEq(flatLevel, meanLevelOf(AMT, N), "not flat at the bucket-mean level");
+        assertEq(X.del.getVotes(CAROL), flatLevel, "delegatee is not carrying the flat level");
 
         // (a) the forced re-delegation must NOT be swallowed.
         vm.recordLogs();
@@ -77,7 +77,7 @@ contract StaleRetireZeroesVotesTest is TwinOracle {
         uint256 t = block.timestamp;
         assertEq(X.ve.getLockedBalance(_id(bi)).end, t + N * SIX_DAYS, "restored end != grid(now) + N buckets");
         assertEq(X.ve.balanceOfNFT(_id(bi)), peakOf(AMT, N), "escrow != the restored decaying weight");
-        assertEq(X.del.getVotes(CAROL), flat, "delegatee votes moved in the retire's own second");
+        assertEq(X.del.getVotes(CAROL), flatLevel, "delegatee votes moved in the retire's own second");
 
         // (c) every second of the next two hours.
         for (uint256 s = 1; s <= 7200; ++s) {
@@ -91,24 +91,24 @@ contract StaleRetireZeroesVotesTest is TwinOracle {
     ///         holds this one retired position alone.
     function test_votes_and_supply_reach_exact_zero_and_stay() public {
         // universe M is empty; give it the same abandoned flat position.
-        uint256 mi = spawn(false, BOB, AMT, N, Cadence.NEVER, false, false);
+        uint256 flatInM = spawn(false, BOB, AMT, N, Cadence.NEVER, false, false);
         vm.prank(BOB);
-        M.del.delegate(_id(mi), CAROL);
+        M.del.delegate(_id(flatInM), CAROL);
         vm.prank(BOB);
-        M.ve.enableAutoRelock(_id(mi));
-        uint256 open = M.ve.autoRelockStaleAt(_id(mi));
-        for (uint256 k = 1; k <= K; ++k) { vm.warp(t0 + k * SIX_DAYS); vm.roll(block.number + 43_830); }
-        assertEq(block.timestamp, open, "clock");
+        M.ve.enableAutoRelock(_id(flatInM));
+        uint256 staleAt = M.ve.autoRelockStaleAt(_id(flatInM));
+        for (uint256 k = 1; k <= staleBuckets; ++k) { vm.warp(t0 + k * SIX_DAYS); vm.roll(block.number + 43_830); }
+        assertEq(block.timestamp, staleAt, "clock");
 
         assertEq(M.del.getVotes(CAROL), meanLevelOf(AMT, N), "pre-retire votes");
         assertEq(M.ve.totalVeHemiSupply(), meanLevelOf(AMT, N), "pre-retire supply");
 
         vm.prank(KEEPER);
-        M.ve.retireStaleAutoRelock(_id(mi));
+        M.ve.retireStaleAutoRelock(_id(flatInM));
 
         uint256 zeroAt;
         for (uint256 k = 1; k <= N + 4; ++k) {
-            vm.warp(open + k * SIX_DAYS);
+            vm.warp(staleAt + k * SIX_DAYS);
             vm.roll(block.number + 43_830);
             if (zeroAt == 0 && M.ve.totalVeHemiSupply() == 0) zeroAt = k;
         }
@@ -119,7 +119,7 @@ contract StaleRetireZeroesVotesTest is TwinOracle {
         assertEq(M.ve.totalVeHemiSupply(), 0, "totalVeHemiSupply != 0");
         assertEq(M.del.getPastTotalSupply(block.timestamp), 0, "getPastTotalSupply != 0");
         for (uint256 k = 1; k <= 60; ++k) {
-            vm.warp(open + (N + k) * SIX_DAYS);
+            vm.warp(staleAt + (N + k) * SIX_DAYS);
             vm.roll(block.number + 43_830);
             assertEq(M.del.getVotes(CAROL), 0, "votes came back");
             assertEq(M.del.getPastTotalSupply(block.timestamp), 0, "denominator came back");
@@ -130,7 +130,7 @@ contract StaleRetireZeroesVotesTest is TwinOracle {
         // state at T - 1, and at T = the restored end that is the position's
         // last live second (one second of slope).
         for (uint256 k = 1; k <= 60; ++k) {
-            uint256 ts = open + (N + k) * SIX_DAYS;
+            uint256 ts = staleAt + (N + k) * SIX_DAYS;
             assertEq(M.del.getPastVotes(CAROL, ts), 0, "getPastVotes came back");
             assertEq(M.del.getPastTotalSupply(ts), 0, "past denominator came back");
         }
@@ -168,7 +168,7 @@ contract StaleRetireZeroesVotesTest is TwinOracle {
                 assertEq(uint256(X.ve.autoRelockRemaining(_id(bi))), 0,
                     string.concat("flag survived phase ", vm.toString(phase)));
                 assertEq(uint256(X.ve.autoRelockRefreshedAt(_id(bi))), 0,
-                    string.concat("stamp survived phase ", vm.toString(phase)));
+                    string.concat("refresh stamp survived phase ", vm.toString(phase)));
                 ++done;
             } catch (bytes memory err) {
                 emit log_named_uint("PHASE", phase);
@@ -182,79 +182,81 @@ contract StaleRetireZeroesVotesTest is TwinOracle {
 
     // ===================================================================
     /// @notice A TOP-UP MOVES NEITHER THE CLOCK NOR THE VOTES ABOVE ESCROW.
-    ///         `increaseAmount` (owner-only) re-materialises the lazy end but
-    ///         must not stamp, and a 10-HEMI top-up must not leave the
-    ///         delegatee above the escrow once the deferral hour passes.
+    ///         `increaseAmount` (owner-only) re-materialises the stored end but
+    ///         must not write the refresh stamp, and a 10-HEMI top-up must not
+    ///         leave the delegatee above the escrow an hour later.
     function test_topup_moves_neither_clock_nor_votes_above_escrow() public {
-        uint256 open = X.ve.autoRelockStaleAt(_id(bi));
-        vm.warp(t0 + (K / 2) * SIX_DAYS);
+        uint256 staleAt = X.ve.autoRelockStaleAt(_id(bi));
+        vm.warp(t0 + (staleBuckets / 2) * SIX_DAYS);
         vm.roll(block.number + 43_830);
-        address _oz = X.ve.ownerOf(_id(bi));
-        X.hemi.mint(_oz, 10 ether);
-        vm.startPrank(_oz);
+        address owner_ = X.ve.ownerOf(_id(bi));
+        X.hemi.mint(owner_, 10 ether);
+        vm.startPrank(owner_);
         X.hemi.approve(address(X.ve), type(uint256).max);
         X.ve.increaseAmount(_id(bi), 10 ether);
         vm.stopPrank();
-        assertEq(X.ve.autoRelockStaleAt(_id(bi)), open, "top-up moved the abandonment clock");
-        // and the delegatee is not above escrow once the deferral hour passes
+        assertEq(X.ve.autoRelockStaleAt(_id(bi)), staleAt, "top-up moved the abandonment clock");
+        // and the delegatee is not above escrow an hour later
         vm.warp(block.timestamp + 3600);
         vm.roll(block.number + 1);
         assertLe(X.del.getVotes(CAROL), X.ve.balanceOfNFT(_id(bi)), "top-up left the delegatee above escrow");
         // the retire still opens on time
-        for (uint256 k = K / 2 + 1; k <= K; ++k) { vm.warp(t0 + k * SIX_DAYS); vm.roll(block.number + 43_830); }
+        for (uint256 k = staleBuckets / 2 + 1; k <= staleBuckets; ++k) {
+            vm.warp(t0 + k * SIX_DAYS); vm.roll(block.number + 43_830);
+        }
         vm.prank(KEEPER);
         X.ve.retireStaleAutoRelock(_id(bi));
         assertEq(uint256(X.ve.autoRelockRemaining(_id(bi))), 0, "retire did not open on time");
     }
 
     // ===================================================================
-    /// @notice THE STAMP'S WHOLE LIFECYCLE: written at enable, rewritten by
-    ///         the heartbeat, deleted at disable, deleted at retire, deleted
-    ///         with the token.
-    function test_stamp_lifecycle() public {
+    /// @notice THE REFRESH STAMP'S WHOLE LIFECYCLE: written at enable,
+    ///         rewritten by the heartbeat, deleted at disable, deleted at
+    ///         retire, deleted with the token.
+    function test_autoRelockRefreshedAt_set_on_enable_and_refresh_cleared_on_disable_retire_and_burn() public {
         uint256 id = _id(bi);
-        assertEq(uint256(X.ve.autoRelockRefreshedAt(id)), t0, "not stamped at enable");
+        assertEq(uint256(X.ve.autoRelockRefreshedAt(id)), t0, "refresh stamp not written at enable");
         vm.warp(t0 + 3 * SIX_DAYS); vm.roll(block.number + 1);
         vm.prank(BOB); X.ve.refreshAutoRelock(id);
-        assertEq(uint256(X.ve.autoRelockRefreshedAt(id)), block.timestamp, "heartbeat did not stamp");
+        assertEq(uint256(X.ve.autoRelockRefreshedAt(id)), block.timestamp, "heartbeat did not write the refresh stamp");
         // a stranger cannot
         vm.prank(KEEPER); vm.expectRevert(VeHemi.NotOwner.selector); X.ve.refreshAutoRelock(id);
         // disable clears it
         vm.prank(BOB); X.ve.disableAutoRelock(id);
-        assertEq(uint256(X.ve.autoRelockRefreshedAt(id)), 0, "stamp survived disable");
+        assertEq(uint256(X.ve.autoRelockRefreshedAt(id)), 0, "refresh stamp survived disable");
         // re-enable, retire, cleared again
         vm.prank(BOB); X.ve.enableAutoRelock(id);
-        uint256 open = X.ve.autoRelockStaleAt(id);
-        vm.warp(open); vm.roll(block.number + 1);
+        uint256 staleAt = X.ve.autoRelockStaleAt(id);
+        vm.warp(staleAt); vm.roll(block.number + 1);
         vm.prank(KEEPER); X.ve.retireStaleAutoRelock(id);
-        assertEq(uint256(X.ve.autoRelockRefreshedAt(id)), 0, "stamp survived retire");
+        assertEq(uint256(X.ve.autoRelockRefreshedAt(id)), 0, "refresh stamp survived retire");
         // burn clears it
         vm.prank(BOB); X.ve.enableAutoRelock(id);
-        assertGt(uint256(X.ve.autoRelockRefreshedAt(id)), 0, "stamp not re-set");
+        assertGt(uint256(X.ve.autoRelockRefreshedAt(id)), 0, "refresh stamp not re-set");
         vm.prank(BOB); X.ve.disableAutoRelock(id);
         uint256 end = X.ve.getLockedBalance(id).end;
         vm.warp(end); vm.roll(block.number + 1);
         vm.prank(BOB); X.ve.withdraw(id);
-        assertEq(uint256(X.ve.autoRelockRefreshedAt(id)), 0, "stamp survived the burn");
+        assertEq(uint256(X.ve.autoRelockRefreshedAt(id)), 0, "refresh stamp survived the burn");
     }
 
     // ===================================================================
-    /// @notice THE STAMP REALLY LIVES AT SLOT 65, AT RUNTIME. After a real
-    ///         enable (in `setUp`) and a real refresh, this body reads the raw
-    ///         word at `keccak256(id . 65)` back off the proxy. It pins VeHemi's
-    ///         own compiled layout (no library touches `autoRelockRefreshedAt`).
-    ///         Until the onchain anchor is re-based on the v3 implementation, no
-    ///         frozen fixture covers V3: this test and the hardcoded V3 pins in
-    ///         `StorageLayoutGolden.t.sol` and `StorageLayoutOnchainAnchor.t.sol`
-    ///         are the machine guards against deleting or reordering a V3
-    ///         declaration after go-live. That moves the live heartbeat off slot
-    ///         65: every armed id would read a heartbeat of 0 (or another
-    ///         field's word) and could be retired at once. Once v3 is live,
-    ///         never "fix" this test by changing 65.
-    function test_the_stamp_is_written_at_slot_65_at_runtime() public {
+    /// @notice THE REFRESH STAMP REALLY LIVES AT SLOT 65, AT RUNTIME. After a
+    ///         real enable (in `setUp`) and a real refresh, this body reads the
+    ///         raw word at `keccak256(id . 65)` back off the proxy. It pins
+    ///         VeHemi's own compiled layout (no library touches
+    ///         `autoRelockRefreshedAt`). Until the onchain anchor is re-based on
+    ///         the v3 implementation, no frozen fixture covers V3: this test and
+    ///         the hardcoded V3 pins in `StorageLayoutGolden.t.sol` and
+    ///         `StorageLayoutOnchainAnchor.t.sol` are the machine guards against
+    ///         deleting or reordering a V3 declaration after go-live. That moves
+    ///         the live refresh stamp off slot 65: every armed id would read a
+    ///         refresh stamp of 0 (or another field's word) and could be retired
+    ///         at once. Once v3 is live, never "fix" this test by changing 65.
+    function test_the_refresh_stamp_is_written_at_slot_65_at_runtime() public {
         uint256 id = _id(bi);
         bytes32 slot = keccak256(abi.encode(id, uint256(65)));
-        assertEq(uint256(vm.load(address(X.ve), slot)), t0, "slot 65 does not carry the enable stamp");
+        assertEq(uint256(vm.load(address(X.ve), slot)), t0, "slot 65 does not carry the refresh stamp written at enable");
         assertEq(uint256(vm.load(address(X.ve), slot)), uint256(X.ve.autoRelockRefreshedAt(id)),
             "the accessor and slot 65 disagree");
 
@@ -268,10 +270,10 @@ contract StaleRetireZeroesVotesTest is TwinOracle {
         assertEq(uint256(vm.load(address(X.ve), bytes32(uint256(65)))), 0, "mapping base 65 is not zero");
 
         // and the retire clears the word, not just the accessor
-        uint256 open = X.ve.autoRelockStaleAt(id);
-        vm.warp(open); vm.roll(block.number + 1);
+        uint256 staleAt = X.ve.autoRelockStaleAt(id);
+        vm.warp(staleAt); vm.roll(block.number + 1);
         vm.prank(KEEPER);
         X.ve.retireStaleAutoRelock(id);
-        assertEq(uint256(vm.load(address(X.ve), slot)), 0, "slot 65 still carries a stamp after the retire");
+        assertEq(uint256(vm.load(address(X.ve), slot)), 0, "slot 65 still carries a refresh stamp after the retire");
     }
 }

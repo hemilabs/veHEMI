@@ -3,20 +3,21 @@ pragma solidity ^0.8.29;
 
 import "./LockedCurveTestBase.sol";
 
-/// @title RelaySeamWorstRatioTest
-/// @notice The relayed-event seam at its worst ratio. `DelegateVotesChanged.newVotes`
-///         (the number relayed to the Aragon adapter through
-///         `IAdapterNotify.notifyVotesChanged`) must equal the delegatee's votes
-///         at the instant the change takes effect, `block.timestamp + 1`, even
-///         when the delegator's lock ends 360 s after the next hour boundary
-///         and the delegation is made at the start of that hour.
-contract RelaySeamWorstRatioTest is LockedCurveTestBase {
+/// @title RelayedVotesLockEndingJustPastBoundaryTest
+/// @notice `DelegateVotesChanged.newVotes` (relayed to the adapter through
+///         `IAdapterNotify.notifyVotesChanged`:
+///         DelegateVotesChangedInstant E3) must equal the delegatee's votes
+///         at the instant the change takes effect,
+///         `block.timestamp + 1`, even when the delegator's lock ends 360 s
+///         after the next hour boundary and the delegation is made at the
+///         start of that hour.
+contract RelayedVotesLockEndingJustPastBoundaryTest is LockedCurveTestBase {
     address internal constant MALLORY = address(0xBAD0);
     address internal constant DEL_A   = address(0xA1);
 
-    function _b(uint256 t) internal pure returns (uint256) { return (t / 1 hours) * 1 hours + 1 hours; }
+    function _nextHourBoundary(uint256 t) internal pure returns (uint256) { return (t / 1 hours) * 1 hours + 1 hours; }
 
-    function _relayed(address who) internal returns (uint256 nv) {
+    function _lastEmittedNewVotes(address who) internal returns (uint256 nv) {
         Vm.Log[] memory logs = vm.getRecordedLogs();
         bytes32 sig = keccak256("DelegateVotesChanged(address,uint256,uint256)");
         for (uint256 i = 0; i < logs.length; ++i) {
@@ -28,7 +29,7 @@ contract RelaySeamWorstRatioTest is LockedCurveTestBase {
         }
     }
 
-    function test_relaySeamWorstRatio() public {
+    function test_relayedNewVotesEqualsEffectiveVotes_lockEndingJustPastTheBoundary() public {
         vm.warp(((block.timestamp / SIX_DAYS) + 2) * SIX_DAYS + 1);
 
         // Find a lock duration whose `end` sits 360 s past an hour boundary:
@@ -41,10 +42,10 @@ contract RelaySeamWorstRatioTest is LockedCurveTestBase {
             uint256 snap = vm.snapshotState();
             hemi.mint(MALLORY, 1000 ether);
             vm.prank(MALLORY); hemi.approve(address(veHemi), type(uint256).max);
-            vm.prank(MALLORY); uint256 cand = veHemi.createLock(1000 ether, j * SIX_DAYS);
-            uint256 candEnd = veHemi.getLockedBalance(cand).end;
+            vm.prank(MALLORY); uint256 trialId = veHemi.createLock(1000 ether, j * SIX_DAYS);
+            uint256 trialEnd = veHemi.getLockedBalance(trialId).end;
             vm.revertToState(snap);
-            if (candEnd % 1 hours == 360) {
+            if (trialEnd % 1 hours == 360) {
                 hemi.mint(MALLORY, 1000 ether);
                 vm.prank(MALLORY); hemi.approve(address(veHemi), type(uint256).max);
                 vm.prank(MALLORY); id = veHemi.createLock(1000 ether, j * SIX_DAYS);
@@ -57,12 +58,12 @@ contract RelaySeamWorstRatioTest is LockedCurveTestBase {
         emit log_named_uint("E mod 1 hour                    ", E % 1 hours);
 
         uint256 T = E - 3960;                 // the START of the hour whose boundary is E-360
-        assertEq(_b(T), E - 360, "construction");
+        assertEq(_nextHourBoundary(T), E - 360, "premise: the next hour boundary is 360 s before the end");
         vm.warp(T);
 
         vm.recordLogs();
         vm.prank(MALLORY); delegation.delegate(id, DEL_A);
-        uint256 relayed = _relayed(DEL_A);
+        uint256 emittedNewVotes = _lastEmittedNewVotes(DEL_A);
 
         // DEL_A was empty before, so any non-zero reading is the new booking.
         uint256 effective;
@@ -78,13 +79,14 @@ contract RelaySeamWorstRatioTest is LockedCurveTestBase {
         emit log_named_uint("delegation made at T            ", T);
         emit log_named_uint("hour boundary                   ", E - 360);
         emit log_named_uint("FIRST effective instant         ", effective);
-        emit log_named_uint("RELAYED newVotes                ", relayed);
+        emit log_named_uint("EMITTED newVotes                ", emittedNewVotes);
         emit log_named_uint("ACTUAL votes at that instant    ", actual);
         emit log_named_uint("getVotes at the boundary        ", atBoundary);
-        emit log_named_uint("understatement (wei)            ", actual > relayed ? actual - relayed : 0);
-        emit log_named_uint("relayed as % of actual          ", actual == 0 ? 0 : (relayed * 100) / actual);
+        emit log_named_uint("understatement (wei)            ",
+            actual > emittedNewVotes ? actual - emittedNewVotes : 0);
+        emit log_named_uint("emitted as % of actual          ", actual == 0 ? 0 : (emittedNewVotes * 100) / actual);
 
-        assertEq(relayed, actual,
-            "the relayed newVotes must equal the votes at the instant the change becomes effective");
+        assertEq(emittedNewVotes, actual,
+            "the emitted newVotes must equal the votes at the instant the change becomes effective");
     }
 }

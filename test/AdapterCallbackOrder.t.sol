@@ -5,28 +5,31 @@ import "./LockedCurveTestBase.sol";
 
 /// A conforming stand-in for `VeHemiAragonAdapter` that, like the real
 /// adapter, READS THE DELEGATION RECORD BACK inside `notifyDelegateChanged`
-/// (the shipped adapter walks every position of `delegator` and reads
+/// (`VeHemiAragonAdapter` walks every position of `delegator` and reads
 /// `delegation(tokenId).delegatee` there, to decide whether the post-change
 /// state is account-wide consistent). It also records the callback order.
 contract CallbackOrderAdapter {
     /// 1 = notifyDelegateChanged, 2 = notifyVotesChanged.
     uint8[] public order;
-    VeHemiVoteDelegation public d;
-    uint256 public probeId;
+    VeHemiVoteDelegation public delegationContract;
+    uint256 public watchedTokenId;
     address public seenDelegateeAtCallback;
-    bool public probed;
-    function arm(VeHemiVoteDelegation d_, uint256 id_) external { d = d_; probeId = id_; }
+    bool public readBack;
+    function watch(VeHemiVoteDelegation delegationContract_, uint256 id_) external {
+        delegationContract = delegationContract_;
+        watchedTokenId = id_;
+    }
     function notifyVotesChanged(address, uint256, uint256) external { order.push(2); }
     function notifyDelegateChanged(address, address, address) external {
         order.push(1);
-        if (address(d) != address(0)) {
-            (address dg,,,,) = d.delegations(probeId);
+        if (address(delegationContract) != address(0)) {
+            (address dg,,,,) = delegationContract.delegations(watchedTokenId);
             seenDelegateeAtCallback = dg;
-            probed = true;
+            readBack = true;
         }
     }
     function len() external view returns (uint256) { return order.length; }
-    function clear() external { delete order; probed = false; seenDelegateeAtCallback = address(0); }
+    function clear() external { delete order; readBack = false; seenDelegateeAtCallback = address(0); }
 }
 
 /// Event ordering. On every `_delegate`-reachable path VVD emits
@@ -36,8 +39,8 @@ contract CallbackOrderAdapter {
 contract AdapterCallbackOrderTest is LockedCurveTestBase {
     CallbackOrderAdapter internal adapter;
 
-    bytes32 constant DC  = keccak256("DelegateChanged(uint256,address,address)");
-    bytes32 constant DVC = keccak256("DelegateVotesChanged(address,uint256,uint256)");
+    bytes32 constant TOPIC_DELEGATE_CHANGED       = keccak256("DelegateChanged(uint256,address,address)");
+    bytes32 constant TOPIC_DELEGATE_VOTES_CHANGED = keccak256("DelegateVotesChanged(address,uint256,uint256)");
 
     uint256 internal covered;   // how many distinct paths actually asserted
 
@@ -60,19 +63,25 @@ contract AdapterCallbackOrderTest is LockedCurveTestBase {
     /// only one of them proves nothing and is refused, not skipped.
     function _assertOrder(string memory label) internal {
         Vm.Log[] memory logs = vm.getRecordedLogs();
-        int256 iDC = -1;
-        int256 iDVC = -1;
+        int256 delegateChangedIndex = -1;
+        int256 delegateVotesChangedIndex = -1;
         for (uint256 i = 0; i < logs.length; ++i) {
             if (logs[i].emitter != address(delegation) || logs[i].topics.length == 0) continue;
-            if (iDC  == -1 && logs[i].topics[0] == DC)  iDC  = int256(i);
-            if (iDVC == -1 && logs[i].topics[0] == DVC) iDVC = int256(i);
+            if (delegateChangedIndex == -1 && logs[i].topics[0] == TOPIC_DELEGATE_CHANGED) {
+                delegateChangedIndex = int256(i);
+            }
+            if (delegateVotesChangedIndex == -1 && logs[i].topics[0] == TOPIC_DELEGATE_VOTES_CHANGED) {
+                delegateVotesChangedIndex = int256(i);
+            }
         }
         emit log_named_string("path", label);
-        emit log_named_int("   first DelegateChanged      log index", iDC);
-        emit log_named_int("   first DelegateVotesChanged  log index", iDVC);
-        assertGt(iDC,  -1, string.concat(label, ": NO DelegateChanged -- the body cannot pin an order"));
-        assertGt(iDVC, -1, string.concat(label, ": NO DelegateVotesChanged -- the body cannot pin an order"));
-        assertLt(iDC, iDVC, string.concat(
+        emit log_named_int("   first DelegateChanged      log index", delegateChangedIndex);
+        emit log_named_int("   first DelegateVotesChanged  log index", delegateVotesChangedIndex);
+        assertGt(delegateChangedIndex, -1,
+            string.concat(label, ": NO DelegateChanged -- the order cannot be checked"));
+        assertGt(delegateVotesChangedIndex, -1,
+            string.concat(label, ": NO DelegateVotesChanged -- the order cannot be checked"));
+        assertLt(delegateChangedIndex, delegateVotesChangedIndex, string.concat(
             label, ": DelegateVotesChanged precedes DelegateChanged. OpenZeppelin's "
             "Votes._delegate -- the ERC-5805 reference the Aragon tooling reads -- emits "
             "DelegateChanged FIRST."
@@ -82,7 +91,7 @@ contract AdapterCallbackOrderTest is LockedCurveTestBase {
 
     // ── EVERY `_delegate`-REACHABLE PATH ─────────────────────────────────────
 
-    function test_plainReDelegation() public {
+    function test_delegateChangedLoggedFirst_onPlainReDelegation() public {
         uint256 id = _mk(alice, 500 ether, 7 * SIX_DAYS);
         vm.prank(alice); delegation.delegate(id, bob);
         vm.recordLogs();
@@ -91,7 +100,7 @@ contract AdapterCallbackOrderTest is LockedCurveTestBase {
         assertEq(covered, 1, "the assertion did not run");
     }
 
-    function test_sameDelegateeReDelegation() public {
+    function test_delegateChangedLoggedFirst_onSameDelegateeReDelegation() public {
         uint256 id = _mk(alice, 500 ether, 7 * SIX_DAYS);
         vm.prank(alice); delegation.delegate(id, bob);
         vm.recordLogs();
@@ -100,7 +109,7 @@ contract AdapterCallbackOrderTest is LockedCurveTestBase {
         assertEq(covered, 1, "the assertion did not run");
     }
 
-    function test_enableAutoRelock() public {
+    function test_delegateChangedLoggedFirst_onEnableAutoRelock() public {
         uint256 id = _mk(alice, 500 ether, 7 * SIX_DAYS);
         vm.prank(alice); delegation.delegate(id, bob);
         vm.recordLogs();
@@ -109,7 +118,7 @@ contract AdapterCallbackOrderTest is LockedCurveTestBase {
         assertEq(covered, 1, "the assertion did not run");
     }
 
-    function test_disableAutoRelock() public {
+    function test_delegateChangedLoggedFirst_onDisableAutoRelock() public {
         uint256 id = _mk(alice, 500 ether, 7 * SIX_DAYS);
         vm.prank(alice); delegation.delegate(id, bob);
         vm.prank(alice); veHemi.enableAutoRelock(id);
@@ -120,7 +129,7 @@ contract AdapterCallbackOrderTest is LockedCurveTestBase {
         assertEq(covered, 1, "the assertion did not run");
     }
 
-    function test_retireStaleAutoRelock() public {
+    function test_delegateChangedLoggedFirst_onRetireStaleAutoRelock() public {
         uint256 id = _mk(alice, 500 ether, 7 * SIX_DAYS);
         vm.prank(alice); delegation.delegate(id, bob);
         vm.prank(alice); veHemi.enableAutoRelock(id);
@@ -131,7 +140,7 @@ contract AdapterCallbackOrderTest is LockedCurveTestBase {
         assertEq(covered, 1, "the assertion did not run");
     }
 
-    function test_zeroDelegateeCleanupOnWithdraw() public {
+    function test_delegateChangedLoggedFirst_onWithdrawZeroDelegateeCleanup() public {
         uint256 id = _mk(alice, 500 ether, 7 * SIX_DAYS);
         vm.prank(alice); delegation.delegate(id, bob);
         vm.warp(veHemi.getLockedBalance(id).end + 1);
@@ -141,11 +150,11 @@ contract AdapterCallbackOrderTest is LockedCurveTestBase {
         assertEq(covered, 1, "the assertion did not run");
     }
 
-    function test_zeroDelegateeCleanupOnForfeit() public {
+    function test_delegateChangedLoggedFirst_onForfeitZeroDelegateeCleanup() public {
         hemi.mint(address(this), 500 ether);
         hemi.approve(address(veHemi), type(uint256).max);
         // A forfeitable (and therefore non-transferable) position: `forfeit`
-        // refuses anything else, and the cleanup leg is what is under test.
+        // refuses anything else, and the cleanup path is what is under test.
         uint256 id = veHemi.createLockFor(500 ether, 7 * SIX_DAYS, alice, false, true);
         vm.prank(alice); delegation.delegate(id, bob);
         vm.warp(block.timestamp + 3 * SIX_DAYS);
@@ -169,13 +178,13 @@ contract AdapterCallbackOrderTest is LockedCurveTestBase {
     /// Consequence: the adapter's own re-emitted logs (the ones Aragon's
     /// subgraph indexes) keep the `votes, delegate` order; the OpenZeppelin
     /// order holds on VVD's logs.
-    function test_adapterRelayStaysAfterTheStateWrite() public {
+    function test_adapterRelayFiresAfterTheDelegationRecordIsWritten() public {
         veHemi.transferOwnership(address(this));
         delegation.setTrustedAdapter(address(adapter));
         uint256 id = _mk(alice, 500 ether, 7 * SIX_DAYS);
         vm.prank(alice); delegation.delegate(id, bob);
         adapter.clear();
-        adapter.arm(delegation, id);
+        adapter.watch(delegation, id);
 
         vm.recordLogs();
         vm.prank(alice); delegation.delegate(id, charlie);
@@ -185,7 +194,7 @@ contract AdapterCallbackOrderTest is LockedCurveTestBase {
         for (uint256 i = 0; i < n; ++i) {
             emit log_named_uint("relay callback (1=delegate 2=votes)", adapter.order(i));
         }
-        assertTrue(adapter.probed(), "the callback never read the record back");
+        assertTrue(adapter.readBack(), "the callback never read the record back");
         emit log_named_address("delegatee seen INSIDE notifyDelegateChanged", adapter.seenDelegateeAtCallback());
         assertEq(
             adapter.seenDelegateeAtCallback(), charlie,
@@ -202,11 +211,11 @@ contract AdapterCallbackOrderTest is LockedCurveTestBase {
     }
 
     /// The one path where the relay's `veHemi.ownerOf(delegator_)` could
-    /// matter: the burn/cleanup leg, with a trusted adapter installed. The
+    /// matter: the burn/cleanup path, with a trusted adapter installed. The
     /// relay resolves the owner inside its own try/catch, so if the token were
     /// already burned when it does, the relay would be skipped silently and
     /// the callbacks asserted below would never arrive.
-    function test_burnCleanupWithAdapterInstalled() public {
+    function test_delegateChangedLoggedFirst_onBurnCleanupWithAdapterInstalled() public {
         veHemi.transferOwnership(address(this));
         delegation.setTrustedAdapter(address(adapter));
         uint256 id = _mk(alice, 500 ether, 7 * SIX_DAYS);
@@ -214,19 +223,20 @@ contract AdapterCallbackOrderTest is LockedCurveTestBase {
         adapter.clear();
         vm.warp(veHemi.getLockedBalance(id).end + 1);
 
-        adapter.arm(delegation, id);
+        adapter.watch(delegation, id);
         vm.recordLogs();
         vm.prank(alice); veHemi.withdraw(id);               // burns the NFT
-        assertGt(adapter.len(), 1, "the relay did not fire on the cleanup leg");
-        assertTrue(adapter.probed(), "the callback never read the record back");
-        // On the cleanup leg the record is DELETED before the relay fires, for
+        assertGt(adapter.len(), 1, "the relay did not fire on the cleanup path");
+        assertTrue(adapter.readBack(), "the callback never read the record back");
+        // On the cleanup path the record is DELETED before the relay fires, for
         // the same reason: the adapter must see the settled post-state.
         assertEq(
             adapter.seenDelegateeAtCallback(), address(0),
             "notifyDelegateChanged fired BEFORE the cleanup delete -- the adapter would "
-            "miss the forfeit/withdraw close-out (test_relay_onForfeit_nearExpiry)."
+            "miss the forfeit/withdraw close-out (test/adapter/VeHemiAragonAdapter.t.sol::"
+            "test_relay_onForfeit_nearExpiry)."
         );
-        assertEq(uint256(adapter.order(0)), 2, "relay order changed on the cleanup leg");
+        assertEq(uint256(adapter.order(0)), 2, "relay order changed on the cleanup path");
         _assertOrder("burn cleanup with adapter installed");
     }
 }

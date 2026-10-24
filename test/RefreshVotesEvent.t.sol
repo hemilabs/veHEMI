@@ -17,18 +17,19 @@ import "./LockedCurveTestBase.sol";
 /// reporting the effective instant.
 contract RefreshVotesEventTest is LockedCurveTestBase {
     address internal constant DEL_A = address(0xA1);
-    bytes32 internal constant DVC = keccak256("DelegateVotesChanged(address,uint256,uint256)");
+    bytes32 internal constant TOPIC_DELEGATE_VOTES_CHANGED =
+        keccak256("DelegateVotesChanged(address,uint256,uint256)");
 
-    function _boundary(uint256 t) internal pure returns (uint256) {
+    function _nextHourBoundary(uint256 t) internal pure returns (uint256) {
         return (t / 1 hours) * 1 hours + 1 hours;
     }
 
-    function _lastEvent(address who) internal returns (bool found, uint256 prev, uint256 nw) {
+    function _lastEvent(address who) internal returns (bool found, uint256 previousVotes, uint256 newVotes) {
         Vm.Log[] memory logs = vm.getRecordedLogs();
         for (uint256 i = 0; i < logs.length; ++i) {
-            if (logs[i].topics.length > 1 && logs[i].topics[0] == DVC
+            if (logs[i].topics.length > 1 && logs[i].topics[0] == TOPIC_DELEGATE_VOTES_CHANGED
                 && logs[i].topics[1] == bytes32(uint256(uint160(who)))) {
-                (prev, nw) = abi.decode(logs[i].data, (uint256, uint256));
+                (previousVotes, newVotes) = abi.decode(logs[i].data, (uint256, uint256));
                 found = true;
             }
         }
@@ -47,7 +48,7 @@ contract RefreshVotesEventTest is LockedCurveTestBase {
         vm.warp(back);
     }
 
-    function _seed() internal returns (uint256 T) {
+    function _delegateMidHour() internal returns (uint256 T) {
         vm.warp(((block.timestamp / SIX_DAYS) + 2) * SIX_DAYS + 1);
         uint256 id = _mkLock(alice, 100 ether, 2 * 365 days);
         vm.warp((block.timestamp / 1 hours) * 1 hours + 1 hours + 600);
@@ -59,41 +60,41 @@ contract RefreshVotesEventTest is LockedCurveTestBase {
     // `refreshVotingPower` in the SAME BLOCK as the delegation must not
     // contradict the delegation's own event.
     function test_R1_refreshAgreesWithTheDelegationEvent() public {
-        uint256 T = _seed();
+        uint256 T = _delegateMidHour();
 
         vm.recordLogs();
         vm.prank(alice); delegation.refreshVotingPower(DEL_A);
-        (bool f, uint256 p, uint256 n) = _lastEvent(DEL_A);
-        assertTrue(f, "R1: refreshVotingPower emitted nothing");
-        assertEq(p, n, "R1: refresh must report a single value");
+        (bool found, uint256 previousVotes, uint256 newVotes) = _lastEvent(DEL_A);
+        assertTrue(found, "R1: refreshVotingPower emitted nothing");
+        assertEq(previousVotes, newVotes, "R1: refresh must report a single value");
 
         uint256 eff = _votesAt(DEL_A, T + 1);
-        uint256 bnd = _votesAt(DEL_A, _boundary(T));
-        emit log_named_uint("R1 refresh emitted        ", n);
+        uint256 bnd = _votesAt(DEL_A, _nextHourBoundary(T));
+        emit log_named_uint("R1 refresh emitted        ", newVotes);
         emit log_named_uint("R1 getVotes at t+1        ", eff);
         emit log_named_uint("R1 getVotes at boundary   ", bnd);
-        emit log_named_uint("R1 contradiction (wei)    ", eff > n ? eff - n : n - eff);
-        assertTrue(eff != bnd, "R1: construction -- the two instants must differ");
-        assertEq(n, eff,
+        emit log_named_uint("R1 contradiction (wei)    ", eff > newVotes ? eff - newVotes : newVotes - eff);
+        assertTrue(eff != bnd, "R1 premise: the two instants must differ");
+        assertEq(newVotes, eff,
             "R1: refreshVotingPower reports the boundary, contradicting the delegation event in the same block");
     }
 
     // ── R2 ────────────────────────────────────────────────────────────────
     // The batch entry point inherits whatever R1 pins.
     function test_R2_refreshBatchAgreesToo() public {
-        uint256 T = _seed();
+        uint256 T = _delegateMidHour();
         address[] memory who = new address[](1);
         who[0] = DEL_A;
 
         vm.recordLogs();
         delegation.refreshVotingPowerBatch(who);
-        (bool f, , uint256 n) = _lastEvent(DEL_A);
-        assertTrue(f, "R2: batch emitted nothing");
+        (bool found, , uint256 newVotes) = _lastEvent(DEL_A);
+        assertTrue(found, "R2: batch emitted nothing");
 
         uint256 eff = _votesAt(DEL_A, T + 1);
-        emit log_named_uint("R2 batch emitted   ", n);
+        emit log_named_uint("R2 batch emitted   ", newVotes);
         emit log_named_uint("R2 getVotes at t+1 ", eff);
-        assertEq(n, eff, "R2: refreshVotingPowerBatch reports the boundary");
+        assertEq(newVotes, eff, "R2: refreshVotingPowerBatch reports the boundary");
     }
 
     // ── R3 ────────────────────────────────────────────────────────────────
@@ -114,28 +115,28 @@ contract RefreshVotesEventTest is LockedCurveTestBase {
         uint256 T = block.timestamp;
 
         uint256 beforeEff = _votesAt(DEL_A, T + 1);
-        uint256 beforeBnd = _votesAt(DEL_A, _boundary(T));
+        uint256 beforeBnd = _votesAt(DEL_A, _nextHourBoundary(T));
         uint256 beforeNow = delegation.getVotes(DEL_A);
 
         vm.recordLogs();
         delegation.writeNewCheckpointForExpiredDelegations(DEL_A);
-        (bool f, uint256 p, uint256 n) = _lastEvent(DEL_A);
-        assertTrue(f, "R3: amortiser emitted nothing");
+        (bool found, uint256 previousVotes, uint256 newVotes) = _lastEvent(DEL_A);
+        assertTrue(found, "R3: amortiser emitted nothing");
 
         uint256 afterEff = _votesAt(DEL_A, T + 1);
-        uint256 afterBnd = _votesAt(DEL_A, _boundary(T));
-        emit log_named_uint("R3 emitted previousVotes ", p);
-        emit log_named_uint("R3 emitted newVotes      ", n);
-        emit log_named_uint("R3 votes at t+1  before  ", beforeEff);
-        emit log_named_uint("R3 votes at t+1  after   ", afterEff);
-        emit log_named_uint("R3 votes at bnd  before  ", beforeBnd);
-        emit log_named_uint("R3 votes at bnd  after   ", afterBnd);
-        emit log_named_uint("R3 getVotes(now)         ", beforeNow);
+        uint256 afterBnd = _votesAt(DEL_A, _nextHourBoundary(T));
+        emit log_named_uint("R3 emitted previousVotes      ", previousVotes);
+        emit log_named_uint("R3 emitted newVotes           ", newVotes);
+        emit log_named_uint("R3 votes at t+1      before   ", beforeEff);
+        emit log_named_uint("R3 votes at t+1      after    ", afterEff);
+        emit log_named_uint("R3 votes at boundary before   ", beforeBnd);
+        emit log_named_uint("R3 votes at boundary after    ", afterBnd);
+        emit log_named_uint("R3 getVotes(now)              ", beforeNow);
 
-        assertGt(beforeEff, 0, "R3: construction -- DEL_A must still carry the long lock");
+        assertGt(beforeEff, 0, "R3 premise: DEL_A must still carry the long lock");
         assertEq(afterEff, beforeEff, "R3: the amortiser changed the t+1 reading");
         assertEq(afterBnd, beforeBnd, "R3: the amortiser changed the boundary reading");
-        assertEq(p, n, "R3: the amortiser reported a non-zero delta it did not make");
-        assertEq(n, afterEff, "R3: the amortiser reports the boundary, not the effective instant");
+        assertEq(previousVotes, newVotes, "R3: the amortiser reported a non-zero delta it did not make");
+        assertEq(newVotes, afterEff, "R3: the amortiser reports the boundary, not the effective instant");
     }
 }

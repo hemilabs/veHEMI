@@ -12,8 +12,7 @@ pragma solidity ^0.8.29;
 // retirement must not be swallowed by `VeHemi._reDelegate`'s try/catch
 // (`DelegationUpdateFailed`).
 //
-// The clock starts OFF an hourly boundary (+1380 s) so that a booking dated on
-// the hourly grid is genuinely deferred.
+// The clock starts 1380 s past an hour boundary.
 // ============================================================================
 
 import "./TwinOracle.sol";
@@ -75,7 +74,7 @@ contract RetirementNoPhantomVotesTest is TwinOracle {
     /// @notice A mid-life `forfeit()` takes the escrow to zero; no 5-second
     ///         sample of the next two hours may show votes above it, at twelve
     ///         phases of the hour.
-    function test_forfeit_phantom_at_every_phase() public {
+    function test_forfeit_leaves_no_phantom_at_twelve_phases_of_the_hour() public {
         uint256 worstAll;
         for (uint256 p; p < 12; ++p) {
             uint256 snap = vm.snapshotState();
@@ -99,7 +98,7 @@ contract RetirementNoPhantomVotesTest is TwinOracle {
     // ====================================================================
     /// @notice A top-up re-books the record in the same hour the token is
     ///         forfeited; the forfeit still leaves no phantom.
-    function test_owner_rebook_then_forfeit() public {
+    function test_owner_rebook_then_forfeit_leaves_no_phantom() public {
         uint256 id = _mintForfeitable(ALICE, AMT, N);
         vm.prank(ALICE);
         X.del.delegate(id, CAROL);
@@ -114,7 +113,7 @@ contract RetirementNoPhantomVotesTest is TwinOracle {
 
         vm.prank(ADMIN);
         X.ve.forfeit(id);
-        assertEq(X.ve.totalVeHemiSupply(), 0, "setup: escrow must be zero");
+        assertEq(X.ve.totalVeHemiSupply(), 0, "premise: escrow must be zero");
 
         assertEq(_sweepPhantom(7200), 0, "PHANTOM survives a 1-wei re-book");
     }
@@ -124,9 +123,9 @@ contract RetirementNoPhantomVotesTest is TwinOracle {
     ///         after ALICE's forfeit settles, CAROL carries exactly VICTIM's
     ///         escrow.
     function test_victim_weight_is_not_destroyed() public {
-        uint256 vid = _mintForfeitable(VICTIM, AMT, N);
+        uint256 victimId = _mintForfeitable(VICTIM, AMT, N);
         vm.prank(VICTIM);
-        X.del.delegate(vid, CAROL);
+        X.del.delegate(victimId, CAROL);
 
         uint256 id = _mintForfeitable(ALICE, AMT, N);
         vm.prank(ALICE);
@@ -137,7 +136,9 @@ contract RetirementNoPhantomVotesTest is TwinOracle {
         X.ve.forfeit(id);
         vm.warp(block.timestamp + 1 hours);
 
-        assertEq(X.del.getVotes(CAROL), X.ve.balanceOfNFT(vid), "VICTIM SHAVED: an innocent co-delegator lost weight");
+        assertEq(
+            X.del.getVotes(CAROL), X.ve.balanceOfNFT(victimId), "VICTIM SHAVED: an innocent co-delegator lost weight"
+        );
     }
 
     // ====================================================================
@@ -194,7 +195,7 @@ contract RetirementNoPhantomVotesTest is TwinOracle {
 
         vm.prank(ALICE);
         X.ve.withdraw(id);
-        assertEq(X.ve.totalVeHemiSupply(), 0, "setup: escrow must be zero");
+        assertEq(X.ve.totalVeHemiSupply(), 0, "premise: escrow must be zero");
 
         assertEq(_sweepPhantom(7200), 0, "PHANTOM: votes above escrow after a burn");
     }
@@ -221,7 +222,7 @@ contract RetirementNoPhantomVotesTest is TwinOracle {
     /// @notice A 1-wei top-up in the SAME hour as the disable re-books the
     ///         record ahead of the disable. The disable must neither be
     ///         swallowed nor leave the delegatee above the escrow.
-    function test_owner_dust_then_disable() public {
+    function test_owner_dust_then_disable_is_not_swallowed_and_not_above_escrow() public {
         uint256 id = _id(spawn(true, ALICE, AMT, N, Cadence.NEVER, false, false));
         vm.prank(ALICE);
         X.del.delegate(id, CAROL);
@@ -255,50 +256,50 @@ contract RetirementNoPhantomVotesTest is TwinOracle {
     ///         enable/disable round trips; the delegatee's votes stay between
     ///         the victim's own escrow and the pair's escrow.
     function test_roundtrips_do_not_destroy_a_third_party() public {
-        uint256 vid = _id(spawn(true, VICTIM, AMT, N, Cadence.NEVER, false, false));
+        uint256 victimId = _id(spawn(true, VICTIM, AMT, N, Cadence.NEVER, false, false));
         vm.prank(VICTIM);
-        X.del.delegate(vid, CAROL);
+        X.del.delegate(victimId, CAROL);
         vm.warp(block.timestamp + 3 hours);
 
-        uint256 aid = _id(spawn(true, ALICE, AMT / 4, N, Cadence.NEVER, false, false));
+        uint256 attackerId = _id(spawn(true, ALICE, AMT / 4, N, Cadence.NEVER, false, false));
         vm.prank(ALICE);
-        X.del.delegate(aid, CAROL);
+        X.del.delegate(attackerId, CAROL);
         vm.warp(block.timestamp + 2 hours);
 
-        uint256 victimAlone = X.ve.balanceOfNFTAt(vid, block.timestamp);
-        uint256 attackerAlone = X.ve.balanceOfNFTAt(aid, block.timestamp);
-        assertEq(X.del.getVotes(CAROL), victimAlone + attackerAlone, "setup");
+        uint256 victimAlone = X.ve.balanceOfNFTAt(victimId, block.timestamp);
+        uint256 attackerAlone = X.ve.balanceOfNFTAt(attackerId, block.timestamp);
+        assertEq(X.del.getVotes(CAROL), victimAlone + attackerAlone, "premise: CAROL does not carry both positions");
 
         for (uint256 r; r < 50; ++r) {
             vm.prank(ALICE);
-            X.ve.enableAutoRelock(aid);
+            X.ve.enableAutoRelock(attackerId);
             vm.prank(ALICE);
-            X.ve.disableAutoRelock(aid);
+            X.ve.disableAutoRelock(attackerId);
             vm.warp(block.timestamp + 1 hours + 17);
         }
 
         uint256 v = X.del.getVotes(CAROL);
-        uint256 vAlone = X.ve.balanceOfNFTAt(vid, block.timestamp);
-        uint256 aAlone = X.ve.balanceOfNFTAt(aid, block.timestamp);
-        assertGe(v, vAlone, "VICTIM DESTROYED: votes fell below the victim's own escrow");
-        assertLe(v, vAlone + aAlone, "INFLATION: votes above the pair's escrow");
+        uint256 victimAloneAfter = X.ve.balanceOfNFTAt(victimId, block.timestamp);
+        uint256 attackerAloneAfter = X.ve.balanceOfNFTAt(attackerId, block.timestamp);
+        assertGe(v, victimAloneAfter, "VICTIM DESTROYED: votes fell below the victim's own escrow");
+        assertLe(v, victimAloneAfter + attackerAloneAfter, "INFLATION: votes above the pair's escrow");
     }
 
     // ====================================================================
     /// @notice THE CHECKPOINT HISTORY IS ORDERED AND IMMUTABLE.
     ///         (a) `delegateCheckpoints` timestamps stay STRICTLY INCREASING;
-    ///         (b) every `getPastVotes(a, t)` sampled after the last write of
-    ///             its block reads back the same value three days later.
+    ///         (b) every `getPastVotes(CAROL, t)` sampled after the last write
+    ///             of its block reads back the same value three days later.
     ///         The stress mixes same-second, intra-hour and cross-hour writes so
-    ///         that several checkpoints share one hourly epoch.
+    ///         that several checkpoints share one hour.
     function test_history_is_ordered_and_immutable() public {
-        uint256 a = _id(spawn(true, ALICE, AMT, N, Cadence.NEVER, false, false));
-        uint256 b = _id(spawn(true, VICTIM, AMT / 3, N, Cadence.NEVER, false, false));
-        vm.prank(ALICE);  X.del.delegate(a, CAROL);
-        vm.prank(VICTIM); X.del.delegate(b, CAROL);
+        uint256 aliceId = _id(spawn(true, ALICE, AMT, N, Cadence.NEVER, false, false));
+        uint256 victimId = _id(spawn(true, VICTIM, AMT / 3, N, Cadence.NEVER, false, false));
+        vm.prank(ALICE);  X.del.delegate(aliceId, CAROL);
+        vm.prank(VICTIM); X.del.delegate(victimId, CAROL);
 
         uint256[] memory ts = new uint256[](60);
-        uint256[] memory vv = new uint256[](60);
+        uint256[] memory votesAt = new uint256[](60);
         uint256 k;
 
         for (uint256 r; r < 40; ++r) {
@@ -306,13 +307,13 @@ contract RetirementNoPhantomVotesTest is TwinOracle {
             // also exercises the same-second overwrite path.
             vm.warp(block.timestamp + (r % 3 == 0 ? 1 : (r % 3 == 1 ? 37 : 1 hours + 41)));
             vm.prank(ALICE);
-            X.ve.enableAutoRelock(a);
+            X.ve.enableAutoRelock(aliceId);
             vm.prank(ALICE);
-            X.ve.disableAutoRelock(a);
-            if (r % 2 == 0) { vm.prank(VICTIM); X.del.delegate(b, CAROL); }
+            X.ve.disableAutoRelock(aliceId);
+            if (r % 2 == 0) { vm.prank(VICTIM); X.del.delegate(victimId, CAROL); }
             // Sampled AFTER every write in this block, so the reading is final
             // for this timestamp.
-            ts[k] = block.timestamp; vv[k] = X.del.getVotes(CAROL); ++k;
+            ts[k] = block.timestamp; votesAt[k] = X.del.getVotes(CAROL); ++k;
         }
 
         // (a) strictly increasing
@@ -332,14 +333,14 @@ contract RetirementNoPhantomVotesTest is TwinOracle {
         // (b) immutability, re-queried from far in the future
         vm.warp(block.timestamp + 3 days);
         for (uint256 i; i < k; ++i) {
-            assertEq(X.del.getPastVotes(CAROL, ts[i]), vv[i], "getPastVotes retroactively mutated");
+            assertEq(X.del.getPastVotes(CAROL, ts[i]), votesAt[i], "getPastVotes retroactively mutated");
         }
     }
 
     // ====================================================================
     /// @notice `delegationBookedAt` is `block.timestamp + 1` right after a
     ///         delegate, and is cleared on the forfeit path.
-    function test_bookedAt_is_maintained() public {
+    function test_bookedAt_is_next_second_on_delegate_and_cleared_on_forfeit() public {
         uint256 id = _mintForfeitable(ALICE, AMT, N);
         vm.prank(ALICE);
         X.del.delegate(id, CAROL);
@@ -383,37 +384,37 @@ contract RetirementNoPhantomVotesTest is TwinOracle {
     ///         be swallowed (`DelegationUpdateFailed`), and the delegatees must
     ///         never carry more than the two positions' escrow (sampled every
     ///         300 s over the next hour).
-    function test_two_flat_terms_then_move_disable_or_topup() public {
+    function test_two_flat_terms_then_move_disable_or_topup_never_zero_nor_above_escrow() public {
         address bob  = address(0xB0B);
         address dave = address(0xDA7E);
         uint256[3] memory gaps = [uint256(1 hours), SIX_DAYS + 1380, (N + 1) * SIX_DAYS + 1380];
         for (uint256 g; g < gaps.length; ++g) {
-            for (uint256 v; v < 3; ++v) {
+            for (uint256 stepKind; stepKind < 3; ++stepKind) {
                 uint256 snap = vm.snapshotState();
-                uint256 a = _mintForfeitable(ALICE, AMT, N);
+                uint256 firstFlatId = _mintForfeitable(ALICE, AMT, N);
                 vm.startPrank(ALICE);
-                X.ve.enableAutoRelock(a);
-                X.del.delegate(a, CAROL);
+                X.ve.enableAutoRelock(firstFlatId);
+                X.del.delegate(firstFlatId, CAROL);
                 vm.stopPrank();
                 vm.warp(block.timestamp + gaps[g]);
-                uint256 b = _mintForfeitable(bob, AMT, N);
+                uint256 secondFlatId = _mintForfeitable(bob, AMT, N);
                 vm.startPrank(bob);
-                X.ve.enableAutoRelock(b);
-                X.del.delegate(b, CAROL);
+                X.ve.enableAutoRelock(secondFlatId);
+                X.del.delegate(secondFlatId, CAROL);
                 vm.stopPrank();
                 vm.warp(block.timestamp + 1 hours);
 
                 vm.recordLogs();
-                if (v == 0) {
+                if (stepKind == 0) {
                     vm.prank(ALICE);
-                    X.del.delegate(a, dave);
-                } else if (v == 1) {
+                    X.del.delegate(firstFlatId, dave);
+                } else if (stepKind == 1) {
                     vm.prank(ALICE);
-                    X.ve.disableAutoRelock(a);
+                    X.ve.disableAutoRelock(firstFlatId);
                 } else {
                     X.hemi.mint(ALICE, 1 ether);
                     vm.prank(ALICE);
-                    X.ve.increaseAmount(a, 1 ether);
+                    X.ve.increaseAmount(firstFlatId, 1 ether);
                 }
                 Vm.Log[] memory logs = vm.getRecordedLogs();
                 for (uint256 k; k < logs.length; ++k) {
@@ -424,9 +425,10 @@ contract RetirementNoPhantomVotesTest is TwinOracle {
                 for (uint256 s = 1; s <= 3600; s += 300) {
                     vm.warp(t + s);
                     uint256 votes = X.del.getVotes(CAROL) + X.del.getVotes(dave);
-                    uint256 esc = X.ve.balanceOfNFTAt(a, block.timestamp) + X.ve.balanceOfNFTAt(b, block.timestamp);
+                    uint256 escrow = X.ve.balanceOfNFTAt(firstFlatId, block.timestamp)
+                        + X.ve.balanceOfNFTAt(secondFlatId, block.timestamp);
                     assertGt(votes, 0, "the step zeroed the delegatees");
-                    assertLe(votes, esc, "the delegatees carry more than the escrow");
+                    assertLe(votes, escrow, "the delegatees carry more than the escrow");
                 }
                 vm.revertToState(snap);
             }
