@@ -15,7 +15,7 @@ extra_output = ["storageLayout"]
 # Allow reading the committed storage-layout goldens and the EIP-170
 # attestation in test/fixtures/, and the compiled artifacts in out/
 # (test/StorageLayoutGolden.t.sol, test/StorageLayoutCompiledParity.t.sol,
-# test/d12/EIP170Gate.t.sol). The CI shell gates are independent.
+# test/deployability/EIP170Gate.t.sol). The CI shell gates are independent.
 fs_permissions = [
     { access = "read", path = "test/fixtures/" },
     { access = "read", path = "out/" },
@@ -31,7 +31,7 @@ fs_permissions = [
 # Block pinning is opt-in via the HEMI_FORK_BLOCK env var: fork tests that want
 # a reproducible snapshot read `vm.envOr("HEMI_FORK_BLOCK", uint256(0))` and
 # call `vm.createSelectFork("hemi", pinnedBlock)` from setUp when non-zero
-# (test/r31 pins by default through R31_FORK_BLOCK).
+# (test/autorelock-upgrade pins by default through AUTORELOCK_TEST_FORK_BLOCK).
 [rpc_endpoints]
 # Foundry 1.5.1 retries at a flat interval: 6 retries x 1,000 ms is a 6-second
 # window and does not outlast a 60-second rate-limit reset; the fork CI steps

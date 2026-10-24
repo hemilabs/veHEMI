@@ -79,8 +79,8 @@ const armUnproposedBatchGuard = (): void => {
                 `Safe; if one did, the proposal may have reached the Safe service: check the\n` +
                 `Safe queue and its history first. If it is there, propose nothing: get it\n` +
                 `executed, then run the post-execution check (for deploy/08,\n` +
-                `D1_POST_CHECK_ONLY=1; its first run moves this file to .stale-* and refuses,\n` +
-                `so run it again). The proxies have NOT been upgraded by this run.\n\n` +
+                `AUTORELOCK_POST_CHECK_ONLY=1; its first run moves this file to .stale-* and\n` +
+                `refuses, so run it again). The proxies have NOT been upgraded by this run.\n\n` +
                 `The usual cause is a --tags filter that selected the queueing script but not\n` +
                 `script 99: hardhat-deploy filters by tag BEFORE it applies 'runAtTheEnd', so a\n` +
                 `'runAtTheEnd' script that carries none of the selected tags never runs.\n\n` +
@@ -158,13 +158,13 @@ if (fs.existsSync(MULTI_SIG_TXS_FILE) && PROPOSE_EXISTING) {
             `    a queued upgrade). FIRST check the Safe queue and its history. If this\n` +
             `    batch, or a docs/AUTO_RELOCK_UPGRADE.md section 9 leg of this upgrade,\n` +
             `    is pending there, change nothing here: get it executed, then run\n` +
-            `    D1_POST_CHECK_ONLY=1. If it was already executed, just run that check.\n` +
-            `    A pending rollback is never executed on this advice: follow section 8\n` +
-            `    of that file. Only if neither holds: a re-run queues nothing unless an\n` +
-            `    implementation is newly deployed. While BOTH proxies are still on their\n` +
-            `    live implementations, delete both deployments/<net>/*_Implementation.json\n` +
-            `    records first; in any other state delete only what\n` +
-            `    docs/AUTO_RELOCK_UPGRADE.md, section 9 says for it.\n` +
+            `    AUTORELOCK_POST_CHECK_ONLY=1. If it was already executed, just run that\n` +
+            `    check. A pending rollback is never executed on this advice: follow\n` +
+            `    section 8 of that file. Only if neither holds: a re-run queues nothing\n` +
+            `    unless an implementation is newly deployed. While BOTH proxies are still\n` +
+            `    on their live implementations, delete both\n` +
+            `    deployments/<net>/*_Implementation.json records first; in any other\n` +
+            `    state delete only what docs/AUTO_RELOCK_UPGRADE.md, section 9 says for it.\n` +
             `${"=".repeat(78)}\n`
         );
     }
@@ -318,7 +318,7 @@ const proposeSafeTransaction = async (hre: HardhatRuntimeEnvironment, txs: MetaT
         log(
             chalk.blue(
                 "After execution: for the deploy/08 batch run " +
-                    "`D1_POST_CHECK_ONLY=1 npx hardhat --network <net> deploy --tags AutoRelockUpgrade`; " +
+                    "`AUTORELOCK_POST_CHECK_ONLY=1 npx hardhat --network <net> deploy --tags AutoRelockUpgrade`; " +
                     "for other batches run the deployment again."
             )
         );

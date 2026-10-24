@@ -137,8 +137,8 @@ for an in-window rollback. A batch that executes at B − 1 (timestamp ≡ 3599 
 
 - [ ] **Census.** Run the census at the block you will sign at and refuse to
       sign unless it prints `CENSUS: CLEAN` and exits 0:
-      `python3 scripts/d1-census.py <signing block> census.json`. It checks
-      four premises of the live VVD state:
+      `python3 scripts/autorelock-census.py <signing block> census.json`. It
+      checks four premises of the live VVD state:
       - P1: no checkpoint carries `fixedBias`;
       - P2: no flat-shaped record exists;
       - P3: checkpoints sit on hour boundaries, at most one per hour;
@@ -176,31 +176,32 @@ for an in-window rollback. A batch that executes at B − 1 (timestamp ≡ 3599 
 - [ ] **Rehearse** on a fork at the signing block:
       ```
       HEMI_RPC_URL=<archive RPC> HEMI_FORK_BLOCK=<signing block> npm run test:hardhat:fork:autorelock
-      HEMI_RPC_URL=<archive RPC> R31_FORK_BLOCK=<signing block> forge test --match-path 'test/r31/*' --threads 1 -vv
+      HEMI_RPC_URL=<archive RPC> AUTORELOCK_TEST_FORK_BLOCK=<signing block> forge test --match-path 'test/autorelock-upgrade/*' --threads 1 -vv
       ```
-      Write the block as digits only; every forked `test/r31` body (all but the
-      ten `R31Window` bodies, which run without a fork) logs `fork block`,
-      which must equal the signing block. Both must pass with no failure, and
-      the forge summary of `test/r31` must read 0 skipped: a skip is a fork
-      premise that did not hold at that block (another chain, or a block after
-      the upgrade). The one expected exception is a signing block after an
-      in-window rollback, where exactly the two `R31Transition` plain-upgrade
-      fallback bodies skip by design and the deploy rehearsal's
-      `rollback limits, control` body fails (pre-flight 5b counts the
-      rolled-back forward's VeHemi `Upgraded` log as a VeHemi-leg rollback). The
-      deploy rehearsal loads the `deployments/hemi/` records of the tree it runs
-      from, so all of this holds only from a tree whose records are the reviewed
-      commit's, which name the live implementations: once the proposing run's
-      records are committed, run it from a scratch clone of the reviewed commit.
-      With the proposing run's records nearly every body fails (`HALF A BATCH`),
-      and with the implementation records deleted every body fails. 5,524,738 is
-      the default pin of `test/r31` (repository variable `R31_FORK_BLOCK`) and
-      of the nightly deploy rehearsal (repository variable
-      `AUTORELOCK_FORK_BLOCK`, which CI passes as the `HEMI_FORK_BLOCK`
-      environment variable of the command above; the repository variable
-      `HEMI_FORK_BLOCK` pins only the V2-history step, at or below 4,458,622).
-      The deploy rehearsal must also report no pending body: without an RPC
-      every body is pending and mocha still exits 0.
+      Write the block as digits only; every forked `test/autorelock-upgrade`
+      body (all but the ten `UpgradeWindowUnit` bodies, which run without a
+      fork) logs `fork block`, which must equal the signing block. Both must
+      pass with no failure, and the forge summary of `test/autorelock-upgrade`
+      must read 0 skipped: a skip is a fork premise that did not hold at that
+      block (another chain, or a block after the upgrade). The one expected
+      exception is a signing block after an in-window rollback, where exactly
+      the two `UpgradeWindowTransition` plain-upgrade fallback bodies skip by
+      design and the deploy rehearsal's `rollback limits, control` body fails
+      (pre-flight 5b counts the rolled-back forward's VeHemi `Upgraded` log as a
+      VeHemi-leg rollback). The deploy rehearsal loads the `deployments/hemi/`
+      records of the tree it runs from, so all of this holds only from a tree
+      whose records are the reviewed commit's, which name the live
+      implementations: once the proposing run's records are committed, run it
+      from a scratch clone of the reviewed commit. With the proposing run's
+      records nearly every body fails (`HALF A BATCH`), and with the
+      implementation records deleted every body fails. 5,524,738 is the default
+      pin of `test/autorelock-upgrade` (repository variable
+      `AUTORELOCK_TEST_FORK_BLOCK`) and of the nightly deploy rehearsal
+      (repository variable `AUTORELOCK_FORK_BLOCK`, which CI passes as the
+      `HEMI_FORK_BLOCK` environment variable of the command above; the
+      repository variable `HEMI_FORK_BLOCK` pins only the V2-history step, at or
+      below 4,458,622). The deploy rehearsal must also report no pending body:
+      without an RPC every body is pending and mocha still exits 0.
 
 ## 5. Running it
 
@@ -281,8 +282,8 @@ Before signing, every signer checks:
    `0xAcAA0d96121C035fC21345551317d66921394128` (VVD).
 9. **Census.** The operator has posted `CENSUS: CLEAN` with its `block`,
    `block_hash` and `script_sha256` for a block after the proposal. Each signer
-   checks `script_sha256` against `sha256sum scripts/d1-census.py` at the PR
-   commit and `block_hash` against explorer.hemi.xyz for that block. (The
+   checks `script_sha256` against `sha256sum scripts/autorelock-census.py` at
+   the PR commit and `block_hash` against explorer.hemi.xyz for that block. (The
    census refuses a chain other than Hemi and a VVD that is not on the live
    implementation; section 4.)
 
@@ -291,7 +292,7 @@ Signing does not execute. Execution is a separate action and needs no timing.
 ## 7. After execution: the post-execution check
 
 ```
-D1_POST_CHECK_ONLY=1 npx hardhat --network hemi deploy --tags AutoRelockUpgrade
+AUTORELOCK_POST_CHECK_ONLY=1 npx hardhat --network hemi deploy --tags AutoRelockUpgrade
 ```
 
 Run it from the same tree and the same `deployments/` directory that produced
@@ -317,12 +318,12 @@ WARNINGS`: treat that as not the expected one-MultiSend shape. After a pass
 and `VeHemiVoteDelegation.json` (local files only). Commit the refreshed files.
 
 - The check needs an **archive RPC**. It reads the VeHemi implementation slot at
-  the audit start block, and `D1_LOGS_FROM` cannot avoid that read.
-- If the RPC caps `eth_getLogs`, set `D1_LOGS_STEP` (a positive integer). The
-  default is 10,000 blocks, halved on errors while above 500.
-- You can also set `D1_LOGS_FROM`. It must be a block at or before the first
-  upgrade of the VeHemi proxy to any auto-relock build, at which the proxy was
-  still on the live implementation. It replaces the implementation record's
+  the audit start block, and `AUTORELOCK_LOGS_FROM` cannot avoid that read.
+- If the RPC caps `eth_getLogs`, set `AUTORELOCK_LOGS_STEP` (a positive
+  integer). The default is 10,000 blocks, halved on errors while above 500.
+- You can also set `AUTORELOCK_LOGS_FROM`. It must be a block at or before the
+  first upgrade of the VeHemi proxy to any auto-relock build, at which the proxy
+  was still on the live implementation. It replaces the implementation record's
   receipt block as the start of the `Upgraded`-log searches. It can only move
   the `AutoRelockEnabled` audit earlier than block 5,524,738, never later.
 - Do not use a plain re-run as the check. After the forward it refuses before
@@ -350,9 +351,9 @@ deployed / 29 current VeHemi entries and 9 / 12 VVD entries; the re-extracted
 deployed fixtures hold 29 and 12). Land it promptly: until it lands no frozen
 fixture covers VeHemi V3 or VVD V4, and only the hard-coded pins
 (`StorageLayoutGolden.t.sol`, the anchor's append test, and the slot-65 runtime
-test in `G08Zero.t.sol`) guard against deleting or reordering one of their
-declarations, which would move live state (VeHemi slots 64 and 65, VVD slots 100
-and 101). Until it lands, CI's Hemi-fork step fails at
+test in `StaleRetireZeroesVotes.t.sol`) guard against deleting or reordering one
+of their declarations, which would move live state (VeHemi slots 64 and 65, VVD
+slots 100 and 101). Until it lands, CI's Hemi-fork step fails at
 `test_AnchorStillDescribesTheLiveImplementation`, by design. In the same pull
 request retire the nightly deploy rehearsal, or point it at a scratch clone of
 the reviewed commit: once the proposing run's records (section 5) reach the

@@ -191,10 +191,10 @@ contract InvariantTest is Test {
         // A flat (auto-relock) position books its bucket-mean level
         // `slope * (R - SIX_DAYS/2)` into the global curve but its plain ramp
         // to `transferableAfter` into the subcurves, so `locked` may exceed
-        // `total` by that position's excess (`_vmeanSlack`), which is at most
-        // `slope * SIX_DAYS/2`. With no flat position the slack is zero and
-        // this reduces to `locked <= total`.
-        (uint256 slack, uint256 cap) = _vmeanSlack();
+        // `total` by that position's excess (`_bucketMeanSlack`), which is at
+        // most `slope * SIX_DAYS/2`. With no flat position the slack is zero
+        // and this reduces to `locked <= total`.
+        (uint256 slack, uint256 cap) = _bucketMeanSlack();
         assertLe(slack, cap, "bucket-mean subcurve slack exceeds slope * SIX_DAYS/2 per flat in-window position");
         assertLe(locked, total + slack, "locked > total + bucket-mean half-bucket slack");
     }
@@ -205,7 +205,7 @@ contract InvariantTest is Test {
     ///        glob_i = flat ? slope_i * (R - SIX_DAYS/2) : slope_i * (lock.end - now)
     ///      Only flat positions can have `sub_i > glob_i`; each adds
     ///      `slope_i * SIX_DAYS/2` to the cap.
-    function _vmeanSlack() internal view returns (uint256 slack, uint256 cap) {
+    function _bucketMeanSlack() internal view returns (uint256 slack, uint256 cap) {
         uint256 nowTs = block.timestamp;
         uint256 nextId = veHemi.nextTokenId();
         for (uint256 id = 1; id < nextId; ++id) {
@@ -271,7 +271,7 @@ contract InvariantTest is Test {
         // `invariant_subcurveOrdering`, and `transferable` is the saturating
         // difference the view computes (`locked_ > total` is a legal state).
         assertLe(forfeitable_, locked_, "breakdown: forfeitable > locked");
-        (uint256 slack, uint256 cap) = _vmeanSlack();
+        (uint256 slack, uint256 cap) = _bucketMeanSlack();
         assertLe(slack, cap, "breakdown: bucket-mean slack exceeds slope * SIX_DAYS/2 per flat in-window position");
         assertLe(locked_, total + slack, "breakdown: locked > total + bucket-mean half-bucket slack");
         assertEq(

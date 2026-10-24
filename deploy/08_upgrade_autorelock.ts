@@ -35,6 +35,24 @@ function envInt(name: string, min: number): number | undefined {
     return n;
 }
 
+// Earlier operator variable names, each mapped to the name this script reads.
+const RENAMED_OPERATOR_ENV: Record<string, string> = {
+    D1_POST_CHECK_ONLY: "AUTORELOCK_POST_CHECK_ONLY",
+    D1_LOGS_FROM: "AUTORELOCK_LOGS_FROM",
+    D1_LOGS_STEP: "AUTORELOCK_LOGS_STEP",
+};
+
+// Refuses a variable set (even empty) under an earlier name. It would be ignored
+// and the default used: for the post-check flag, the full deploy-and-queue path.
+// deploy/99 calls this too, for a run that proposes a restored batch alone.
+export function refuseRenamedOperatorEnv(): void {
+    for (const [old, name] of Object.entries(RENAMED_OPERATOR_ENV)) {
+        if (process.env[old] !== undefined) {
+            throw new Error(`${old} is not read; set ${name} instead and unset ${old}. Refusing rather than ignoring it.`);
+        }
+    }
+}
+
 // ── Auto-relock upgrade ────────────────────────────────────────────────────
 // Upgrades the live VeHemi and VeHemiVoteDelegation proxies to the auto-relock
 // implementations. The operator and signer runbook -- pre-flight, the signer
@@ -42,7 +60,7 @@ function envInt(name: string, min: number): number | undefined {
 // recovery and monitoring -- is docs/AUTO_RELOCK_UPGRADE.md. Read it first.
 //
 //     npx hardhat --network hemi deploy --tags AutoRelockUpgrade
-//     D1_POST_CHECK_ONLY=1 npx hardhat --network hemi deploy --tags AutoRelockUpgrade   (after execution)
+//     AUTORELOCK_POST_CHECK_ONLY=1 npx hardhat --network hemi deploy --tags AutoRelockUpgrade   (after execution)
 //
 // From the deployer EOA: (1) VeHemiCurveLib, (2) VeHemiSupplyLib, (3) the VeHemi
 // implementation linked against both (five link sites; helpers/vehemiLibraries.ts),
@@ -89,14 +107,17 @@ async function upgradeAutoRelock(hre: import("hardhat/types").HardhatRuntimeEnvi
         );
     }
 
+    refuseRenamedOperatorEnv();
+
     // Operator inputs are validated before anything runs: a mistyped
-    // D1_POST_CHECK_ONLY must not fall through to the full deploy-and-queue path.
-    const postCheckEnv = process.env.D1_POST_CHECK_ONLY;
+    // AUTORELOCK_POST_CHECK_ONLY must not fall through to the full
+    // deploy-and-queue path.
+    const postCheckEnv = process.env.AUTORELOCK_POST_CHECK_ONLY;
     if (postCheckEnv !== undefined && postCheckEnv !== "1") {
-        throw new Error(`D1_POST_CHECK_ONLY must be exactly "1" (got "${postCheckEnv}"); refusing rather than running the full deploy.`);
+        throw new Error(`AUTORELOCK_POST_CHECK_ONLY must be exactly "1" (got "${postCheckEnv}"); refusing rather than running the full deploy.`);
     }
-    envInt("D1_LOGS_STEP", 1);
-    envInt("D1_LOGS_FROM", 0);
+    envInt("AUTORELOCK_LOGS_STEP", 1);
+    envInt("AUTORELOCK_LOGS_FROM", 0);
 
     console.log("=== Pre-flight checks ===");
 
@@ -222,14 +243,14 @@ async function upgradeAutoRelock(hre: import("hardhat/types").HardhatRuntimeEnvi
             // implementation (the post-upgrade re-run). Anything else is refused
             // here, before the EOA deploys anything: the window is armed only
             // over a boundary-dating implementation.
-            const postCheckOnly = process.env.D1_POST_CHECK_ONLY === "1";
+            const postCheckOnly = process.env.AUTORELOCK_POST_CHECK_ONLY === "1";
             const rec = await deployments.getOrNull(`${VOTE_DELEGATION}_Implementation`);
             if (!rec || rec.address.toLowerCase() !== vvdImplNow.toLowerCase()) {
                 if (postCheckOnly) {
                     // In post-check mode the chain is the reference, so a
                     // mismatch means the records are off, not the chain.
                     throw new Error(
-                        `D1_POST_CHECK_ONLY: the VVD proxy is on ${vvdImplNow} but deployments/${network.name}/${VOTE_DELEGATION}_Implementation.json ` +
+                        `AUTORELOCK_POST_CHECK_ONLY: the VVD proxy is on ${vvdImplNow} but deployments/${network.name}/${VOTE_DELEGATION}_Implementation.json ` +
                             `names ${rec?.address ?? "nothing"}: this deployments/ directory did not produce the executed batch, or a later ` +
                             `run overwrote the record. Restore deployments/${network.name}/*_Implementation.json (both records) from the ` +
                             "commit that recorded the implementation the executed VVD leg names (the one made right after the proposing " +
@@ -255,7 +276,7 @@ async function upgradeAutoRelock(hre: import("hardhat/types").HardhatRuntimeEnvi
                 throw new Error(
                     `BOTH proxies are off their live implementations (VeHemi ${veImplNow}, VVD ${vvdImplNow}): the forward has ` +
                         "executed. deploy/08 is the one-time live-to-V4 transition and deploys, queues and proposes nothing after it. " +
-                        "For the post-execution check run it with D1_POST_CHECK_ONLY=1. Refusing before anything is deployed."
+                        "For the post-execution check run it with AUTORELOCK_POST_CHECK_ONLY=1. Refusing before anything is deployed."
                 );
             }
             // The VVD is on this build and VeHemi is live: the VVD-first recovery
@@ -276,11 +297,11 @@ async function upgradeAutoRelock(hre: import("hardhat/types").HardhatRuntimeEnvi
 
     // 5c. The read-only post-execution check (docs/AUTO_RELOCK_UPGRADE.md,
     //     section 7). Everything above is read-only; everything below builds,
-    //     attests, deploys and queues. With D1_POST_CHECK_ONLY=1 this run stops
-    //     here and only reads the chain.
-    if (process.env.D1_POST_CHECK_ONLY === "1") {
+    //     attests, deploys and queues. With AUTORELOCK_POST_CHECK_ONLY=1 this
+    //     run stops here and only reads the chain.
+    if (process.env.AUTORELOCK_POST_CHECK_ONLY === "1") {
         if (fs.existsSync(MULTI_SIG_TXS_FILE)) {
-            throw new Error(`D1_POST_CHECK_ONLY: a Safe batch file (${MULTI_SIG_TXS_FILE}) is on disk; refusing.`);
+            throw new Error(`AUTORELOCK_POST_CHECK_ONLY: a Safe batch file (${MULTI_SIG_TXS_FILE}) is on disk; refusing.`);
         }
         const vvdRec = (await get(`${VOTE_DELEGATION}_Implementation`)).address;
         const veRec = (await get(`${VE_HEMI}_Implementation`)).address;
@@ -291,7 +312,7 @@ async function upgradeAutoRelock(hre: import("hardhat/types").HardhatRuntimeEnvi
             LIVE_VEHEMI_IMPLS.some((a) => a.toLowerCase() === veRec.toLowerCase())
         ) {
             throw new Error(
-                `D1_POST_CHECK_ONLY: deployments/${network.name}/*_Implementation.json still name a live implementation ` +
+                `AUTORELOCK_POST_CHECK_ONLY: deployments/${network.name}/*_Implementation.json still name a live implementation ` +
                     `(VeHemi ${veRec}, VVD ${vvdRec}): steps 3-4 never deployed this build's implementations from this ` +
                     "deployments/ directory. Run the check from the tree and deployments/ directory that produced the batch."
             );
@@ -299,7 +320,7 @@ async function upgradeAutoRelock(hre: import("hardhat/types").HardhatRuntimeEnvi
         const warnings = await assertNothingToDoIsTrue(
             hre,
             { veHemiProxy: veHemiAddress, veHemiImpl: veRec, vvdProxy: voteDelegationAddress, vvdImpl: vvdRec },
-            "D1_POST_CHECK_ONLY=1 (read-only post-execution check)"
+            "AUTORELOCK_POST_CHECK_ONLY=1 (read-only post-execution check)"
         );
         // The only write of this mode, to local files, after a pass.
         const refreshed: string[] = [];
@@ -601,8 +622,9 @@ export const LIVE_VEHEMI_IMPLS = ["0xf1e3AA617E5011793F759092b59d22247E57b84A"];
 // Per chain, a block at which the VeHemi proxy was on a LIVE_VEHEMI_IMPLS
 // implementation and before any auto-relock build was deployed, so no
 // `AutoRelockEnabled` from the proxy can predate it. Hemi: 5,524,738, the fork
-// pin of test/r31 and the deploy rehearsal. `autoRelockAuditFrom` re-reads the
-// premise at the block the audit starts from.
+// pin of test/autorelock-upgrade and the deploy rehearsal.
+// `autoRelockAuditFrom` re-reads the premise at the block the audit starts
+// from.
 const AUTO_RELOCK_AUDIT_FLOOR: Record<number, number> = { 43111: 5_524_738 };
 // EIP-1967 admin slot and the OZ5 Initializable namespaced slot (pre-flight 5b).
 const EIP1967_ADMIN_SLOT = "0xb53127684a568b3173ae13b9f8a6016e243e63b6e8ee1178d6a717850b5d6103";
@@ -701,8 +723,8 @@ async function assertNothingToDoIsTrue(
         "  TO RECOVER\n" +
         "    * FIRST check the Safe queue. If the 2-leg upgrade batch is pending there,\n" +
         "      do nothing here: get it executed, then run this script with\n" +
-        "      D1_POST_CHECK_ONLY=1 as the post-upgrade check. Do NOT redeploy -- a\n" +
-        "      second proposal would share the pending one's nonce.\n" +
+        "      AUTORELOCK_POST_CHECK_ONLY=1 as the post-upgrade check. Do NOT\n" +
+        "      redeploy -- a second proposal would share the pending one's nonce.\n" +
         "    * If BOTH proxies are still on their live implementations and a preserved\n" +
         "      two-leg batch exists that this script printed ORDER ASSERTED for\n" +
         "      (multisig.batch.tmp.json.stale-*; never a .refused-* file), restore it:\n" +
@@ -718,18 +740,19 @@ async function assertNothingToDoIsTrue(
         "    * If the VVD proxy is ALREADY on this build and VeHemi NEVER was (no\n" +
         "      Upgraded(<this VeHemi impl>) from the VeHemi proxy; direct\n" +
         "      delegation writes revert; VeHemi-driven updates are dropped): propose\n" +
-        "      upgrade(VeHemi, impl) ALONE, immediately; do NOT re-arm; then\n" +
-        "      run D1_POST_CHECK_ONLY=1, which lists the dropped updates. Do NOT use the\n" +
-        "      in-window rollback file in this state (docs/AUTO_RELOCK_UPGRADE.md, section 9).\n" +
+        "      upgrade(VeHemi, impl) ALONE, immediately; do NOT re-arm; then run\n" +
+        "      AUTORELOCK_POST_CHECK_ONLY=1, which lists the dropped updates. Do NOT\n" +
+        "      use the in-window rollback file in this state\n" +
+        "      (docs/AUTO_RELOCK_UPGRADE.md, section 9).\n" +
         "    * If VeHemi is already on this build and the VVD is not (a split forward):\n" +
         "      if no SPLIT FORWARD audit has been run from this deployments/ directory,\n" +
         "      re-run with ONLY deployments/<net>/VeHemiVoteDelegation_Implementation.json\n" +
         "      deleted to get it, and follow it (one hand-built armed VVD leg, no VeHemi\n" +
-        "      leg, proposed through the Safe UI, then D1_POST_CHECK_ONLY=1). If it has\n" +
-        "      (a plain re-run after it ends here), do NOT delete the record again:\n" +
-        "      commit it; the hand-built leg must name it, and another deletion deploys\n" +
-        "      another implementation. Do NOT restore a two-leg batch and do NOT delete\n" +
-        "      both records.\n" +
+        "      leg, proposed through the Safe UI, then AUTORELOCK_POST_CHECK_ONLY=1).\n" +
+        "      If it has (a plain re-run after it ends here), do NOT delete the record\n" +
+        "      again: commit it; the hand-built leg must name it, and another deletion\n" +
+        "      deploys another implementation. Do NOT restore a two-leg batch and do\n" +
+        "      NOT delete both records.\n" +
         "=".repeat(78) + "\n"
     );
 }
@@ -904,22 +927,22 @@ async function assertVeHemiUpgradedWithArm(
     return [w];
 }
 
-// Log searches use an adaptive chunk (D1_LOGS_STEP, a positive integer, default
-// 10,000 blocks; halved on a provider error while above 500, so the smallest step
-// tried from the default is 312, then the error is rethrown) and start at
-// D1_LOGS_FROM, or the implementation record's receipt block, or head - 500,000.
-// Both inputs are validated (`envInt`).
+// Log searches use an adaptive chunk (AUTORELOCK_LOGS_STEP, a positive integer,
+// default 10,000 blocks; halved on a provider error while above 500, so the
+// smallest step tried from the default is 312, then the error is rethrown) and
+// start at AUTORELOCK_LOGS_FROM, or the implementation record's receipt block,
+// or head - 500,000. Both inputs are validated (`envInt`).
 type LogRef = { blockNumber: number; transactionHash: string; index: number; topics: readonly string[] };
 const addressTopic = (a: string) => "0x" + a.toLowerCase().slice(2).padStart(64, "0");
 // ethers v6 `Log.index` is the block-wide log index, so (block, index) orders logs.
 const before = (a: LogRef, b: LogRef) => a.blockNumber < b.blockNumber || (a.blockNumber === b.blockNumber && a.index < b.index);
 const tokenIds = (logs: LogRef[]) => logs.map((l) => BigInt(l.topics[1]).toString()).join(", ");
 function logsFromBlock(rec: { receipt?: { blockNumber?: number | string } } | null, head: number): number {
-    const env = envInt("D1_LOGS_FROM", 0);
+    const env = envInt("AUTORELOCK_LOGS_FROM", 0);
     if (env !== undefined) return env;
     const n = Number(rec?.receipt?.blockNumber ?? Math.max(0, head - 500_000));
     if (!Number.isSafeInteger(n) || n < 0) {
-        throw new Error(`Implementation record receipt block ${rec?.receipt?.blockNumber} is not a block number; set D1_LOGS_FROM.`);
+        throw new Error(`Implementation record receipt block ${rec?.receipt?.blockNumber} is not a block number; set AUTORELOCK_LOGS_FROM.`);
     }
     return n;
 }
@@ -930,7 +953,7 @@ async function getLogsChunked(
     to: number
 ): Promise<LogRef[]> {
     const p = hre.ethers.provider;
-    let step = envInt("D1_LOGS_STEP", 1) ?? 10_000;
+    let step = envInt("AUTORELOCK_LOGS_STEP", 1) ?? 10_000;
     const out: LogRef[] = [];
     for (let b = from; b <= to; ) {
         const end = Math.min(b + step - 1, to);
@@ -949,10 +972,10 @@ async function getLogsChunked(
     }
     return out;
 }
-// Where the `AutoRelockEnabled` audit starts: the lower of D1_LOGS_FROM and the
-// chain's AUTO_RELOCK_AUDIT_FLOOR, whichever are set (the floor only when at or
-// below `upTo`), else genesis. So D1_LOGS_FROM can move the start earlier than
-// the floor, never later.
+// Where the `AutoRelockEnabled` audit starts: the lower of AUTORELOCK_LOGS_FROM
+// and the chain's AUTO_RELOCK_AUDIT_FLOOR, whichever are set (the floor only
+// when at or below `upTo`), else genesis. So AUTORELOCK_LOGS_FROM can move the
+// start earlier than the floor, never later.
 // The premise that makes an earlier start unnecessary is READ, not assumed: at
 // the start block the VeHemi proxy must be on a live implementation, which
 // cannot emit the event.
@@ -961,19 +984,19 @@ async function autoRelockAuditFrom(
     veHemiProxy: string,
     upTo: number
 ): Promise<number> {
-    const env = envInt("D1_LOGS_FROM", 0);
+    const env = envInt("AUTORELOCK_LOGS_FROM", 0);
     const pinned = AUTO_RELOCK_AUDIT_FLOOR[hre.network.config.chainId ?? 0];
     const floor = pinned !== undefined && pinned <= upTo ? pinned : undefined;
     const from = env === undefined ? floor : floor === undefined ? env : Math.min(env, floor);
     if (from === undefined) return 0;
     if (from > upTo) {
-        throw new Error(`D1_LOGS_FROM (${from}) is after block ${upTo}, the end of the AutoRelockEnabled audit. Set it lower.`);
+        throw new Error(`AUTORELOCK_LOGS_FROM (${from}) is after block ${upTo}, the end of the AutoRelockEnabled audit. Set it lower.`);
     }
     const at = "0x" + (await hre.ethers.provider.getStorage(veHemiProxy, EIP1967_IMPL_SLOT, from)).slice(-40);
     if (!LIVE_VEHEMI_IMPLS.some((a) => a.toLowerCase() === at.toLowerCase())) {
         throw new Error(
             `The AutoRelockEnabled audit must start at a block where the VeHemi proxy was on a live implementation ` +
-                `(${LIVE_VEHEMI_IMPLS.join(", ")}); at block ${from} it was on ${at}. Set D1_LOGS_FROM to such a block, at or ` +
+                `(${LIVE_VEHEMI_IMPLS.join(", ")}); at block ${from} it was on ${at}. Set AUTORELOCK_LOGS_FROM to such a block, at or ` +
                 "before the first upgrade of the VeHemi proxy to any auto-relock build."
         );
     }
@@ -1265,9 +1288,9 @@ export async function assertBatchOrder(
                 "  deployments/<net>/VeHemiVoteDelegation_Implementation.json now). Whatever the\n" +
                 `  audit above lists, the completion is ONE upgradeAndCall(${expected.vvdProxy}, ${expected.vvdImpl}, 0x62c0fe7a)\n` +
                 "  leg, value 0, built and reviewed by hand and proposed through the Safe UI, with NO\n" +
-                "  VeHemi leg; arming stays open until it lands, so run D1_POST_CHECK_ONLY=1 afterwards\n" +
-                "  (it re-audits up to the arm). Any id listed that is still armed when the leg lands\n" +
-                "  is an incident. REFUSING.\n" +
+                "  VeHemi leg; arming stays open until it lands, so run\n" +
+                "  AUTORELOCK_POST_CHECK_ONLY=1 afterwards (it re-audits up to the arm). Any id\n" +
+                "  listed that is still armed when the leg lands is an incident. REFUSING.\n" +
                 "=".repeat(78) + "\n"
             );
         }

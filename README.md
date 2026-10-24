@@ -264,17 +264,18 @@ Additional test-quality signals beyond line coverage:
   default profile runs 1024 runs x 128 depth; CI's pull-request job runs them at
   128 x 128 (two campaigns carry inline overrides: 32 x 128 and 128 x 64) and
   the scheduled job at the full budget.
-- **Auto-relock gas floor** (`test/j11/J11Gate.t.sol`): for every call that books
-  or retires an auto-relock term, finds the smallest committing gas limit and
-  checks below it (refused with `DelegationCallStarved`), above it (exact), and at
-  an emulated `eth_estimateGas` limit, with the delegation module called directly
-  and behind an ERC1967 proxy (the armed transfer's floor is covered in
-  `test/td24/`).
-- **Auto-relock upgrade on a Hemi fork** (`test/r31/`, pinned by `R31_FORK_BLOCK`,
-  default 5,524,738): the upgrade-hour window at seven execution offsets, rollback
-  and re-forward, state identity with the live writer, and reader continuity
-  across the batch. The deploy script itself is rehearsed end to end by
-  `npm run test:hardhat:fork:autorelock`.
+- **Auto-relock gas floor** (`test/module-failure/RemovalGasFloor.t.sol`): for
+  every call that books or retires an auto-relock term, finds the smallest
+  committing gas limit and checks below it (refused with
+  `DelegationCallStarved`), above it (exact), and at an emulated
+  `eth_estimateGas` limit, with the delegation module called directly and behind
+  an ERC1967 proxy (the armed transfer's floor is covered in
+  `test/armed-transfer/`).
+- **Auto-relock upgrade on a Hemi fork** (`test/autorelock-upgrade/`, pinned by
+  `AUTORELOCK_TEST_FORK_BLOCK`, default 5,524,738): the upgrade-hour window at
+  seven execution offsets, rollback and re-forward, state identity with the live
+  writer, and reader continuity across the batch. The deploy script itself is
+  rehearsed end to end by `npm run test:hardhat:fork:autorelock`.
 - **Fork tests** — 100 in `test/ForkUpgradeLockedCurve.t.sol` (against Hemi
   mainnet state via `HEMI_RPC_URL`) and 14 in `test/adapter/VeHemiAragonAdapterFork.t.sol`
   (against Ethereum mainnet Aragon OSx via `ETH_RPC_URL`).
@@ -310,7 +311,7 @@ npx hardhat deploy --network hemi
 
 ### Auto-relock upgrade
 
-Run `npx hardhat --network hemi deploy --tags AutoRelockUpgrade` (NOT an untagged run). It deploys the two libraries and both implementations and proposes ONE MultiSend `[upgrade(VeHemi), upgradeAndCall(VVD, impl, armLegacyDatingWindow())]`; never split or hand-build it. After execution run `D1_POST_CHECK_ONLY=1 npx hardhat --network hemi deploy --tags AutoRelockUpgrade` (archive RPC). Rehearse with `HEMI_RPC_URL=<archive RPC> HEMI_FORK_BLOCK=<signing pin> npm run test:hardhat:fork:autorelock` and `HEMI_RPC_URL=<archive RPC> R31_FORK_BLOCK=<same pin> forge test --match-path 'test/r31/*' --threads 1 -vv` (the pin in digits only; the logged `fork block` must equal it; both must report no failure, the deploy rehearsal no pending body, and the `test/r31` summary 0 skipped, except at a signing block after an in-window rollback, where exactly the two `R31Transition` plain-upgrade fallback bodies skip by design and the deploy rehearsal's `rollback limits, control` body fails (pre-flight 5b counts the rolled-back forward's VeHemi `Upgraded` log as a VeHemi-leg rollback); run the deploy rehearsal from a tree whose `deployments/hemi/` names the live implementations, e.g. a scratch clone of the reviewed commit; see the runbook, section 4; 5,524,738 is the default `R31_FORK_BLOCK`). The full runbook — signer checklist, upgrade-hour window, rollback limits, post-execution check and monitoring — is [`docs/AUTO_RELOCK_UPGRADE.md`](docs/AUTO_RELOCK_UPGRADE.md). The Aragon adapter is not part of this upgrade.
+Run `npx hardhat --network hemi deploy --tags AutoRelockUpgrade` (NOT an untagged run). It deploys the two libraries and both implementations and proposes ONE MultiSend `[upgrade(VeHemi), upgradeAndCall(VVD, impl, armLegacyDatingWindow())]`; never split or hand-build it. After execution run `AUTORELOCK_POST_CHECK_ONLY=1 npx hardhat --network hemi deploy --tags AutoRelockUpgrade` (archive RPC). Rehearse with `HEMI_RPC_URL=<archive RPC> HEMI_FORK_BLOCK=<signing pin> npm run test:hardhat:fork:autorelock` and `HEMI_RPC_URL=<archive RPC> AUTORELOCK_TEST_FORK_BLOCK=<same pin> forge test --match-path 'test/autorelock-upgrade/*' --threads 1 -vv` (the pin in digits only; the logged `fork block` must equal it; both must report no failure, the deploy rehearsal no pending body, and the `test/autorelock-upgrade` summary 0 skipped, except at a signing block after an in-window rollback, where exactly the two `UpgradeWindowTransition` plain-upgrade fallback bodies skip by design and the deploy rehearsal's `rollback limits, control` body fails (pre-flight 5b counts the rolled-back forward's VeHemi `Upgraded` log as a VeHemi-leg rollback); run the deploy rehearsal from a tree whose `deployments/hemi/` names the live implementations, e.g. a scratch clone of the reviewed commit; see the runbook, section 4; 5,524,738 is the default `AUTORELOCK_TEST_FORK_BLOCK`). The full runbook — signer checklist, upgrade-hour window, rollback limits, post-execution check and monitoring — is [`docs/AUTO_RELOCK_UPGRADE.md`](docs/AUTO_RELOCK_UPGRADE.md). The Aragon adapter is not part of this upgrade.
 
 ### V1 → V2 Upgrade (history)
 

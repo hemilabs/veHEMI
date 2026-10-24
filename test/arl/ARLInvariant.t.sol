@@ -93,7 +93,7 @@ contract ARLInvariantTest is ARLInvariantBase {
         checks.checkMaintainedEndIsPureFunction();
         checks.checkNonTransferableEqualsAuthoredSum();
         checks.checkForfeitableEqualsAuthoredSum();
-        checks.checkI03_breakdownAgreesWithDedicated();
+        checks.checkBreakdownAgreesWithDedicated();
         checks.checkPastSupplyImmutability();
         // the weight steps, in closed form
         checks.checkEnableStepIsExact();
@@ -105,7 +105,7 @@ contract ARLInvariantTest is ARLInvariantBase {
         checks.checkGuardProbesAllRefused();
         checks.checkKeeperProbesAllRefused();
         checks.checkHeartbeatMovesStaleClock();
-        checks.checkI03_forfeitWindowIsTA();
+        checks.checkForfeitWindowIsTA();
         // votes and delegation
         checks.checkVotesNeverExceedSupply();
         checks.checkVotingPowerEquality();

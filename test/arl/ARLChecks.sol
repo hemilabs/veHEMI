@@ -6,13 +6,13 @@ import {VeHemi} from "src/VeHemi.sol";
 import {VeHemiVoteDelegation} from "src/VeHemiVoteDelegation.sol";
 import {IVeHemi} from "src/interfaces/IVeHemi.sol";
 import {ARLHandler} from "./ARLHandler.sol";
-import {I04VoteHoleLaw} from "./I04VoteHoleLaw.sol";
+import {VoteHoleLaw} from "./VoteHoleLaw.sol";
 
 /**
  * @title ARLChecks
  * @notice The auto-relock invariant laws, one external function per law, called
  *         by `ARLInvariantTest.invariant_arl_core` after every handler call and
- *         by the deterministic tests in test/f05/.
+ *         by the deterministic tests in test/arl/MaintainedEnd.t.sol.
  *
  * @dev Each check reverts on failure (`vm.assert*`). "Authored" values come
  *      from `ARLHandler`'s ledger, which is written from the arguments the
@@ -236,7 +236,7 @@ contract ARLChecks {
     /// @notice The forfeit window is `transferableAfter`, not the (possibly
     ///         frozen) `lock.end`: refused once `now >= ta`, accepted inside
     ///         the window on a flat position.
-    function checkI03_forfeitWindowIsTA() external view {
+    function checkForfeitWindowIsTA() external view {
         vm.assertEq(handler.forfeitOutOfWindowAccepted(), 0,
             "forfeit ACCEPTED outside the transferableAfter window");
         vm.assertEq(handler.forfeitInWindowFlatRefused(), 0,
@@ -340,7 +340,7 @@ contract ARLChecks {
             "after delegate() the record is not at the chosen delegatee");
     }
 
-    /// @notice The `I04VoteHoleLaw` bound on a re-delegation's booking
+    /// @notice The `VoteHoleLaw` bound on a re-delegation's booking
     ///         (`delegationBookedAt`, `block.timestamp + 1`): (A) no booking
     ///         matures past the next hourly boundary; (A2) a token without a
     ///         delegation record has no maturity stamp; (B) every delegatee's
@@ -352,7 +352,7 @@ contract ARLChecks {
         for (uint256 i; i < n; ++i) ids[i] = _id(i);
         address[] memory dg = new address[](5);
         for (uint256 i; i < 5; ++i) dg[i] = handler.users(i);
-        I04VoteHoleLaw.Report memory r = I04VoteHoleLaw.scan(delegation, ids, dg, block.timestamp);
+        VoteHoleLaw.Report memory r = VoteHoleLaw.scan(delegation, ids, dg, block.timestamp);
         vm.assertEq(
             r.lateMaturity, 0,
             string.concat(
@@ -390,7 +390,7 @@ contract ARLChecks {
     /// @notice `supplyBreakdown()` agrees with the dedicated views (no clamp
     ///         rewrites `locked_` or `forfeitable_`), and `transferable` is the
     ///         saturating complement.
-    function checkI03_breakdownAgreesWithDedicated() external view {
+    function checkBreakdownAgreesWithDedicated() external view {
         (uint256 bTot, uint256 bLk, uint256 bFo, uint256 bTr) = veHemi.supplyBreakdown();
         vm.assertEq(bTot, veHemi.totalVeHemiSupply(), "breakdown.total != totalVeHemiSupply()");
         vm.assertEq(bLk, veHemi.nonTransferableTotalVeHemiSupply(),

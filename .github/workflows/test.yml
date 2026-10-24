@@ -147,26 +147,27 @@ jobs:
               id: test
 
             # The auto-relock upgrade on a Hemi mainnet fork, pinned
-            # (test/r31/R31Base.sol; R31_FORK_BLOCK defaults to 5,524,738). With the
-            # RPC set, a skipped r31 body is a fork premise that did not hold (for
+            # (test/autorelock-upgrade/AutoRelockUpgradeForkBase.sol;
+            # AUTORELOCK_TEST_FORK_BLOCK defaults to 5,524,738). With the RPC set, a
+            # skipped body in that directory is a fork premise that did not hold (for
             # example a pin after the upgrade executed), not a pass: it fails the step.
             - name: Hemi-fork tests, auto-relock upgrade (requires HEMI_RPC_URL secret)
               if: env.HAS_HEMI_RPC == 'true'
               timeout-minutes: 30
               env:
                   HEMI_RPC_URL: ${{ secrets.HEMI_RPC_URL }}
-                  R31_FORK_BLOCK: ${{ vars.R31_FORK_BLOCK }}
+                  AUTORELOCK_TEST_FORK_BLOCK: ${{ vars.AUTORELOCK_TEST_FORK_BLOCK }}
               # --threads 1 keeps the request rate under the public RPC's
               # 300-request/minute cap. `shell: bash` adds pipefail, so a red
               # forge run still fails through `tee`.
               shell: bash
               run: |
-                  forge test --match-path 'test/r31/*' --threads 1 -vv | tee r31-fork.log
-                  summary=$(grep -E '^Ran [0-9]+ test suites? in ' r31-fork.log | tail -1 || true)
+                  forge test --match-path 'test/autorelock-upgrade/*' --threads 1 -vv | tee autorelock-upgrade-fork.log
+                  summary=$(grep -E '^Ran [0-9]+ test suites? in ' autorelock-upgrade-fork.log | tail -1 || true)
                   case "$summary" in
                       *" failed, 0 skipped "*) ;;
                       *)
-                          echo "::error::test/r31 on the Hemi fork must skip nothing; forge summary: ${summary:-none}"
+                          echo "::error::test/autorelock-upgrade on the Hemi fork must skip nothing; forge summary: ${summary:-none}"
                           exit 1
                           ;;
                   esac
@@ -209,8 +210,8 @@ jobs:
                   ETH_RPC_URL: ${{ vars.ETH_RPC_URL }}
                   ETH_FORK_BLOCK: ${{ vars.ETH_FORK_BLOCK || '26000000' }}
               run: |
-                  chmod +x scripts/s14-aragon-gate.sh scripts/s47-rpc-retry.sh
-                  scripts/s47-rpc-retry.sh scripts/s14-aragon-gate.sh .
+                  chmod +x scripts/check-aragon-lifecycle.sh scripts/rpc-retry.sh
+                  scripts/rpc-retry.sh scripts/check-aragon-lifecycle.sh .
               id: aragon-lifecycle
 
     nightly:
@@ -259,17 +260,18 @@ jobs:
                   ETH_RPC_URL: ${{ vars.ETH_RPC_URL || 'https://eth.drpc.org' }}
                   ETH_FORK_BLOCK: ${{ vars.ETH_FORK_BLOCK || '26000000' }}
               run: |
-                  chmod +x scripts/s14-aragon-gate.sh scripts/s47-rpc-retry.sh
-                  scripts/s47-rpc-retry.sh scripts/s14-aragon-gate.sh .
+                  chmod +x scripts/check-aragon-lifecycle.sh scripts/rpc-retry.sh
+                  scripts/rpc-retry.sh scripts/check-aragon-lifecycle.sh .
               id: aragon-lifecycle
 
             # deploy/08 end to end on a Hemi mainnet fork (about 35 minutes). It runs
             # even when an earlier nightly step failed; only a cancelled run skips it.
             # Its pin is the AUTORELOCK_FORK_BLOCK repository variable, passed below as
-            # the HEMI_FORK_BLOCK environment variable (R31_FORK_BLOCK pins test/r31;
-            # the repository variable HEMI_FORK_BLOCK pins only the V2-history step). It loads
-            # the deployments/hemi records of the checked-out tree, which must name
-            # the live implementations (docs/AUTO_RELOCK_UPGRADE.md, section 4).
+            # the HEMI_FORK_BLOCK environment variable (AUTORELOCK_TEST_FORK_BLOCK
+            # pins test/autorelock-upgrade; the repository variable HEMI_FORK_BLOCK
+            # pins only the V2-history step). It loads the deployments/hemi records
+            # of the checked-out tree, which must name the live implementations
+            # (docs/AUTO_RELOCK_UPGRADE.md, section 4).
             - name: Auto-relock deploy rehearsal (requires HEMI_RPC_URL secret)
               if: ${{ !cancelled() && env.HAS_HEMI_RPC == 'true' }}
               timeout-minutes: 90

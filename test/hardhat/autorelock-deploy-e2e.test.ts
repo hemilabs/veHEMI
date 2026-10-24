@@ -9,8 +9,8 @@
  *  2. The queued batch has exactly two legs; replaying them in order from the
  *     Safe moves both proxies, and executing them as ONE Safe MultiSend
  *     (execTransaction -> MultiSendCallOnly 1.4.1) moves both in ONE
- *     transaction (also covered by
- *     test/r31/R31UpgradeWindow.t.sol::test_R31_batchFidelity_execTransaction).
+ *     transaction (also covered by `test_batchFidelity_execTransaction` in
+ *     test/autorelock-upgrade/UpgradeWindowFork.t.sol).
  *  3. Order. `VeHemi` must land BEFORE `VeHemiVoteDelegation`. This is
  *     asserted by execution, in both directions:
  *       * new VVD under OLD VeHemi  → `delegate()` REVERTS
@@ -30,9 +30,9 @@
  *     after the forward the post-check refreshes the proxy records and a plain
  *     re-run refuses; operator inputs are validated and the getLogs halving
  *     runs; the rollback limits of docs/AUTO_RELOCK_UPGRADE.md are enforced,
- *     and D1_LOGS_FROM moves the audit start earlier than the chain's floor,
- *     never later, and never to a block where the VeHemi proxy was on no live
- *     implementation.
+ *     and AUTORELOCK_LOGS_FROM moves the audit start earlier than the chain's
+ *     floor, never later, and never to a block where the VeHemi proxy was on
+ *     no live implementation.
  *  5. Gas limits, cold. After the forward each `eth_estimateGas` is its own
  *     transaction, so every slot it touches is cold: `enableAutoRelock` on a
  *     real holder's delegated position and `createLockWithAutoRelock` for a
@@ -127,7 +127,8 @@ const describeOrSkip = RPC ? describe : describe.skip;
 
 // The expected sizes are read from `test/fixtures/eip170-attestation.json`, not
 // hard-coded: it is written only by a passing `scripts/check-eip170.sh` and is
-// re-verified by `test/d12/EIP170Gate.t.sol`, so it tracks every change to `src/`.
+// re-verified by `test/deployability/EIP170Gate.t.sol`, so it tracks every
+// change to `src/`.
 const EIP170 = JSON.parse(fs.readFileSync("test/fixtures/eip170-attestation.json").toString());
 function attestedRuntimeSize(id: string): number {
     const row = EIP170.contracts?.[id];
@@ -306,9 +307,9 @@ describeOrSkip("Hardhat fork: deploy/08 auto-relock upgrade → Safe MultiSend",
         // audit starts at the chain's floor (5,524,738), so at a later fork pin a
         // 1-block step means one getLogs per block since then: run it only near the floor.
         if (rc.blockNumber - 5_524_738 <= 5_000) {
-            process.env.D1_LOGS_STEP = "1";
+            process.env.AUTORELOCK_LOGS_STEP = "1";
             const small = await postCheck();
-            delete process.env.D1_LOGS_STEP;
+            delete process.env.AUTORELOCK_LOGS_STEP;
             expect(small.error, small.error?.message).to.equal(undefined);
             expect(small.out).to.contain("POST-EXECUTION CHECK: PASS");
         } else {
@@ -319,7 +320,7 @@ describeOrSkip("Hardhat fork: deploy/08 auto-relock upgrade → Safe MultiSend",
         fs.writeFileSync(MULTI_SIG_TXS_FILE, "[]");
         const onDisk = await postCheck();
         fs.unlinkSync(MULTI_SIG_TXS_FILE);
-        expect(onDisk.error?.message ?? "").to.match(/D1_POST_CHECK_ONLY: a Safe batch file .* is on disk; refusing/);
+        expect(onDisk.error?.message ?? "").to.match(/AUTORELOCK_POST_CHECK_ONLY: a Safe batch file .* is on disk; refusing/);
 
         // The fresh-deployment sentinel on the Hemi proxy is refused by name.
         await setWindowWord(1n);
@@ -333,20 +334,34 @@ describeOrSkip("Hardhat fork: deploy/08 auto-relock upgrade → Safe MultiSend",
         await setWindowWord(nb(ts));
 
         // Operator inputs are validated (and so are really read).
-        process.env.D1_LOGS_STEP = "0";
+        process.env.AUTORELOCK_LOGS_STEP = "0";
         const zero = await postCheck();
-        delete process.env.D1_LOGS_STEP;
-        expect(zero.error?.message ?? "").to.contain('D1_LOGS_STEP must be an integer >= 1 (got "0")');
-        process.env.D1_POST_CHECK_ONLY = "true";
+        delete process.env.AUTORELOCK_LOGS_STEP;
+        expect(zero.error?.message ?? "").to.contain('AUTORELOCK_LOGS_STEP must be an integer >= 1 (got "0")');
+        process.env.AUTORELOCK_POST_CHECK_ONLY = "true";
         const truthy = await capture(() => deploy08(hre));
-        delete process.env.D1_POST_CHECK_ONLY;
-        expect(truthy.error?.message ?? "").to.contain('D1_POST_CHECK_ONLY must be exactly "1" (got "true")');
+        delete process.env.AUTORELOCK_POST_CHECK_ONLY;
+        expect(truthy.error?.message ?? "").to.contain('AUTORELOCK_POST_CHECK_ONLY must be exactly "1" (got "true")');
         expect(truthy.out).to.not.contain("Running storage layout pre-flight", "no fall-through to the full deploy");
+        // A variable set under its earlier name is refused, not ignored.
+        for (const [old, name] of [
+            ["D1_POST_CHECK_ONLY", "AUTORELOCK_POST_CHECK_ONLY"],
+            ["D1_LOGS_FROM", "AUTORELOCK_LOGS_FROM"],
+            ["D1_LOGS_STEP", "AUTORELOCK_LOGS_STEP"],
+        ]) {
+            process.env[old] = "1";
+            const legacy = await capture(() => deploy08(hre));
+            const legacy99 = await capture(() => deploy99(hre));
+            delete process.env[old];
+            expect(legacy.error?.message ?? "").to.contain(`${old} is not read; set ${name} instead and unset ${old}`);
+            expect(legacy.out).to.not.contain("Running storage layout pre-flight", "no fall-through to the full deploy");
+            expect(legacy99.error?.message ?? "").to.contain(`${old} is not read; set ${name} instead and unset ${old}`);
+        }
 
         // The halving runs. A provider that refuses ranges over
         // 2,000 blocks still yields PASS (10,000 -> 5,000 -> 2,500 -> 1,250); one
         // that refuses ranges over 100 gets its own error back once the step is 312.
-        process.env.D1_LOGS_FROM = String(rc.blockNumber - 5000);
+        process.env.AUTORELOCK_LOGS_FROM = String(rc.blockNumber - 5000);
         let undo = failLargeGetLogs(2000);
         const halved = await postCheck();
         undo();
@@ -355,7 +370,7 @@ describeOrSkip("Hardhat fork: deploy/08 auto-relock upgrade → Safe MultiSend",
         undo = failLargeGetLogs(100);
         const floor = await postCheck();
         undo();
-        delete process.env.D1_LOGS_FROM;
+        delete process.env.AUTORELOCK_LOGS_FROM;
         expect(floor.error?.message ?? "").to.contain("injected: eth_getLogs range");
 
         // After the forward a restored ARMED batch is still re-checked and refused
@@ -593,15 +608,15 @@ describeOrSkip("Hardhat fork: deploy/08 auto-relock upgrade → Safe MultiSend",
         expect(r.error?.message ?? "").to.match(/SPLIT FORWARD/);
         expect(r.error?.message ?? "").to.match(new RegExp(`AutoRelockEnabled from the VeHemi proxy since block \\d+: ${armedId}\n`));
         // On this path (deploy/99's re-check, no deploy/08 pre-flight) the
-        // log search itself validates D1_LOGS_STEP.
-        process.env.D1_LOGS_STEP = "0";
+        // log search itself validates AUTORELOCK_LOGS_STEP.
+        process.env.AUTORELOCK_LOGS_STEP = "0";
         fs.writeFileSync(MULTI_SIG_TXS_FILE, JSON.stringify([batch[1]]));
         const badStep = await capture(() =>
             assertBatchOrder(hre, { proxyAdmin: PROXY_ADMIN, veHemiProxy: VEHEMI_PROXY, veHemiImpl, vvdProxy: VVD_PROXY, vvdImpl })
         );
         fs.unlinkSync(MULTI_SIG_TXS_FILE);
-        delete process.env.D1_LOGS_STEP;
-        expect(badStep.error?.message ?? "").to.contain('D1_LOGS_STEP must be an integer >= 1 (got "0")');
+        delete process.env.AUTORELOCK_LOGS_STEP;
+        expect(badStep.error?.message ?? "").to.contain('AUTORELOCK_LOGS_STEP must be an integer >= 1 (got "0")');
 
         await executeBatch([batch[1]]); // the VVD leg, in a LATER transaction
         const pc = await postCheck();
@@ -746,7 +761,7 @@ describeOrSkip("Hardhat fork: deploy/08 auto-relock upgrade → Safe MultiSend",
         expect(pc.out).to.not.contain("POST-EXECUTION CHECK: PASS");
     });
 
-    it("rollback limits: a VeHemi-only forward rolled back over armed positions is refused by pre-flight 5b, also with D1_LOGS_FROM after the arm or before the floor; an audit start on no live implementation is refused", async () => {
+    it("rollback limits: a VeHemi-only forward rolled back over armed positions is refused by pre-flight 5b, also with AUTORELOCK_LOGS_FROM after the arm or before the floor; an audit start on no live implementation is refused", async () => {
         // This body pins the virgin-window path; at a pin after an in-window
         // rollback slot 101 holds the old boundary.
         await runUpgradeDeploy({ before: () => setWindowWord(0n) });
@@ -769,38 +784,38 @@ describeOrSkip("Hardhat fork: deploy/08 auto-relock upgrade → Safe MultiSend",
         expect(fs.existsSync(MULTI_SIG_TXS_FILE)).to.equal(false);
         expect(listRefused()).to.deep.equal(before, "nothing was queued, so nothing is quarantined");
 
-        // D1_LOGS_FROM can move the audit start earlier than the chain's floor,
-        // never later: set after the arm, it is clamped to the floor and the
-        // armed id is still found.
+        // AUTORELOCK_LOGS_FROM can move the audit start earlier than the chain's
+        // floor, never later: set after the arm, it is clamped to the floor and
+        // the armed id is still found.
         const head = await ethers.provider.getBlockNumber();
         if (head >= 5_524_738) {
-            process.env.D1_LOGS_FROM = String(head);
+            process.env.AUTORELOCK_LOGS_FROM = String(head);
             const late = await capture(() => deploy08(hre));
-            delete process.env.D1_LOGS_FROM;
+            delete process.env.AUTORELOCK_LOGS_FROM;
             const lm = (late.error?.message ?? "").match(refusal);
             expect(lm, late.error?.message).to.not.equal(null);
-            expect(Number(lm![1])).to.equal(5_524_738, "the audit start is clamped to the floor, not D1_LOGS_FROM");
+            expect(Number(lm![1])).to.equal(5_524_738, "the audit start is clamped to the floor, not AUTORELOCK_LOGS_FROM");
             expect(lm![2].split(", ")).to.include(String(armedId));
             expect(late.out).to.not.contain("--- Steps 1-2");
             // Set before the floor it is honoured: the audit starts there.
-            process.env.D1_LOGS_FROM = String(5_524_737);
+            process.env.AUTORELOCK_LOGS_FROM = String(5_524_737);
             const early = await capture(() => deploy08(hre));
-            delete process.env.D1_LOGS_FROM;
+            delete process.env.AUTORELOCK_LOGS_FROM;
             const em = (early.error?.message ?? "").match(refusal);
             expect(em, early.error?.message).to.not.equal(null);
-            expect(Number(em![1])).to.equal(5_524_737, "an earlier D1_LOGS_FROM moves the audit start earlier");
+            expect(Number(em![1])).to.equal(5_524_737, "an earlier AUTORELOCK_LOGS_FROM moves the audit start earlier");
             expect(em![2].split(", ")).to.include(String(armedId));
             expect(early.out).to.not.contain("--- Steps 1-2");
         } else {
-            console.log(`        (D1_LOGS_FROM clamp and earlier start skipped: fork head ${head} is below the audit floor)`);
+            console.log(`        (AUTORELOCK_LOGS_FROM clamp and earlier start skipped: fork head ${head} is below the audit floor)`);
         }
 
         // An earlier start is safe only if the VeHemi proxy was already on a
         // live implementation there, which cannot emit AutoRelockEnabled. That
         // premise is read: at block 1 the proxy had no implementation at all.
-        process.env.D1_LOGS_FROM = "1";
+        process.env.AUTORELOCK_LOGS_FROM = "1";
         const genesis = await capture(() => deploy08(hre));
-        delete process.env.D1_LOGS_FROM;
+        delete process.env.AUTORELOCK_LOGS_FROM;
         expect(genesis.error?.message ?? "").to.match(
             /must start at a block where the VeHemi proxy was on a live implementation .*; at block 1 it was on 0x0{40}\./
         );
@@ -1090,11 +1105,11 @@ async function capture(fn: () => Promise<unknown>): Promise<{ out: string; error
 
 /** The documented read-only post-execution check. */
 async function postCheck() {
-    process.env.D1_POST_CHECK_ONLY = "1";
+    process.env.AUTORELOCK_POST_CHECK_ONLY = "1";
     try {
         return await capture(() => deploy08(hre));
     } finally {
-        delete process.env.D1_POST_CHECK_ONLY;
+        delete process.env.AUTORELOCK_POST_CHECK_ONLY;
     }
 }
 

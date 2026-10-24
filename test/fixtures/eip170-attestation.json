@@ -1,5 +1,5 @@
 {
-  "_comment": "Written ONLY by a passing scripts/check-eip170.sh. test/d12/EIP170Gate.t.sol recomputes `digest` from out/ and fails on any drift.",
+  "_comment": "Written ONLY by a passing scripts/check-eip170.sh. test/deployability/EIP170Gate.t.sol recomputes `digest` from out/ and fails on any drift.",
   "contractCount": 9,
   "contracts": {
     "src/VeHemi.sol:VeHemi": {
@@ -67,7 +67,7 @@
     }
   },
   "digest": "0x550da098c32dec784eb04a98d5b4eed4c551630d5cc85ddce283fc35f979b590",
-  "generatedAt": 1792728213,
+  "generatedAt": 1792800151,
   "initcodeLimit": 49152,
   "limit": 24576,
   "srcTreeSha256": "0x9db52cf85e3d3efee677d7d56b82fbbc320c701b5331001b7aa7411bf748fd11"

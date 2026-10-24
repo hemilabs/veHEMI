@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.29;
 
-import "../j11/J11Base.sol";
+import "../AutoRelockTestBase.sol";
 import {IVeHemiVoteDelegation} from "../../src/interfaces/IVeHemiVoteDelegation.sol";
 import {LyingVoteDelegation} from "../mocks/LyingVoteDelegation.sol";
-import {K08Garbage} from "../k08/K08Modules.sol";
+import {GarbageModule} from "../module-failure/BrokenModules.sol";
 
 /// @notice An adapter whose relays burn all the gas they are given.
 contract GasBurningAdapter {
@@ -35,7 +35,7 @@ contract RevertingWindowProbeModule is LyingVoteDelegation {
 ///         window probe, delegation of an armed position past its stored end,
 ///         and the undecodable-module risk. Each body fails if the guard it
 ///         names is removed or inverted.
-contract AutoRelockGuards is J11Base {
+contract AutoRelockGuards is AutoRelockTestBase {
     /// @notice The vote-delegation module caps each `notifyVotesChanged` relay at
     ///         `RELAY_GAS_BUDGET`, so an adapter that burns its gas cannot make a
     ///         delegation write run out of gas. (The account-wide
@@ -125,7 +125,7 @@ contract AutoRelockGuards is J11Base {
         (uint256 id, , ) = createLock(attacker, 1_000 ether, 4 * 365 days);
         enable(attacker, id);
         IVeHemiVoteDelegation good = IVeHemiVoteDelegation(address(delegation));
-        veHemi.updateVoteDelegation(IVeHemiVoteDelegation(address(new K08Garbage())));
+        veHemi.updateVoteDelegation(IVeHemiVoteDelegation(address(new GarbageModule())));
 
         // Undecodable return data reverts at the `try ... returns` decode
         // with EMPTY revert data, not with a VeHemi error.

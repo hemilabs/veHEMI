@@ -22,8 +22,8 @@ WHAT IT DOES
      exact artifacts it measured (per-contract sha256 of the deployedBytecode
      object + a single canonical `digest`) plus a sha256 of the whole src/ tree.
      An over-limit build never produces an attestation, and the in-test gate
-     (test/d12/EIP170Gate.t.sol) fails without a matching one, so `forge test`
-     cannot pass on an undeployable artifact.
+     (test/deployability/EIP170Gate.t.sol) fails without a matching one, so
+     `forge test` cannot pass on an undeployable artifact.
 
 EXIT 0 = every src/ contract fits and the attestation is current.
 EXIT 1 = anything else; outside --verify a failing run deletes the attestation.
@@ -133,8 +133,9 @@ def main():
     ap.add_argument("--update-manifest", action="store_true")
     ap.add_argument("--json", action="store_true", help="machine-readable report on stdout")
     # Verify-only mode. The default mode re-stamps the attestation on any drift
-    # and returns 0, so a check run after it (test/d12/EIP170Gate.t.sol)
-    # compares out/ with a file just derived from out/ and cannot fail.
+    # and returns 0, so a check run after it
+    # (test/deployability/EIP170Gate.t.sol) compares out/ with a file just
+    # derived from out/ and cannot fail.
     # --verify never writes or deletes the attestation and returns 1 on any
     # semantic difference, a missing file included. Stamping stays the default:
     # a deliberate act by whoever built, not a step of a gate.
@@ -224,7 +225,7 @@ def main():
 
     att = {
         "_comment": "Written ONLY by a passing scripts/check-eip170.sh. "
-                    "test/d12/EIP170Gate.t.sol recomputes `digest` from out/ and fails on any drift.",
+                    "test/deployability/EIP170Gate.t.sol recomputes `digest` from out/ and fails on any drift.",
         "limit": EIP170,
         "initcodeLimit": EIP3860,
         "digest": "0x" + digest,
