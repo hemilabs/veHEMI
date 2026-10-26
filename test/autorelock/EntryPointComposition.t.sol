@@ -171,11 +171,11 @@ contract EntryPointCompositionTest is AutoRelockTestBase {
     }
 
     // ------------------------------------------------------------------
-    // D8 — CONTROL: a DECAYING delegated term self-heals through its
+    // D7 — CONTROL: a DECAYING delegated term self-heals through its
     //      SIX_DAYS expiration bucket, so only a FLAT stranded term can be
     //      permanent (which is what D3 and D11 rule out).
     // ------------------------------------------------------------------
-    function test_D8_control_decayingDelegatedTermExpiresToZeroVotes() public {
+    function test_D7_control_decayingDelegatedTermExpiresToZeroVotes() public {
         (uint256 id, , ) = createLock(victim, 1_000 ether, 2 * 365 days);
         delegateTo(victim, id, delegateeA);
         vm.warp(block.timestamp + 7200);
@@ -185,12 +185,12 @@ contract EntryPointCompositionTest is AutoRelockTestBase {
     }
 
     // ------------------------------------------------------------------
-    // D9 — THE FORFEITABLE SUBCURVE, COMPOSED. A non-transferable
+    // D8 — THE FORFEITABLE SUBCURVE, COMPOSED. A non-transferable
     //      FORFEITABLE grant kept flat (heartbeat paid) until its window opens
     //      and then sold must not become a perpetual asset: the sale disarms
     //      it, and it and the forfeitable subcurve drain on their own.
     // ------------------------------------------------------------------
-    function test_D9_frozenForfeitableIsBoundedAndTheSubcurveDrains() public {
+    function test_D8_frozenForfeitableIsBoundedAndTheSubcurveDrains() public {
         hemi.mint(admin, 2_000 ether);
         hemi.approve(address(veHemi), type(uint256).max);
         uint256 id = veHemi.createLockFor(1_000 ether, 2 * 365 days, victim, false, true);
@@ -227,15 +227,15 @@ contract EntryPointCompositionTest is AutoRelockTestBase {
         assertEq(forfeitable_, 0, "supplyBreakdown forfeitable not drained");
     }
 
-    // D12 — the forfeit-window / transferable-window DISJOINTNESS. An ARMED
+    // D9 — the forfeit-window / transferable-window DISJOINTNESS. An ARMED
     // forfeitable position stays flat past its original end, but while
     // `now < transferableAfter` it is NON-transferable -- a transfer reverts
     // NotTransferable BEFORE the disarm can run, so there is NO
     // transfer-to-disarm forfeit escape. The two windows flip at exactly
     // `transferableAfter` (`forfeit` refuses at `>= transferableAfter`,
     // `isTransferable` is true at `>= transferableAfter`). The post-window
-    // transfer and drain is D9.
-    function test_D12_armedForfeitableNotTransferableDuringForfeitWindow() public {
+    // transfer and drain is D8.
+    function test_D9_armedForfeitableNotTransferableDuringForfeitWindow() public {
         hemi.mint(admin, 2_000 ether);
         hemi.approve(address(veHemi), type(uint256).max);
         uint256 id = veHemi.createLockFor(1_000 ether, 2 * 365 days, victim, false, true);

@@ -12,7 +12,7 @@ import {VoteContinuityLaw} from "./VoteContinuityLaw.sol";
 /// ledger against a no-call counterfactual. Every body reads the delegation
 /// surface through `getVotes` / `getPastVotes` only.
 ///
-///   G1-G3, G8   the gate works (stranger, approved address, operator; burned
+///   G1-G4       the gate works (stranger, approved address, operator; burned
 ///               and nonexistent ids). G1-G3 go through
 ///               `VoteContinuityLaw.assertOnlyOwnerCanMutate`, which first
 ///               proves that the OWNER's identical call does move the
@@ -20,10 +20,10 @@ import {VoteContinuityLaw} from "./VoteContinuityLaw.sol";
 ///               and only then requires the non-owner's call to revert. A lone
 ///               "the stranger reverts" assertion would also pass on a call
 ///               that never reached the ledger.
-///   G4, G6      the owner's own top-up and extension never leave the
+///   G5, G6      the owner's own top-up and extension never leave the
 ///               delegatee at zero votes (both legs of a re-delegation land
 ///               at `block.timestamp + 1`).
-///   G7, G9-G11  the gate leaves everything else intact (owner flows,
+///   G7-G10      the gate leaves everything else intact (owner flows,
 ///               `createLockFor`, ERC-721 approval semantics).
 contract IncreaseAmountOwnerGateTest is LockedCurveTestBase {
     address internal constant MALLORY = address(0xBAD0);
@@ -83,7 +83,7 @@ contract IncreaseAmountOwnerGateTest is LockedCurveTestBase {
     // PART 1 -- THE GATE WORKS.
     // =====================================================================
 
-    /// G1. THE HEADLINE. A stranger's DUST top-up (`OWNER_GATE_DUST`)
+    /// G1. THE MAIN CASE. A stranger's DUST top-up (`OWNER_GATE_DUST`)
     ///     REVERTS, and the victim's live and historical weight are UNCHANGED
     ///     TO THE WEI.
     ///
@@ -205,7 +205,7 @@ contract IncreaseAmountOwnerGateTest is LockedCurveTestBase {
     ///     OZ's unrestricted versions apply and blanket operator grants to
     ///     marketplaces already exist in the wild on transferable positions.
     ///     Honouring them here would RETROACTIVELY TURN every one of those
-    ///     grants into exactly the dust mutation trigger this gate removes --
+    ///     grants into exactly the dust mutation trigger this gate refuses --
     ///     through the most over-granted and least-revoked approval surface
     ///     in NFT-land. That would make the gate close the front door and
     ///     leave the side door open, which is worse than having no gate.
@@ -239,14 +239,14 @@ contract IncreaseAmountOwnerGateTest is LockedCurveTestBase {
         assertGt(votesBefore, 0, "G3 premise: the delegatee had votes before the calls");
     }
 
-    /// G8. A NONEXISTENT OR BURNED ID REVERTS `NotOwner`, NOT
+    /// G4. A NONEXISTENT OR BURNED ID REVERTS `NotOwner`, NOT
     ///     `NoExistingLock`.
     ///
     ///     `_ownerOf` returns `address(0)` for both, and the gate runs first,
     ///     the same ordering as `increaseUnlockTime`. The selector is
     ///     ABI-observable, so it is pinned here: for these ids an integrator
     ///     must match `NotOwner`, not `NoExistingLock()`.
-    function test_G8_nonexistentAndBurnedIdsRevertNotOwner() public {
+    function test_G4_nonexistentAndBurnedIdsRevertNotOwner() public {
         vm.prank(MALLORY);
         vm.expectRevert(VeHemi.NotOwner.selector);
         veHemi.increaseAmount(999_999, 1);
@@ -268,14 +268,14 @@ contract IncreaseAmountOwnerGateTest is LockedCurveTestBase {
     // PART 2 -- THE OWNER'S OWN WRITES NEVER LEAVE ZERO VOTES.
     // =====================================================================
 
-    /// G4. The OWNER's own 1-wei top-up -- which no access control can refuse
+    /// G5. The OWNER's own 1-wei top-up -- which no access control can refuse
     ///     -- leaves bob's votes exactly where a no-touch world has them: the
     ///     `UNTOUCHED_VOTES_AT_T_PLUS_1` literal at `t+1`, never zero anywhere
     ///     up to the hour boundary, and the same in `getPastVotes` 400 days
     ///     later. Bob did not act and is not on the call path, so no gate
     ///     could protect him; the dating (`block.timestamp + 1` for both legs
     ///     of the re-delegation) does.
-    function test_G4_ownerOwnDustNeverZeroesTheDelegatee() public {
+    function test_G5_ownerOwnDustNeverZeroesTheDelegatee() public {
         (uint256 id, uint256 votesBefore) = _delegatedDecayingPosition(7 * SIX_DAYS);
 
         _fund(alice, 1);
@@ -288,10 +288,10 @@ contract IncreaseAmountOwnerGateTest is LockedCurveTestBase {
 
         vm.warp(writeAt + 1);
         uint256 votesAtNextSecond = delegation.getVotes(bob);
-        emit log_named_uint("G4 votes before (bob)      ", votesBefore);
-        emit log_named_uint("G4 votes at t+1            ", votesAtNextSecond);
-        assertEq(width, 2999, "G4 premise: the window to the boundary must be 3599 - (t mod 3600)");
-        assertEq(votesAtNextSecond, UNTOUCHED_VOTES_AT_T_PLUS_1, "G4: the owner's 1 wei moved bob's votes at t+1");
+        emit log_named_uint("G5 votes before (bob)      ", votesBefore);
+        emit log_named_uint("G5 votes at t+1            ", votesAtNextSecond);
+        assertEq(width, 2999, "G5 premise: the window to the boundary must be 3599 - (t mod 3600)");
+        assertEq(votesAtNextSecond, UNTOUCHED_VOTES_AT_T_PLUS_1, "G5: the owner's 1 wei moved bob's votes at t+1");
 
         // No zero reading anywhere up to the boundary...
         uint256 zeroVoteSeconds;
@@ -303,16 +303,16 @@ contract IncreaseAmountOwnerGateTest is LockedCurveTestBase {
                 }
             }
         }
-        assertEq(zeroVoteSeconds, 0, "G4: the owner's own 1 wei left bob with zero votes");
+        assertEq(zeroVoteSeconds, 0, "G5: the owner's own 1 wei left bob with zero votes");
 
         vm.warp(nextHourBoundary);
-        assertGt(delegation.getVotes(bob), 0, "G4: bob has no votes at the boundary");
+        assertGt(delegation.getVotes(bob), 0, "G5: bob has no votes at the boundary");
         // ...and none sealed into history.
         vm.warp(nextHourBoundary + 400 days);
         assertEq(
             delegation.getPastVotes(bob, writeAt + 1),
             UNTOUCHED_VOTES_AT_T_PLUS_1,
-            "G4: the sealed reading at t+1 moved"
+            "G5: the sealed reading at t+1 moved"
         );
     }
 
@@ -361,10 +361,10 @@ contract IncreaseAmountOwnerGateTest is LockedCurveTestBase {
         assertGt(delegation.getVotes(bob), 0, "G7: and the mint self-delegates to bob");
     }
 
-    /// G9. THE OWNER'S OWN FLOWS THROUGH THE SHARED BODY ALL WORK, and
-    ///     a real top-up REACHES the delegatee (the complement of G4: skipping
+    /// G8. THE OWNER'S OWN FLOWS THROUGH THE SHARED BODY ALL WORK, and
+    ///     a real top-up REACHES the delegatee (the complement of G5: skipping
     ///     the re-book would also leave no zero votes, while freezing bob's weight).
-    function test_G9_ownerFlowsIntact_andBookingLands() public {
+    function test_G8_ownerFlowsIntact_andBookingLands() public {
         vm.warp(((block.timestamp / SIX_DAYS) + 2) * SIX_DAYS + 1);
         uint256 id = _mk(alice, 500 ether, 20 * SIX_DAYS);
         vm.prank(alice);
@@ -379,9 +379,9 @@ contract IncreaseAmountOwnerGateTest is LockedCurveTestBase {
         veHemi.increaseAmount(id, 50 ether); // owner top-up: allowed
         vm.warp(_nextHourBoundary(block.timestamp) + 1);
         uint256 after_ = delegation.getVotes(bob);
-        emit log_named_uint("G9 before", before_);
-        emit log_named_uint("G9 after ", after_);
-        assertGt(after_, before_, "G9: the owner's top-up never reached the delegatee");
+        emit log_named_uint("G8 before", before_);
+        emit log_named_uint("G8 after ", after_);
+        assertGt(after_, before_, "G8: the owner's top-up never reached the delegatee");
 
         // ...and the other owner-side lifecycle calls succeed too.
         vm.prank(alice);
@@ -392,11 +392,11 @@ contract IncreaseAmountOwnerGateTest is LockedCurveTestBase {
         delegation.delegate(id, charlie);
     }
 
-    /// G10. A NEW OWNER CAN TOP UP AFTER A TRANSFER -- the gate reads
-    ///      `_ownerOf` live, so it follows the token. And the FORMER owner is
-    ///      refused, which is the property that makes the gate meaningful on
-    ///      a traded position.
-    function test_G10_gateFollowsTheTokenAcrossTransfer() public {
+    /// G9. A NEW OWNER CAN TOP UP AFTER A TRANSFER -- the gate reads
+    ///     `_ownerOf` live, so it follows the token. And the FORMER owner is
+    ///     refused, which is the property that makes the gate meaningful on
+    ///     a traded position.
+    function test_G9_gateFollowsTheTokenAcrossTransfer() public {
         vm.warp(((block.timestamp / SIX_DAYS) + 2) * SIX_DAYS + 1);
         uint256 id = _mk(alice, 500 ether, 7 * SIX_DAYS);
         vm.prank(alice);
@@ -410,19 +410,19 @@ contract IncreaseAmountOwnerGateTest is LockedCurveTestBase {
         _fund(charlie, 1 ether);
         vm.prank(charlie);
         veHemi.increaseAmount(id, 1 ether);
-        assertEq(uint256(uint128(veHemi.getLockedBalance(id).amount)), 501 ether, "G10: new owner's top-up applied");
+        assertEq(uint256(uint128(veHemi.getLockedBalance(id).amount)), 501 ether, "G9: new owner's top-up applied");
     }
 
-    /// G11. ERC-721 APPROVAL SEMANTICS ARE OTHERWISE UNCHANGED. The gate
+    /// G10. ERC-721 APPROVAL SEMANTICS ARE OTHERWISE UNCHANGED. The gate
     ///      narrows ONE function; it does not silently make approvals inert.
     ///      An operator can still transfer a transferable position.
-    function test_G11_approvalsWorkForTransfer() public {
+    function test_G10_approvalsWorkForTransfer() public {
         vm.warp(((block.timestamp / SIX_DAYS) + 2) * SIX_DAYS + 1);
         uint256 id = _mk(alice, 500 ether, 7 * SIX_DAYS);
         vm.prank(alice);
         veHemi.setApprovalForAll(MARKET, true);
         vm.prank(MARKET);
         veHemi.transferFrom(alice, charlie, id);
-        assertEq(veHemi.ownerOf(id), charlie, "G11: operator transfer must work");
+        assertEq(veHemi.ownerOf(id), charlie, "G10: operator transfer must work");
     }
 }

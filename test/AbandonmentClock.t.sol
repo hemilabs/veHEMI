@@ -11,7 +11,7 @@ pragma solidity ^0.8.29;
 // the clock, so an owner who only extends is still retired on time (L1); the
 // heartbeat does restart it (L2).
 // An armed non-self transfer disarms the position, so there is no refresh
-// stamp for the buyer to inherit and nothing for a keeper to retire (L4).
+// stamp for the buyer to inherit and nothing for a keeper to retire (L3).
 // ============================================================================
 
 import "./TwinOracle.sol";
@@ -40,11 +40,11 @@ contract AbandonmentClockTest is TwinOracle {
     function _driveCandidate(uint256) internal override {}
     function _id(uint256 i) internal view returns (uint256) { return positions[i].tokenId; }
 
-    // =================================================================== L4
+    // =================================================================== L3
     /// @notice A transfer disarms the position, so the buyer inherits no
     ///         abandonment clock
     ///         and there is no stale position for a keeper to retire.
-    function test_L4_transfer_disarms_so_nothing_is_left_to_retire() public {
+    function test_L3_transfer_disarms_so_nothing_is_left_to_retire() public {
         uint256 id = _id(bi);
         _warpToBucket(staleBuckets - 1);
         vm.prank(BOB);

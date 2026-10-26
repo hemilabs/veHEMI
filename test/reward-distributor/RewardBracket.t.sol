@@ -20,8 +20,8 @@ import {RevertingRewardDistributor} from "../mocks/RevertingRewardDistributor.so
 
 contract RewardBracketTest is RewardFlatLifeBase {
     // ------------------------------------------------------------ F1 .. F6
-    // The six measurement bodies of RewardFlatLifeBase, every reported number
-    // turned into an assertion.
+    // The six measurement bodies of RewardFlatLifeBase only log; the
+    // overrides below hold their assertions.
 
     function _checkEnableDisableNotifications(uint256 enableCalls, uint256 disableCalls) internal override {
         assertEq(enableCalls, 2, "F1: enableAutoRelock must notify TWICE (bracketed)");

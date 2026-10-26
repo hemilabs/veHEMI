@@ -3,11 +3,11 @@ pragma solidity ^0.8.29;
 
 import "../LockedCurveTestBase.sol";
 
-/// @notice The flat (auto-relock) weight model: no droop, no sentinel end, the
-///         restored slope is retired at the restored end, a decaying position
-///         never reads as flat, the flat aggregate lives in the global
-///         `Point.amount`, flat votes survive a past stored end and the
-///         delegation module's MAX_LOCK_DURATION wipe, enable/disable are
+/// @notice The flat (auto-relock) weight model: no droop, no far-future
+///         placeholder end, the restored slope is retired at the restored end,
+///         a decaying position never reads as flat, the flat aggregate lives in
+///         the global `Point.amount`, flat votes survive a past stored end and
+///         the delegation module's MAX_LOCK_DURATION wipe, enable/disable are
 ///         owner-only, and a 1-wei top-up keeps R (`autoRelockRemaining`, the
 ///         frozen remaining term). Bodies that arm a position run the seeding
 ///         flow first, as on a live deployment.
@@ -64,15 +64,15 @@ contract FlatWeightModelTest is LockedCurveTestBase {
     }
 
     // ---------------------------------------------------------------------
-    // NO SENTINEL. lock.end keeps its true value.
+    // ENABLE LEAVES lock.end AS IT IS (no far-future placeholder end).
     // ---------------------------------------------------------------------
-    function test_noSentinel_endIsUnchangedByEnable() public {
+    function test_enableLeavesLockEndUnchanged() public {
         runSeedingFlow();
         (uint256 id, , uint256 end) = createLock(alice, 100 ether, 2 * 365 days);
         vm.prank(alice);
         veHemi.enableAutoRelock(id);
         assertEq(veHemi.getLockedBalance(id).end, end, "enable moved lock.end");
-        assertLt(veHemi.getLockedBalance(id).end, block.timestamp + 5 * 365 days, "sentinel detected");
+        assertLt(veHemi.getLockedBalance(id).end, block.timestamp + 5 * 365 days, "enable wrote a far-future end");
     }
 
     // ---------------------------------------------------------------------

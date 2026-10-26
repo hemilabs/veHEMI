@@ -526,9 +526,9 @@ contract AutoRelockAuthzTest is Test {
         assertLt(veHemi.balanceOfNFT(plainId), plainWeightBefore, "plain position did not decay");
     }
 
-    /// The UNARMED creation paths are untouched by arm-at-creation: both
-    /// `createLock` and `createLockFor` create an unarmed, decaying position
-    /// (`_createLock` is reached with `autoRelock_ == false`).
+    /// The UNARMED creation paths stay unarmed: both `createLock` and
+    /// `createLockFor` create an unarmed, decaying position (`_createLock` is
+    /// reached with `autoRelock_ == false`).
     function test_unarmedCreatePathsLeavePositionUnarmed() public {
         uint256 id = veHemi.createLockFor(100 ether, 200 days, owner, true, false);
         assertEq(veHemi.autoRelockRemaining(id), 0, "createLockFor armed the position");

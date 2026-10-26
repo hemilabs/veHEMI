@@ -243,14 +243,14 @@ contract FlatPositionGriefingTest is AutoRelockTestBase {
     }
 
     // ------------------------------------------------------------------
-    // C10 — RETIRING AN ALREADY-EXPIRED TERM MUST NOT UNDERFLOW. The
-    //       SIX_DAYS sweep has already taken the bias and slope of an expired
-    //       delegation, so the retirement path must
-    //       subtract NOTHING. If it subtracts unconditionally the delegatee's
-    //       book panics 0x11 and the holder's own exit reverts -- funds
-    //       trapped behind a delegatee they do not control.
+    // C9 — RETIRING AN ALREADY-EXPIRED TERM MUST NOT UNDERFLOW. The
+    //      SIX_DAYS sweep has already taken the bias and slope of an expired
+    //      delegation, so the retirement path must
+    //      subtract NOTHING. If it subtracts unconditionally the delegatee's
+    //      book panics 0x11 and the holder's own exit reverts -- funds
+    //      trapped behind a delegatee they do not control.
     // ------------------------------------------------------------------
-    function test_C10_expiredTermRetiresWithoutUnderflow() public {
+    function test_C9_expiredTermRetiresWithoutUnderflow() public {
         (uint256 victimId, , ) = createLock(victim, 1_000 ether, 2 * 365 days);
         (uint256 bobId, , ) = createLock(bob, 500 ether, 4 * 365 days);
         delegateTo(victim, victimId, delegateeA);

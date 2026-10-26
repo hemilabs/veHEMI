@@ -348,7 +348,7 @@ only). Commit the refreshed files.
 - Do not use a plain re-run as the check. After the forward it refuses before
   anything is deployed.
 
-**Follow-up PR.** Re-extract
+**Fixture pull request after execution.** Re-extract
 `test/fixtures/storage-layouts/onchain/{VeHemi,VeHemiVoteDelegation}.deployed.json`
 from the new `*_Implementation.json` records, normalized as the working-tree
 fixtures are (a raw copy keeps AST ids in its type names and fails the type
@@ -436,7 +436,7 @@ positions (VeHemi upgraded alone, positions armed, then VeHemi returned to the
 live implementation, while the VVD never left it). None of these states is
 repaired by re-running `deploy/08`; each needs a dedicated repair. After an
 in-window rollback, re-forward only with the one MultiSend `deploy/08`
-proposes: its pre-flight cannot yet tell a split that follows a rollback from
+proposes: its pre-flight cannot tell a split that follows a rollback from
 the states it refuses (section 9 gives the manual legs).
 
 After an in-window rollback and a re-forward, `delegationBookedAt(id)` can still

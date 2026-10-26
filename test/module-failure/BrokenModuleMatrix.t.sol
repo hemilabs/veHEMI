@@ -11,7 +11,7 @@ import "./BrokenModules.sol";
 ///         matrix of broken-module shapes.
 ///
 /// @notice `FlatPositionGriefingTest.test_C5_brokenDelegationCannotLockFunds`
-///         and `StarvedAndUnreadableModulesTest.test_H5_...` instantiate
+///         and `StarvedAndUnreadableModulesTest.test_H4_...` instantiate
 ///         "broken" with ONE shape (`RevertingVoteDelegation`, which reverts
 ///         on reads as well as writes). This matrix adds the shapes VeHemi
 ///         CAN read (write-reverting, lying, stale, silent-freeze, gas-eating

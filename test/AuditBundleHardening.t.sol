@@ -11,9 +11,9 @@ import {MockERC20} from "./mocks/MockERC20.sol";
 /// @title  AuditBundleHardening
 /// @notice Behavioral coverage for a group of delegation hardening checks:
 ///         the delegateBySig check ordering, the setTrustedAdapter contract
-///         probe and DelegationSlopeOverflow. The notes on isTransferable for
-///         burned/nonexistent ids and on `_delegate` before `voteDelegation`
-///         is set have no test here.
+///         probe and DelegationSlopeOverflow. isTransferable on
+///         burned/nonexistent ids and `_delegate` before `voteDelegation` is
+///         set are described in the notes below and have no test here.
 contract AuditBundleHardening is LockedCurveTestBase {
 
     // ─────────────────────────────────────────────────────────────────────

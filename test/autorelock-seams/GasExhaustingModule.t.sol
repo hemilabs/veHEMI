@@ -9,7 +9,8 @@ contract GasExhaustingModuleTest is AutoRelockSeamsBase {
     function setUp() public { _deploy(); }
 
     // A broken delegation module must never lock a victim's principal.
-    // Control: a CHEAP-reverting module (the project's own mock).
+    // Control: a CHEAP-reverting module (`RevertingVoteDelegation`, which
+    // reverts at once).
     function test_cheapRevertingModule_withdraw_ok() public {
         uint256 id = _mint(alice, 1000e18, 3 * SIX_DAYS, true, false);
         ve.updateVoteDelegation(IVeHemiVoteDelegation(address(new RevertingVoteDelegation())));

@@ -71,12 +71,13 @@ empty. The new module is therefore populated from the OLD one before the swap
    moment, and skips an id the new module already holds a record for, one the
    OLD module holds none for, a burned id, and an unarmed lock that ends at or
    before the next hour boundary. Calls are idempotent and can be re-sent. The
-   plan uses 150 ids per call: the import's original figure is about 165,000 gas
-   per id, and 172 fit in one Safe transaction at that figure after the Safe
-   proxy's DELEGATECALL, the Safe's CALL and the VVD proxy's DELEGATECALL keep
-   1/64 each. That figure predates the auto-relock upgrade, which adds a cold
-   `delegationBookedAt` stamp and `autoRelockRemaining` reads per id: size every
-   import transaction with an `eth_estimateGas` of the Safe transaction.
+   plan uses 150 ids per call: it sizes the import at about 165,000 gas per id
+   (the V2.1 figure, which leaves out the cold `delegationBookedAt` stamp and
+   the `autoRelockRemaining` reads the auto-relock upgrade adds per id), and 172
+   fit in one Safe transaction at that figure after the Safe proxy's
+   DELEGATECALL, the Safe's CALL and the VVD proxy's DELEGATECALL keep 1/64
+   each. Size every import transaction with an `eth_estimateGas` of the Safe
+   transaction.
 3. `newProxy.importAutoDelegatesFromLegacy(oldProxy, owners)`, over every
    address that ever emitted `AutoDelegateSet` on the OLD module plus every live
    owner: `setAutoDelegate` is permissionless, so an address that never held a

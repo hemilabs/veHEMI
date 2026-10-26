@@ -9,9 +9,8 @@ pragma solidity ^0.8.29;
 // Labels (one banner each below): R1 the heartbeat costs the curve nothing,
 // R2 the stale-retire guard, R3 the retired position decays like a stopped
 // twin, R4 the retire takes no principal, R5 a top-up does not postpone the
-// retire, R10 a retired forfeitable non-transferable position closes out both
-// subcurves, R7 a position that is not flat is refused. R6, R8 and R9 are not
-// used.
+// retire, R6 a retired forfeitable non-transferable position closes out both
+// subcurves, R7 a position that is not flat is refused.
 //
 // Notation: grid(t) = floor(t / SIX_DAYS) * SIX_DAYS, the start of t's six-day
 // bucket.
@@ -211,10 +210,10 @@ contract HeartbeatAndStaleRetireTest is TwinOracle {
         X.ve.retireStaleAutoRelock(_id(xi)); // still opens on time
     }
 
-    // =================================================================== R10
+    // =================================================================== R6
     /// @notice COMPOSITION. Retire a forfeitable non-transferable flat
     ///         position and check both subcurves close out with the global curve.
-    function test_R10_retired_forfeitable_nontransferable_position_closes_out_both_subcurves() public {
+    function test_R6_retired_forfeitable_nontransferable_position_closes_out_both_subcurves() public {
         // > staleBuckets, so the subcurve is STILL ACTIVE at the retire instant
         uint256 forfeitableTermBuckets = 70;
         uint256 fi = spawn(true, DAVE, AMT, forfeitableTermBuckets, Cadence.NEVER, true, true);

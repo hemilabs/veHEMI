@@ -19,7 +19,7 @@ import {IVeHemiVoteDelegation} from "src/interfaces/IVeHemiVoteDelegation.sol";
  *
  * @dev AUTHORED LEDGER. `Shadow` holds each position's amount, end,
  *      transferableAfter, forfeitable flag and R, written from the arguments
- *      this handler chose and its own clock using the documented rules, and
+ *      this handler chose and its own clock using the rules below, and
  *      never read back from the contract (a reconstruction from
  *      `getLockedBalance` moves together with a corrupted primitive). With
  *      `S = SIX_DAYS` and `grid(t) = floor(t / S) * S`:

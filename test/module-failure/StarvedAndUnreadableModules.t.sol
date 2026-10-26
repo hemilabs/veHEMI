@@ -16,10 +16,10 @@ import {
 /// @title  Starved and unreadable modules.
 ///
 /// @dev    `VeHemi` never commits an outer call whose inner module call was
-///         GAS-STARVED (H2: the auto-delegate read), a retirement it cannot
-///         VERIFY is ANNOUNCED with `AutoRelockRetirementUnverified` (H3, H4),
+///         GAS-STARVED (H1: the auto-delegate read), a retirement it cannot
+///         VERIFY is ANNOUNCED with `AutoRelockRetirementUnverified` (H2, H3),
 ///         and a broken or gas-eating delegation module or reward distributor
-///         still cannot lock principal (H5, H6, H9); the honest paths are
+///         still cannot lock principal (H4, H5, H6); the honest paths are
 ///         unaffected (H7). H8 checks that the gas eaters really starve and
 ///         that the mute module does not answer.
 contract StarvedAndUnreadableModulesTest is AutoRelockTestBase {
@@ -33,14 +33,14 @@ contract StarvedAndUnreadableModulesTest is AutoRelockTestBase {
     }
 
     // ------------------------------------------------------------------
-    // H2 — `_resolveAutoDelegate`. Its catch falls back to the caller's own
+    // H1 — `_resolveAutoDelegate`. Its catch falls back to the caller's own
     //      address, so a starved read must REVERT rather than silently
     //      redirect the delegation away from the configured auto-delegate.
     //      The call is an UNARMED `createLock`, so `REMOVAL_GAS_FLOOR` is not
     //      on its path: what refuses the low limits is `_requireNotStarved`
     //      (or, at the lowest, the outer frame running out of gas).
     // ------------------------------------------------------------------
-    function test_H2_starvedAutoDelegateCannotRedirect() public {
+    function test_H1_starvedAutoDelegateCannotRedirect() public {
         GasEatingAutoDelegate gasEatingModule = new GasEatingAutoDelegate(attacker, delegateeA);
         veHemi.updateVoteDelegation(IVeHemiVoteDelegation(address(gasEatingModule)));
 
@@ -95,11 +95,11 @@ contract StarvedAndUnreadableModulesTest is AutoRelockTestBase {
     }
 
     // ------------------------------------------------------------------
-    // H3 — AN UNVERIFIABLE RETIREMENT IS ACCEPTED, BUT IT IS NOT SILENT.
+    // H2 — AN UNVERIFIABLE RETIREMENT IS ACCEPTED, BUT IT IS NOT SILENT.
     //      A module `VeHemi` cannot read still commits the retirement
     //      (refusing would trap the holder) — but it MUST announce it.
     // ------------------------------------------------------------------
-    function test_H3_unverifiableRetirementIsAnnounced() public {
+    function test_H2_unverifiableRetirementIsAnnounced() public {
         uint256 id = _flatDelegated(attacker);
         veHemi.updateVoteDelegation(IVeHemiVoteDelegation(address(new MuteModule())));
         vm.expectEmit(true, false, false, false, address(veHemi));
@@ -108,13 +108,13 @@ contract StarvedAndUnreadableModulesTest is AutoRelockTestBase {
     }
 
     // ------------------------------------------------------------------
-    // H4 — THE SILENT VARIANT, ANNOUNCED TOO. A module that ANSWERS the
+    // H3 — THE SILENT VARIANT, ANNOUNCED TOO. A module that ANSWERS the
     //      first read, LIES on `delegate` and is UNREADABLE by the time the
     //      post-condition asks gets past the starvation tripwire (the call
     //      succeeded) and the read-back (the record cannot be read), and emits
     //      no `DelegationUpdateFailed`; the retirement must still be announced.
     // ------------------------------------------------------------------
-    function test_H4_silentBypassIsAnnounced() public {
+    function test_H3_silentBypassIsAnnounced() public {
         uint256 id = _flatDelegated(attacker);
         IVeHemiVoteDelegation realDelegation = IVeHemiVoteDelegation(address(delegation));
         veHemi.updateVoteDelegation(
@@ -125,16 +125,16 @@ contract StarvedAndUnreadableModulesTest is AutoRelockTestBase {
     }
 
     // ------------------------------------------------------------------
-    // H5 — THE COUNTERWEIGHT.
+    // H4 — THE COUNTERWEIGHT.
     //      `FlatPositionGriefingTest.test_C5_brokenDelegationCannotLockFunds`
     //      uses a position that was ENABLED but never delegated away from its
     //      owner (it keeps its mint-time self-delegation). The wider
     //      guarantee: a position DELEGATED to another account and
     //      auto-relocked, under a module that reverts on EVERYTHING, must
     //      still return its principal. This is why an unverifiable
-    //      retirement is announced (H3) rather than refused.
+    //      retirement is announced (H2) rather than refused.
     // ------------------------------------------------------------------
-    function test_H5_brokenModuleCannotLockADelegatedPosition() public {
+    function test_H4_brokenModuleCannotLockADelegatedPosition() public {
         uint256 id = _flatDelegated(attacker);
         veHemi.updateVoteDelegation(IVeHemiVoteDelegation(address(new RevertingVoteDelegation())));
         vm.warp(block.timestamp + 40 * SIX_DAYS);
@@ -148,11 +148,11 @@ contract StarvedAndUnreadableModulesTest is AutoRelockTestBase {
     }
 
     // ------------------------------------------------------------------
-    // H6 — A distributor that reverts CHEAPLY is the ordinary broken-module
+    // H5 — A distributor that reverts CHEAPLY is the ordinary broken-module
     //      shape and it must STILL be swallowed on disable and withdraw: a
     //      broken reward distributor must not turn into locked funds.
     // ------------------------------------------------------------------
-    function test_H6_brokenDistributorCannotLockFunds() public {
+    function test_H5_brokenDistributorCannotLockFunds() public {
         uint256 id = _flatDelegated(attacker);
         veHemi.updateRewardDistributor(IRewardDistributor(address(new RevertingRewardDistributor())));
         disable(attacker, id); // must not revert
@@ -165,14 +165,14 @@ contract StarvedAndUnreadableModulesTest is AutoRelockTestBase {
     }
 
     // ------------------------------------------------------------------
-    // H9 — WHY `_updateReward` HAS NO STARVATION TRIPWIRE. It is the FIRST
+    // H6 — WHY `_updateReward` HAS NO STARVATION TRIPWIRE. It is the FIRST
     //      statement of `_withdraw`; with a tripwire there, a distributor that
-    //      EATS its allowance (rather than reverting cheaply, which is H6)
+    //      EATS its allowance (rather than reverting cheaply, which is H5)
     //      would lock principal. The swallowed harm at this site (a stale
     //      reward anchor) is curable by the next notify; locked principal is
     //      not.
     // ------------------------------------------------------------------
-    function test_H9_gasEatingDistributorCannotLockFunds() public {
+    function test_H6_gasEatingDistributorCannotLockFunds() public {
         GasEatingRewardDistributor distributor = new GasEatingRewardDistributor();
         veHemi.updateRewardDistributor(IRewardDistributor(address(distributor)));
         uint256 id = _flatDelegated(attacker);
@@ -217,9 +217,9 @@ contract StarvedAndUnreadableModulesTest is AutoRelockTestBase {
     }
 
     // ------------------------------------------------------------------
-    // H8 — VACUITY. If the gas eaters did not actually starve, H2/H9 would
+    // H8 — VACUITY. If the gas eaters did not actually starve, H1/H6 would
     //      pass for the wrong reason; and if the mute module were readable,
-    //      H3 would. Each premise is asserted here directly.
+    //      H2 would. Each premise is asserted here directly.
     // ------------------------------------------------------------------
     function test_H8_vacuity_gasEatersStarveAndMuteModuleDoesNotAnswer() public {
         GasEatingRewardDistributor distributor = new GasEatingRewardDistributor();

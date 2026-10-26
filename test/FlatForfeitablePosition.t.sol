@@ -6,7 +6,7 @@ pragma solidity ^0.8.29;
 // ----------------------------------------------------------------------------
 // Auto-relock is invisible to the subcurves: a flat forfeitable position decays
 // out of the locked and forfeitable subcurves on its manual ramp to
-// `transferableAfter`, exactly like its manually-extended twin (I1, I7).
+// `transferableAfter`, exactly like its manually-extended twin (I1, I6).
 // `supplyBreakdown()` agrees with the dedicated views (I2, I3), forfeit still
 // works on a flat position and retires its delegated weight (I4), and the
 // forfeit window is `transferableAfter` whatever the flag says (I5, I5b).
@@ -291,18 +291,18 @@ contract FlatForfeitablePositionTest is TwinOracle {
         assertEq(X.hemi.balanceOf(ADMIN), AMT, "I5b forfeit did not pay out");
     }
 
-    // ====================================================================== I7
+    // ====================================================================== I6
     /// @notice THE TWIN IS THE ORACLE: a FLAT forfeitable position's SUBCURVE
     ///         contribution equals its MANUALLY-EXTENDED twin's, to the wei.
     /// @dev `transferableAfter` is written once at mint and is NOT moved by
     ///      `increaseUnlockTime`, so the manual run's subcurve is also a plain
     ///      ramp to `transferableAfter` -- and the flat run must match it even
     ///      though the two GLOBAL weights differ.
-    function test_I7_flat_subcurve_equals_the_manual_twin() public {
+    function test_I6_flat_subcurve_equals_the_manual_twin() public {
         uint256 manualId = _mintForfeitable(M, ALICE, AMT, N);  // MANUAL run
         uint256 flatId = _mintForfeitable(X, ALICE, AMT, N);    // FLAT run
         assertEq(M.ve.transferableAfter(manualId), X.ve.transferableAfter(flatId),
-            "I7 the manual and flat runs disagree on transferableAfter");
+            "I6 the manual and flat runs disagree on transferableAfter");
 
         vm.warp(block.timestamp + 777);
         vm.prank(ALICE);
@@ -315,17 +315,17 @@ contract FlatForfeitablePositionTest is TwinOracle {
             vm.prank(ALICE);
             M.ve.increaseUnlockTime(manualId, N * SIX_DAYS);
             assertEq(uint256(M.ve.getLockedBalance(manualId).end), block.timestamp + N * SIX_DAYS,
-                "I7 the manual twin was not extended");
+                "I6 the manual twin was not extended");
             vm.warp(block.timestamp + 4242);
             assertEq(
                 X.ve.nonTransferableTotalVeHemiSupply(),
                 M.ve.nonTransferableTotalVeHemiSupply(),
-                "I7 flat locked subcurve diverged from the manual twin"
+                "I6 flat locked subcurve diverged from the manual twin"
             );
             assertEq(
                 X.ve.forfeitableTotalVeHemiSupply(),
                 M.ve.forfeitableTotalVeHemiSupply(),
-                "I7 flat forfeitable subcurve diverged from the manual twin"
+                "I6 flat forfeitable subcurve diverged from the manual twin"
             );
         }
     }

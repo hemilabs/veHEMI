@@ -11,10 +11,10 @@ import {IVeHemiVoteDelegation} from "../../src/interfaces/IVeHemiVoteDelegation.
 /// @notice A retirement whose re-delegation VeHemi could not complete leaves the
 ///         VVD record FLAT (slope 0, bias > 0) while VeHemi reports the position
 ///         unarmed: a phantom that votes for ever. `retireStrandedFlatTerm` is
-///         the permissionless remedy. This body asserts, with no control branch,
-///         that the entry point answers with its own refusal on a position that
-///         is not stranded, that a stranger's call succeeds on one that is, and
-///         that the phantom is then gone while the principal stays locked.
+///         the permissionless remedy. This body asserts that the entry point
+///         answers with its own refusal on a position that is not stranded,
+///         that a stranger's call succeeds on one that is, and that the
+///         phantom is then gone while the principal stays locked.
 ///
 /// @dev    The entry point is reached through a low-level `.call()` with a
 ///         hard-coded signature, not a typed call, so that a missing function
@@ -94,7 +94,7 @@ contract RetireStrandedFlatTermTest is AutoRelockTestBase {
         assertGt(before_, 0,
             "VACUOUS: the delegatee has no votes to lose, so `after_ != before_` would compare 0 with 0");
 
-        // ---- (b) *** PRESENCE, ASSERTED AND NOT BRANCHED ON. ***
+        // ---- (b) PRESENCE (asserted).
         // Called on an id that is NOT stranded: a present function refuses
         // with `FlatTermNotRetryable()` (4 bytes of selector); an ABSENT
         // function reverts with EMPTY data, because VVD declares no fallback.

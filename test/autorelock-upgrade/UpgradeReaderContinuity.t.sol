@@ -15,8 +15,8 @@ import "./AutoRelockUpgradeForkBase.sol";
 ///         the upgrade-hour window) in the same block, and reads them again. No
 ///         position has auto-relock enabled yet, so the new implementations
 ///         must report the forked state unchanged -- except
-///         `getPastTotalSupply(t)`, which now reads supply at `t - 1` by
-///         design.
+///         `getPastTotalSupply(t)`, which after the upgrade reads supply at
+///         `t - 1`.
 contract UpgradeReaderContinuityForkTest is AutoRelockUpgradeForkBase {
     uint256 internal constant SAMPLE_SIZE = 16;
     /// @dev Ids scanned per slice before the sample gives up on it.
@@ -119,7 +119,7 @@ contract UpgradeReaderContinuityForkTest is AutoRelockUpgradeForkBase {
             assertEq(afterUpgrade.totalAt[j], beforeUpgrade.totalAt[j], "totalVeHemiSupplyAt");
             assertEq(afterUpgrade.nonTransferableAt[j], beforeUpgrade.nonTransferableAt[j], "nonTransferableTotalVeHemiSupplyAt");
             assertEq(afterUpgrade.forfeitableAt[j], beforeUpgrade.forfeitableAt[j], "forfeitableTotalVeHemiSupplyAt");
-            // By design the quorum denominator now reads one second earlier.
+            // After the upgrade the quorum denominator reads one second earlier.
             assertEq(vvd.getPastTotalSupply(t[j]), supplyOneSecondEarlier[j], "getPastTotalSupply(t) != supply at t - 1");
         }
         for (uint256 i = 0; i < ids.length; ++i) {

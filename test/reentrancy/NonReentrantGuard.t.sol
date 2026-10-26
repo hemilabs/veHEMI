@@ -4,8 +4,8 @@ pragma solidity ^0.8.29;
 import "../LockedCurveTestBase.sol";
 import "@openzeppelin/contracts/token/ERC721/IERC721Receiver.sol";
 
-/// THE GUARD SPEC. Behavioural coverage of VeHemi's `nonReentrant`
-/// guard, asserted by the guard's own selector (`ReentrancyGuardReentrantCall`):
+/// Behavioural coverage of VeHemi's `nonReentrant` guard, asserted by the
+/// guard's own selector (`ReentrancyGuardReentrantCall`):
 ///
 ///   G1-G3  `safeTransferFrom` takes the guard itself and holds it across
 ///          `onERC721Received`: a re-entering hook is refused (G1), an

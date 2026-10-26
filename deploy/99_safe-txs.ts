@@ -11,11 +11,9 @@ import {
     VVD_ARM_DATA,
     assertBatchOrder,
     assertNothingArmedBeforeForward,
-    refuseRenamedOperatorEnv,
 } from "./08_upgrade_autorelock";
 
 const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
-    refuseRenamedOperatorEnv();
     await assertProxyAdminBatchAgainstChain(hre);
     await executeBatchUsingSafe(hre);
 };

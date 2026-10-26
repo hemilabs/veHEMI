@@ -6,13 +6,14 @@ import "./AutoRelockUpgradeForkBase.sol";
 /// @title  A sub-10-HEMI V1 position through the auto-relock lifecycle.
 /// @notice On a Hemi mainnet fork (skips without HEMI_RPC_URL; fork block from
 ///         AUTORELOCK_TEST_FORK_BLOCK), executes the upgrade batch, then takes
-///         a delegated V1 position whose amount is below today's 10-HEMI
-///         minimum (V1 minted such positions; at the default fork block, id 8
-///         holds 2.625e-7 HEMI) through the auto-relock lifecycle: enable,
-///         heartbeat, owner disable and withdraw at the restored end, and, from
-///         a second enable, the permissionless stale retirement. Each step is
-///         compared with a twin of the same state in which it was not taken:
-///         the delegatee's votes move by exactly the position's weight change.
+///         a delegated V1 position whose amount is below the 10-HEMI
+///         `MIN_LOCK_AMOUNT` (V1 minted such positions; at the default fork
+///         block, id 8 holds 2.625e-7 HEMI) through the auto-relock lifecycle:
+///         enable, heartbeat, owner disable and withdraw at the restored end,
+///         and, from a second enable, the permissionless stale retirement. Each
+///         step is compared with a twin of the same state in which it was not
+///         taken: the delegatee's votes move by exactly the position's weight
+///         change.
 contract SmallV1PositionLifecycleForkTest is AutoRelockUpgradeForkBase {
     uint256 internal constant MIN_LOCK_AMOUNT = 10e18;
     uint256 internal constant MAX_TIME = 4 * 365.25 days;

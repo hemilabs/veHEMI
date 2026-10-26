@@ -354,10 +354,10 @@ contract UpgradeWindowTransitionForkTest is AutoRelockUpgradeForkBase {
         assertEq(retiredToVotesInWindow, 0, "re-forward with the window arm: retired-to delegatee holds weight");
     }
 
-    /// KNOWN HAZARD, kept as a negative control: a PLAIN re-forward over a
-    /// past non-zero W reproduces the double count (the moved position,
-    /// retired and re-added in a later hour, has its weight counted twice at
-    /// `movedFromDelegatee`). (Any re-forward must use
+    /// KNOWN HAZARD, asserted as a negative control: a PLAIN re-forward over a
+    /// past non-zero W double-counts (the moved position, retired and re-added
+    /// in a later hour, has its weight counted twice at `movedFromDelegatee`).
+    /// (Any re-forward must use
     /// `upgradeAndCall(..., armLegacyDatingWindow())`, as above.)
     function test_reForwardAfterRollback_plainLegs_doubleCount_negativeControl() public {
         if (!forkReady) return;

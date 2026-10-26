@@ -36,8 +36,8 @@ contract AutoRelockInvariantTest is Test {
     VeHemiVoteDelegation delegation;
 
     /// @dev Runs after which the suite fails if some auto-relock action has
-    ///      still never committed (see `afterInvariant`): the smallest PR
-    ///      budget of one campaign in this contract.
+    ///      still never committed (see `afterInvariant`): the smallest
+    ///      ci-profile budget of one campaign in this contract.
     uint256 internal constant COVERAGE_WARMUP_RUNS = 32;
     string internal constant COVERAGE_PREFIX = "AUTO_RELOCK_INVARIANT_COVERAGE_";
 
@@ -118,9 +118,9 @@ contract AutoRelockInvariantTest is Test {
     }
 
     /// @dev No live position has `lock.end > now + MAX_TIME`. `lock.end` is the
-    ///      only withdraw gate, so a far-future sentinel end (or a disable rule
-    ///      that hands back more than it froze, cycle after cycle) would make
-    ///      the principal unreachable or the position immortal.
+    ///      only withdraw gate, so a far-future placeholder end (or a disable
+    ///      rule that hands back more than it froze, cycle after cycle) would
+    ///      make the principal unreachable or the position immortal.
     function invariant_noLockEndBeyondNowPlusMaxTime() public {
         uint256 nextId = veHemi.nextTokenId();
         uint256 ceiling = block.timestamp + MAX_TIME;
@@ -129,7 +129,7 @@ contract AutoRelockInvariantTest is Test {
             assertLe(
                 uint256(veHemi.getLockedBalance(id).end),
                 ceiling,
-                "lock.end beyond now + MAX_TIME - sentinel end / immortal position"
+                "lock.end beyond now + MAX_TIME - far-future placeholder end / immortal position"
             );
         }
     }
@@ -187,7 +187,8 @@ contract AutoRelockInvariantTest is Test {
     ///      lock-final-hour operations (`InvariantHandler.lockFinalHourOp`):
     ///      around the operation instant and around the subject lock's own
     ///      end. About twenty times the per-call cost of the other bodies (up
-    ///      to 23 instants x 7 history reads), hence the smaller PR budget.
+    ///      to 23 instants x 7 history reads), hence the smaller ci-profile
+    ///      budget.
     /// forge-config: ci.invariant.runs = 32
     function invariant_pastVotesNeverExceedPastTotalSupply() public view {
         _checkPastVotesBound(block.timestamp);

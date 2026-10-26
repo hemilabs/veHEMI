@@ -138,9 +138,10 @@ contract FlatBulkDelegationAndExpiryTest is Test {
     /// @dev    The nearest existing law, `AutoRelockLedgerChecks::checkFlatRecordAmountMatchesLedger`
     ///         (run by `invariant_autoRelockLedgerLaws`), asserts
     ///         `delegation.delegation(id).amount == shadow.amount` -- it
-    ///         watches the cached AMOUNT. H1 corrupts the cached DELEGATEE, and
-    ///         what a holder actually loses is governance weight, so this body
-    ///         asserts on `getVotes` on both sides of the move.
+    ///         watches the cached AMOUNT. A bulk flow that skips a flat
+    ///         position leaves the cached DELEGATEE wrong, and what a holder
+    ///         actually loses is governance weight, so this body asserts on
+    ///         `getVotes` on both sides of the move.
     function test_H1_C_flatWeightMovesBetweenDelegatees() public {
         uint256 id = _lock(ALICE, 100e18, 2 * YEAR);
         _enable(ALICE, id);

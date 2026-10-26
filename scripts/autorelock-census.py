@@ -49,7 +49,7 @@ RPC_ERRORS = {"records": 0, "arrays": 0, "logs": 0}
 RPC_URL = os.environ.get("HEMI_RPC_URL", "https://rpc.hemi.network/rpc"); USER_AGENT = "veHEMI-census-readonly/1.0"
 VVD = "0xBF5b2f370370494B8A4575962512dd3ea7c29e2d"; VEHEMI = "0x371d3718D5b7F75EAb050FAe6Da7DF3092031c89"
 if len(sys.argv) < 3 or len(sys.argv) > 4:
-    print("usage: autorelock-census.py BLOCK OUT [FROM_BLOCK]  (no defaults, no override file)", flush=True); sys.exit(3)
+    print("usage: autorelock-census.py BLOCK OUT [FROM_BLOCK]  (BLOCK and OUT have no default)", flush=True); sys.exit(3)
 BLOCK = int(sys.argv[1])
 BLOCK_TAG = hex(BLOCK)
 OUT = sys.argv[2]

@@ -35,24 +35,6 @@ function envInt(name: string, min: number): number | undefined {
     return n;
 }
 
-// Earlier operator variable names, each mapped to the name this script reads.
-const RENAMED_OPERATOR_ENV: Record<string, string> = {
-    D1_POST_CHECK_ONLY: "AUTORELOCK_POST_CHECK_ONLY",
-    D1_LOGS_FROM: "AUTORELOCK_LOGS_FROM",
-    D1_LOGS_STEP: "AUTORELOCK_LOGS_STEP",
-};
-
-// Refuses a variable set (even empty) under an earlier name. It would be ignored
-// and the default used: for the post-check flag, the full deploy-and-queue path.
-// deploy/99 calls this too, for a run that proposes a restored batch alone.
-export function refuseRenamedOperatorEnv(): void {
-    for (const [earlierName, name] of Object.entries(RENAMED_OPERATOR_ENV)) {
-        if (process.env[earlierName] !== undefined) {
-            throw new Error(`${earlierName} is not read; set ${name} instead and unset ${earlierName}. Refusing rather than ignoring it.`);
-        }
-    }
-}
-
 // ── Auto-relock upgrade ────────────────────────────────────────────────────
 // Upgrades the live VeHemi and VeHemiVoteDelegation (VVD) proxies to the
 // auto-relock implementations. The operator and signer runbook -- the operator
@@ -110,8 +92,6 @@ async function upgradeAutoRelock(hre: import("hardhat/types").HardhatRuntimeEnvi
             `This deployment script is only for Hemi and Localhost. Current chain ID: ${network.config.chainId}`
         );
     }
-
-    refuseRenamedOperatorEnv();
 
     // Operator inputs are validated before anything runs: a mistyped
     // AUTORELOCK_POST_CHECK_ONLY must not fall through to the full

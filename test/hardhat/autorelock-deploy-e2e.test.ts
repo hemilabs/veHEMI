@@ -257,7 +257,7 @@ describeOrSkip("Hardhat fork: deploy/08 auto-relock upgrade → Safe MultiSend",
                 "_delegate → _getNormalizedLockedInfo → veHemi.autoRelockRemaining(), not in a try, " +
                 "and that selector does not exist on the live implementation"
         );
-        console.log("        ✓ VVD-first: delegate() reverts, as predicted");
+        console.log("        ✓ VVD-first: delegate() reverts, as point 3 of the header states");
 
         // ── Case B: now land VeHemi too. The same call must succeed.
         await replayLegsSeparately([batch[0]]);
@@ -343,20 +343,6 @@ describeOrSkip("Hardhat fork: deploy/08 auto-relock upgrade → Safe MultiSend",
         delete process.env.AUTORELOCK_POST_CHECK_ONLY;
         expect(truthy.error?.message ?? "").to.contain('AUTORELOCK_POST_CHECK_ONLY must be exactly "1" (got "true")');
         expect(truthy.out).to.not.contain("Running storage layout pre-flight", "no fall-through to the full deploy");
-        // A variable set under its earlier name is refused, not ignored.
-        for (const [earlierName, name] of [
-            ["D1_POST_CHECK_ONLY", "AUTORELOCK_POST_CHECK_ONLY"],
-            ["D1_LOGS_FROM", "AUTORELOCK_LOGS_FROM"],
-            ["D1_LOGS_STEP", "AUTORELOCK_LOGS_STEP"],
-        ]) {
-            process.env[earlierName] = "1";
-            const refused08 = await capture(() => deploy08(hre));
-            const refused99 = await capture(() => deploy99(hre));
-            delete process.env[earlierName];
-            expect(refused08.error?.message ?? "").to.contain(`${earlierName} is not read; set ${name} instead and unset ${earlierName}`);
-            expect(refused08.out).to.not.contain("Running storage layout pre-flight", "no fall-through to the full deploy");
-            expect(refused99.error?.message ?? "").to.contain(`${earlierName} is not read; set ${name} instead and unset ${earlierName}`);
-        }
 
         // The halving runs. A provider that refuses ranges over
         // 2,000 blocks still yields PASS (10,000 -> 5,000 -> 2,500 -> 1,250); one

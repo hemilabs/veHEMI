@@ -39,7 +39,7 @@ Consider two users in veHemi:
 - **NFT representation**: Each lock is a unique NFT
 - **Transferability**: Default transferable, can be non-transferable
 - **Extensions**: Only NFT owner can extend lock duration
-- **Amount increases**: Only the NFT owner can increase the locked amount (`increaseAmount` reverts `NotOwner` otherwise; this reverses the earlier permissionless behaviour)
+- **Amount increases**: Only the NFT owner can increase the locked amount (`increaseAmount` reverts `NotOwner` otherwise; in V2 it was permissionless)
 - **Minimum amount**: All lock creation (`createLock`, `createLockFor` and `createLockWithAutoRelock`) requires at least 10 HEMI (`MIN_LOCK_AMOUNT`) to prevent dust lock griefing
 
 ### NFT Transferability
@@ -52,7 +52,7 @@ Consider two users in veHemi:
 
 ### Delegation System
 
-- **Next-second**: a delegation change takes effect at `block.timestamp + 1`; as before, an UNARMED position whose lock ends at or before the next hour boundary cannot be delegated (unless its record is a stranded flat term — a flat record, slope 0 and bias > 0, left on a position that is no longer auto-relocked — which `delegate` retires, booking nothing; an auto-relock position can always be delegated)
+- **Next-second**: a delegation change takes effect at `block.timestamp + 1`; as in V2, an UNARMED position whose lock ends at or before the next hour boundary cannot be delegated (unless its record is a stranded flat term — a flat record, slope 0 and bias > 0, left on a position that is no longer auto-relocked — which `delegate` retires, booking nothing; an auto-relock position can always be delegated)
 - **Per-token**: Each veHEMI NFT can be delegated independently
 - **Flexible**: Delegate to any address or self
 - **Revocable**: Change or revoke at any time
@@ -99,18 +99,18 @@ The V2.1 implementation upgrade fixes a stale-cache bug in the forfeit path:
 
 The V2.1 implementation also addresses a hazard of `VeHemi.updateVoteDelegation`, a single-SSTORE pointer swap that performs zero state migration. Calling it on a freshly-deployed `VeHemiVoteDelegation` proxy silently zeros every voter's stake, breaks in-flight Aragon proposals, and severs the event-relay path until each user manually re-delegates. The mitigation has three parts:
 
-- **Strong NatSpec warning** on `VeHemi.updateVoteDelegation` documenting the silent-orphaning failure mode, the in-flight-proposal brick risk, and the mandatory operator runbook. Operators reading the source saw the exact pre-flight checklist (deploy new VVD → snapshot → import → seal → swap); the checklist now lives in [`docs/VOTE_DELEGATION_RECOVERY.md`](docs/VOTE_DELEGATION_RECOVERY.md), which the NatSpec points to.
+- **Strong NatSpec warning** on `VeHemi.updateVoteDelegation` documenting the silent-orphaning failure mode, the in-flight-proposal brick risk, and the mandatory operator runbook. The checklist (deploy new VVD → snapshot → import → seal → swap) is in [`docs/VOTE_DELEGATION_RECOVERY.md`](docs/VOTE_DELEGATION_RECOVERY.md), which the NatSpec points to.
 - **State-migration tooling on `VeHemiVoteDelegation`** (new `VeHemiDelegationStorageV3` chain at slot 50):
   - `importDelegationsFromLegacy(legacy, tokenIds)` — owner-only (VeHemi owner). Reads `delegation(id)` from the legacy VVD and replays it via `_delegate` so checkpoint history begins building forward in the new contract. Idempotent. Emits `LegacyDelegationImported`.
   - `importAutoDelegatesFromLegacy(legacy, owners)` — same pattern for `autoDelegate` mappings. Emits `AutoDelegateSet` + `LegacyAutoDelegateImported`.
   - `finalizeMigration()` — one-way latch sealing the import path. After this call, the import functions revert permanently with `MigrationFinalizedError`, preventing any post-migration state injection that would corrupt future `getPastVotes` history.
-- **Operator runbook** (encoded in NatSpec on `updateVoteDelegation` at the time; now [`docs/VOTE_DELEGATION_RECOVERY.md`](docs/VOTE_DELEGATION_RECOVERY.md)): the original V2.1 runbook required the new VVD's `importDelegationsFromLegacy` + `importAutoDelegatesFromLegacy` + `setTrustedAdapter` + `finalizeMigration` to execute in the same Safe MultiSend as the final `veHemi.updateVoteDelegation(newVVD)` call; at mainnet scale the imports span several Safe transactions, so `finalizeMigration` and the swap go last, in one MultiSend (optionally after late imports of entries still missing), forfeits are disabled for the whole import window, and a reconcile follows the swap (`scripts/plan-legacy-migration.ts` prints the transactions).
+- **Operator runbook** ([`docs/VOTE_DELEGATION_RECOVERY.md`](docs/VOTE_DELEGATION_RECOVERY.md); V2.1 shipped it in the NatSpec of `updateVoteDelegation`): the original V2.1 runbook required the new VVD's `importDelegationsFromLegacy` + `importAutoDelegatesFromLegacy` + `setTrustedAdapter` + `finalizeMigration` to execute in the same Safe MultiSend as the final `veHemi.updateVoteDelegation(newVVD)` call; at mainnet scale the imports span several Safe transactions, so `finalizeMigration` and the swap go last, in one MultiSend (optionally after late imports of entries still missing), forfeits are disabled for the whole import window, and a reconcile follows the swap (`scripts/plan-legacy-migration.ts` prints the transactions).
 - **Tests**: end-to-end runbook coverage in `test/HIGH2_LegacyImport.t.sol` (28 tests), including:
   - `test_endToEndMigrationRunbook_preservesVotes` — full operator flow → delegate votes preserved post-swap
   - `test_withoutImport_swapZerosVotes_documentedBug` — proves that a swap with no import leaves the new module with no delegation record and zero votes, so operators who skip the import path lose state
   - Idempotency, access control (only VeHemi owner), legacy-address validation, finalize semantics, post-finalize reverts
-- **Bytecode impact**: zero on VeHemi (NatSpec only). VeHemiVoteDelegation grew from 14,185B to 16,364B (+2,179B), leaving an 8,212B EIP-170 margin (down from 10,391B before the migration tooling), at the time.
-- **Limitation (out-of-scope for V2)**: historical `getPastVotes` queries for blocks BEFORE the migration return zero on the new contract — the import replays delegations via `_delegate` which builds NEW checkpoints starting at the next hour boundary. Operators MUST schedule the migration during a governance freeze (no in-flight proposals) to avoid bricking proposals whose snapshot block precedes the swap. A full historical checkpoint copy was deferred to V3 alongside the planned library extraction. (At the time; since the auto-relock upgrade a freshly deployed, initialized module dates imports at `block.timestamp + 1`, and 3.0.0 has no historical copy either.)
+- **Bytecode impact**: zero on VeHemi (NatSpec only). VeHemiVoteDelegation grew from 14,185B to 16,364B (+2,179B), leaving an 8,212B EIP-170 margin (down from 10,391B before the migration tooling) in V2.1.
+- **Limitation (out-of-scope for V2)**: historical `getPastVotes` queries for blocks BEFORE the migration return zero on the new contract — the import replays delegations via `_delegate` which builds NEW checkpoints starting at the next hour boundary. Operators MUST schedule the migration during a governance freeze (no in-flight proposals) to avoid bricking proposals whose snapshot block precedes the swap. V2.1 deferred a full historical checkpoint copy to V3, together with a library extraction; 3.0.0 has no historical copy either, and since the auto-relock upgrade a freshly deployed, initialized module dates imports at `block.timestamp + 1`.
 
 ### Aragon Governance Integration
 
@@ -261,10 +261,11 @@ Additional test-quality signals beyond line coverage:
   `test/AutoRelockInvariant.t.sol` (7 auto-relock invariants: flat weight,
   restored end, past votes never above the past total supply) and
   `test/autorelock-ledger/AutoRelockLedgerInvariant.t.sol` (one campaign that
-  checks the auto-relock laws against an independently authored ledger). The
-  default profile runs 1024 runs x 128 depth; CI's `Foundry project` job (every
-  push and pull request) runs them at 128 x 128 (two campaigns carry inline
-  overrides: 32 x 128 and 128 x 64) and the nightly job at the full budget.
+  checks the auto-relock laws against a ledger its handler writes from its own
+  calls and never reads back from the contract). The default profile runs
+  1024 runs x 128 depth; CI's `Foundry project` job (every push and pull
+  request) runs them at 128 x 128 (two campaigns carry inline overrides:
+  32 x 128 and 128 x 64) and the nightly job at the full budget.
 - **Removal gas floor** (`test/module-failure/RemovalGasFloor.t.sol`): for
   every call that books or retires an auto-relock term, finds the smallest
   committing gas limit and checks below it (refused with

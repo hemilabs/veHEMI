@@ -92,9 +92,9 @@ contract FlatPositionEconomicsTest is AutoRelockTestBase {
     }
 
     // ------------------------------------------------------------------
-    // A4 — THE FORFEIT ESCAPE IS CLOSED. A forfeitable grant that goes flat
-    //      must stay clawable for the whole of its window and unclawable after
-    //      it — the freeze must move neither edge.
+    // A4 — THE FREEZE OPENS NO FORFEIT ESCAPE. A forfeitable grant that
+    //      goes flat must stay clawable for the whole of its window and
+    //      unclawable after it — the freeze must move neither edge.
     // ------------------------------------------------------------------
     function test_A4_forfeitEscapeClosed() public {
         veHemi.updateForfeitAdmin(admin);

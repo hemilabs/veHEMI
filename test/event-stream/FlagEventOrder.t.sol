@@ -17,10 +17,10 @@ import {Vm} from "forge-std/Vm.sol";
 ///
 ///     E1 / E2   positional. The flag log index must be below the index of the
 ///               `Checkpoint` log for the same token.
-///     OB / OC   a stream-ordered indexer, fed the real stream, reconstructs
+///     O1 / O2   a stream-ordered indexer, fed the real stream, reconstructs
 ///               `balanceOfNFT` exactly, buckets later, with no chain access.
-///     OA / OD   controls. The same indexer, fed the same stream with the flag
-///               logs moved after their checkpoint, is wrong -- so OB/OC cannot
+///     O1C / O2C controls. The same indexer, fed the same stream with the flag
+///               logs moved after their checkpoint, is wrong -- so O1/O2 cannot
 ///               pass merely because the indexer ignores the flag.
 ///
 /// Scope: the ABI / log surface only. Emit order cannot move a balance, a
@@ -224,13 +224,13 @@ contract FlagEventOrderTest is LockedCurveTestBase {
     }
 
     // ------------------------------------------------------------------
-    // OB / OA -- THE ENABLE TRANSITION.
+    // O1 / O1C -- THE ENABLE TRANSITION.
     // ------------------------------------------------------------------
 
-    /// @notice OB. The emitted order. The stream-ordered indexer is EXACT --
+    /// @notice O1. The emitted order. The stream-ordered indexer is EXACT --
     ///         25 buckets later, with no transaction in between and no chain
     ///         access at all.
-    function test_OB_streamIndexerIsExactOnTheEmittedOrder() public {
+    function test_O1_streamIndexerIsExactOnTheEmittedOrder() public {
         uint256 _id = _unarmedPositionAtOffGridTime();
 
         vm.recordLogs();
@@ -257,10 +257,10 @@ contract FlagEventOrderTest is LockedCurveTestBase {
         assertEq(_derived, _truth, "E-ORDER: the stream-ordered indexer must be EXACT on the emitted order");
     }
 
-    /// @notice OA. THE CONTROL. The SAME indexer, the same logs, with the flag
+    /// @notice O1C. THE CONTROL. The SAME indexer, the same logs, with the flag
     ///         log moved after the `Checkpoint` -- and it is wrong. If this body
-    ///         ever goes green by equality, OB above is vacuous.
-    function test_OA_streamIndexerIsWrongWhenTheFlagTrailsTheCheckpoint() public {
+    ///         ever goes green by equality, O1 above is vacuous.
+    function test_O1C_streamIndexerIsWrongWhenTheFlagTrailsTheCheckpoint() public {
         uint256 _id = _unarmedPositionAtOffGridTime();
 
         vm.recordLogs();
@@ -281,12 +281,12 @@ contract FlagEventOrderTest is LockedCurveTestBase {
         emit log_named_uint("stream-derived", _derived);
         uint256 _bps = ((_truth - _derived) * 10_000) / _truth;
         emit log_named_uint("under-report bps", _bps);
-        assertLt(_derived, _truth, "the flag-trailing stream must under-report; if it does not, OB proves nothing");
+        assertLt(_derived, _truth, "the flag-trailing stream must under-report; if it does not, O1 proves nothing");
         assertGt(_bps, 0, "vacuity: the mis-derivation is below one basis point");
     }
 
     // ------------------------------------------------------------------
-    // OC / OD -- BOTH TRANSITIONS (the disable emit is the other half of
+    // O2 / O2C -- BOTH TRANSITIONS (the disable emit is the other half of
     // E-ORDER).
     // ------------------------------------------------------------------
 
@@ -319,9 +319,9 @@ contract FlagEventOrderTest is LockedCurveTestBase {
         vm.warp(block.timestamp + 5 * SIX_DAYS);
     }
 
-    /// @notice OC. Enable, then disable, then five more buckets of pure decay.
+    /// @notice O2. Enable, then disable, then five more buckets of pure decay.
     ///         The stream-ordered indexer is exact across BOTH transitions.
-    function test_OC_bothTransitionsAreExactInStreamOrder() public {
+    function test_O2_bothTransitionsAreExactInStreamOrder() public {
         (
             uint256 _id,
             Vm.Log[] memory _enableLogs,
@@ -346,10 +346,10 @@ contract FlagEventOrderTest is LockedCurveTestBase {
         assertEq(_derived, _truth, "E-ORDER: both transitions must reconstruct exactly in stream order");
     }
 
-    /// @notice OD. THE CONTROL for OC. Both flag logs moved after their
+    /// @notice O2C. THE CONTROL for O2. Both flag logs moved after their
     ///         checkpoints: the indexer now believes the position is still flat
     ///         at the old R and OVER-reports.
-    function test_OD_bothTransitionsAreWrongWhenTheFlagsTrail() public {
+    function test_O2C_bothTransitionsAreWrongWhenTheFlagsTrail() public {
         (
             uint256 _id,
             Vm.Log[] memory _enableLogs,
@@ -370,7 +370,7 @@ contract FlagEventOrderTest is LockedCurveTestBase {
         emit log_named_uint("stream-derived          ", _derived);
         uint256 _bps = ((_derived - _truth) * 10_000) / _truth;
         emit log_named_uint("over-report bps         ", _bps);
-        assertGt(_derived, _truth, "the flag-trailing stream must over-report; if it does not, OC proves nothing");
+        assertGt(_derived, _truth, "the flag-trailing stream must over-report; if it does not, O2 proves nothing");
         assertGt(_bps, 0, "vacuity: the mis-derivation is below one basis point");
     }
 }

@@ -122,7 +122,7 @@ contract EndAutoRelockConditionalGuardsTest is AutoRelockTestBase {
         assertFalse(
             ok,
             "leg 2: enableAutoRelock NO LONGER REFUSES N == 1. `force_` in "
-            "`_endAutoRelock` is LOAD-BEARING again -- restore a directed test for it."
+            "`_endAutoRelock` is LOAD-BEARING -- add a directed test for it."
         );
         assertEq(
             bytes4(ret),

@@ -177,7 +177,7 @@ contract CheckpointCatchupLimitTest is LockedCurveTestBase {
     }
 
     /// @notice A 299-bucket catch-up (below the limit) leaves the head current. The
-    ///         fingerprint of every global Point is logged for comparison only.
+    ///         fingerprint of every global Point is logged; it is not asserted.
     function test_catchupBelowLimit_leavesHeadCurrent() public {
         _createCohort();
         vm.warp(block.timestamp + 299 * SIX_DAYS);

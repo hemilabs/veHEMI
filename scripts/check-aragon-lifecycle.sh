@@ -82,7 +82,7 @@ BUILDS=$(echo "$BUILDS_RAW" | awk '{print $1}')
 [ -n "$BUILDS" ] && [ "$BUILDS" -ge 4 ] || fail "PluginRepo buildCount(1)=$BUILDS at block $FORK_BLOCK; need >= 4"
 echo "ARAGON-LIFECYCLE  chain 1 (Ethereum mainnet), fork block $FORK_BLOCK, DAOFactory code ${#CODE} hex chars, buildCount(1)=$BUILDS"
 
-# ---- the stale-artifact rule: BUILD before a filtered run -----------------
+# ---- build first: a filtered run must not pick up stale artifacts ---------
 forge build >/dev/null 2>&1 || fail "forge build failed"
 
 # ---- Guard 3: the selection must be non-empty -----------------------------

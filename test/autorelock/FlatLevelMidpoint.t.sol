@@ -255,7 +255,7 @@ contract FlatLevelMidpointTest is LockedCurveTestBase {
         (, uint256 locked_, , uint256 transferable) = veHemi.supplyBreakdown();
         uint256 mid = g + HALF_BUCKET;
         uint256 t = block.timestamp;
-        // The design's signed prediction, from the test's own clock:
+        // The L2 banner's signed closed form, from the test's own clock:
         //     lockedSubcurve - totalSupply == sumSlope * (g + SIX_DAYS/2 - t)
         // rendered without signed arithmetic by adding the same offset to both
         // sides, so ONE assertion covers both signs and no branch can skip it.

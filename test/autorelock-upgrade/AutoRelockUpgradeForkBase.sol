@@ -26,14 +26,14 @@ interface IForkERC20 {
  * Fork-only: skips without HEMI_RPC_URL. Forks at AUTORELOCK_TEST_FORK_BLOCK
  * (digits only; default 5,524,738) and logs the block it forked. Skips unless
  * the VVD proxy still points at the deployed implementation. setUp also asserts
- * the three on-chain premises the design rests on, as deploy/08's pre-flight 5b
- * checks them: slot 101 is 0 or an hour boundary at or before the next boundary
- * (a window word left by an earlier window-arming forward, then a rollback; the
- * window-arming leg overwrites it), EIP-1967 admin == ProxyAdmin, and
- * Initializable `_initialized == 1`. Over a non-zero window word the plain-leg
- * bodies (`_upgradeBothPlain`) skip: they pin the fallback from W == 0, and over
- * a past boundary a plain leg dates writes immediately instead (deploy/08 never
- * queues a plain VVD leg).
+ * the three on-chain premises the upgrade-hour window rests on, as deploy/08's
+ * pre-flight 5b checks them: slot 101 is 0 or an hour boundary at or before the
+ * next boundary (a window word left by an earlier window-arming forward, then a
+ * rollback; the window-arming leg overwrites it), EIP-1967 admin == ProxyAdmin,
+ * and Initializable `_initialized == 1`. Over a non-zero window word the
+ * plain-leg bodies (`_upgradeBothPlain`) skip: they pin the fallback from
+ * W == 0, and over a past boundary a plain leg dates writes immediately instead
+ * (deploy/08 never queues a plain VVD leg).
  */
 abstract contract AutoRelockUpgradeForkBase is Test {
     address constant VEHEMI_PROXY = 0x371d3718D5b7F75EAb050FAe6Da7DF3092031c89;
@@ -69,14 +69,6 @@ abstract contract AutoRelockUpgradeForkBase is Test {
             vm.skip(true);
             return;
         }
-        // Earlier names of the fork-block and scan variables are refused, not
-        // ignored: a value set under one of them would otherwise select the
-        // default silently.
-        require(!vm.envExists("R31_FORK_BLOCK"), "R31_FORK_BLOCK is set (even empty) and not read: unset it and use AUTORELOCK_TEST_FORK_BLOCK");
-        require(
-            !vm.envExists("R29_SCAN_LO") && !vm.envExists("R29_SCAN_HI"),
-            "R29_SCAN_LO/HI are set (even empty) and not read: unset them and use AUTORELOCK_FORK_SCAN_LO/HI"
-        );
         // Digits only: an empty or unset variable selects the default fork block,
         // anything else must parse (a comma-formatted block reverts here). The
         // block is logged so a rehearsal can check it ran at the signing block.

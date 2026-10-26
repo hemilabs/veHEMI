@@ -4,7 +4,7 @@ pragma solidity ^0.8.29;
 import "./LockedCurveTestBase.sol";
 
 /// @title VoteBlackoutTest
-/// @notice The vote-blackout attacks are closed. Delegation writes are dated
+/// @notice No vote-blackout attack succeeds: delegation writes are dated
 ///         `block.timestamp + 1`, so after an owner's own weight write, a
 ///         permissionless stale retire, or a write on an attacker's own
 ///         position delegated to the victim's delegatee, the delegatee never
@@ -257,13 +257,13 @@ contract VoteBlackoutTest is LockedCurveTestBase {
     }
 
     // =====================================================================
-    // R6 -- NO ACTION SECOND IN THE HOUR IS CAUGHT BY `boundary - 1`.
+    // R5 -- NO ACTION SECOND IN THE HOUR IS CAUGHT BY `boundary - 1`.
     //   For action seconds sampled every 60 s across a whole hour bucket,
     //   plus both edges (3598, 3599): the owner tops up by 1 wei, and the
     //   delegatee's votes at `boundary - 1` are at least what they would be
     //   had nobody acted (a `vm.snapshotState` counterfactual).
     // =====================================================================
-    function test_R6_oneWeiTopUpAtSampledSecondsNeverLowersVotesAtBoundaryMinusOne() public {
+    function test_R5_oneWeiTopUpAtSampledSecondsNeverLowersVotesAtBoundaryMinusOne() public {
         vm.warp(((block.timestamp / SIX_DAYS) + 2) * SIX_DAYS + 1);
         uint256 id = _mk(alice, 500 ether, 40 * SIX_DAYS);
         vm.prank(alice); delegation.delegate(id, DEL_A);
@@ -293,18 +293,18 @@ contract VoteBlackoutTest is LockedCurveTestBase {
         vm.warp(s_);
         uint256 v = delegation.getVotes(DEL_A);
         vm.revertToState(snap);
-        assertGe(v, untouched_, string.concat("R6: a top-up at offset ", vm.toString(offset_), " lowered DEL_A at boundary-1"));
+        assertGe(v, untouched_, string.concat("R5: a top-up at offset ", vm.toString(offset_), " lowered DEL_A at boundary-1"));
     }
 
     // =====================================================================
-    // R7 -- THE BUCKET-EDGE INSTANT IS NOT A BLACKOUT INSTANT.
+    // R6 -- THE BUCKET-EDGE INSTANT IS NOT A BLACKOUT INSTANT.
     //   The last `hourBoundary - 1` before a SIX_DAYS boundary is public
     //   (both grids are anchored at unix 0). With an attacker's flat
     //   position in play, the victim's owner tops up inside that hour; the
     //   victim's delegatee must still seal exactly the victim's escrow at
     //   that instant.
     // =====================================================================
-    function test_R7_bucketEdgeInstantSealsVictimEscrow() public {
+    function test_R6_bucketEdgeInstantSealsVictimEscrow() public {
         vm.warp(((block.timestamp / SIX_DAYS) + 2) * SIX_DAYS + 1);
 
         uint256 idA = _mk(alice, 500 ether, 40 * SIX_DAYS);
@@ -329,16 +329,16 @@ contract VoteBlackoutTest is LockedCurveTestBase {
         uint256 escrowAtS    = veHemi.balanceOfNFTAt(idA, S);
 
         assertGt(escrowAtS, 0, "premise: the victim holds escrow at S");
-        assertEq(sealedVictim, escrowAtS, "R7: the victim's delegatee does not seal the victim's escrow at S");
+        assertEq(sealedVictim, escrowAtS, "R6: the victim's delegatee does not seal the victim's escrow at S");
         assertGt(delegation.getPastVotes(MALLORY, S), 0, "premise: the attacker's flat position counts at S");
     }
 
     // =====================================================================
-    // R8 -- AN ATTACKER'S OWN DUST POSITION, DELEGATED TO THE VICTIM'S
+    // R7 -- AN ATTACKER'S OWN DUST POSITION, DELEGATED TO THE VICTIM'S
     //       DELEGATEE. Every call is gate-legal (MALLORY touches only her own
     //       token); retiring her contribution must not zero DEL_A.
     // =====================================================================
-    function test_R8_ownPositionOnSharedDelegateeCannotZeroIt() public {
+    function test_R7_ownPositionOnSharedDelegateeCannotZeroIt() public {
         vm.warp(((block.timestamp / SIX_DAYS) + 2) * SIX_DAYS + 1);
 
         uint256 idA = _mk(alice, 500 ether, 40 * SIX_DAYS);
@@ -354,15 +354,15 @@ contract VoteBlackoutTest is LockedCurveTestBase {
         _ownerTopUp(MALLORY, idM, 1);
 
         (uint256 zeroVoteSeconds, ) = _sweep(DEL_A, T + 1, _nextHourBoundary(T));
-        assertEq(zeroVoteSeconds, 0, "R8: an attacker's own dust position zeroed the victim's delegatee");
+        assertEq(zeroVoteSeconds, 0, "R7: an attacker's own dust position zeroed the victim's delegatee");
     }
 
     // =====================================================================
-    // R9 -- THE TWO PERMISSIONLESS PATHS INTO A VICTIM'S DELEGATEE:
+    // R8 -- THE TWO PERMISSIONLESS PATHS INTO A VICTIM'S DELEGATEE:
     //       `createLockFor` (mint FOR the victim) and an unsolicited
     //       `transferFrom` INTO the victim. Neither opens a zero-vote second.
     // =====================================================================
-    function test_R9_createLockForAndUnsolicitedGiftOpenNoZeroVoteSecond() public {
+    function test_R8_createLockForAndUnsolicitedGiftOpenNoZeroVoteSecond() public {
         vm.warp(((block.timestamp / SIX_DAYS) + 2) * SIX_DAYS + 1);
         uint256 idA = _mk(alice, 500 ether, 40 * SIX_DAYS);
         vm.prank(alice); delegation.delegate(idA, DEL_A);
@@ -389,7 +389,7 @@ contract VoteBlackoutTest is LockedCurveTestBase {
         vm.prank(MALLORY); veHemi.transferFrom(MALLORY, alice, idM);
         (uint256 zeroVoteSecondsAfterGift, ) = _sweep(DEL_A, T3 + 1, _nextHourBoundary(T3));
 
-        assertEq(zeroVoteSecondsAfterMint, 0, "R9: permissionless createLockFor zeroed a third party's delegatee");
-        assertEq(zeroVoteSecondsAfterGift, 0, "R9: an unsolicited NFT gift zeroed the recipient's delegatee");
+        assertEq(zeroVoteSecondsAfterMint, 0, "R8: permissionless createLockFor zeroed a third party's delegatee");
+        assertEq(zeroVoteSecondsAfterGift, 0, "R8: an unsolicited NFT gift zeroed the recipient's delegatee");
     }
 }
