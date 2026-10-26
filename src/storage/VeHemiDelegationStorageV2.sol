@@ -8,8 +8,9 @@ import {VeHemiDelegationStorageV1} from "./VeHemiDelegationStorageV1.sol";
  * @notice Storage extension for VeHemiVoteDelegation V2 (Aragon adapter support).
  *
  * @dev Chain-inherits VeHemiDelegationStorageV1 to enforce V1-before-V2 slot
- *      ordering at the inheritance level. `VeHemiVoteDelegation` inherits only
- *      this contract, which transitively includes V1. This mirrors the pattern
+ *      ordering at the inheritance level. `VeHemiVoteDelegation` inherits the
+ *      most-derived link of this chain, `VeHemiDelegationStorageV4`, which
+ *      transitively includes V3, V2 and V1. This mirrors the pattern
  *      already used by VeHemi/VeHemiStorageV1/V2 in this repo.
  *
  *      V2 additions (Aragon adapter support):

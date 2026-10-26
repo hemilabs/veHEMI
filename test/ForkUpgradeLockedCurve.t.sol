@@ -97,8 +97,8 @@ contract ForkUpgradeLockedCurveTest is Test {
         return newImpl;
     }
 
-    /// @dev Upgrade the VeHemiVoteDelegation proxy to the post-fix
-    ///      implementation. Used by tests that exercise the cleanup carve-out
+    /// @dev Upgrade the VeHemiVoteDelegation proxy to the implementation
+    ///      under test. Used by tests that exercise the cleanup carve-out
     ///      (forfeit-near-expiry) or the new setAutoDelegate setter.
     function _upgradeDelegationProxy() internal returns (VeHemiVoteDelegation) {
         VeHemiVoteDelegation newImpl = new VeHemiVoteDelegation(VEHEMI_PROXY);
@@ -2063,7 +2063,7 @@ contract ForkUpgradeLockedCurveTest is Test {
         uint256 tokenId = veHemi.createLock(1000 ether, MAX_TIME / 2);
         vm.stopPrank();
 
-        // createLock auto-delegates to msg.sender; delegation takes effect at next day boundary
+        // createLock auto-delegates to msg.sender; the delegation takes effect at the next second
         _warpAndRoll(1 days + 1);
         veHemi.checkpoint();
 
@@ -2084,12 +2084,12 @@ contract ForkUpgradeLockedCurveTest is Test {
     }
 
     // ═════════════════════════════════════════════════════════════════════
-    //  42. NON-OWNER increaseAmount ON FORFEITABLE POSITION
+    //  42. increaseAmount ON A FORFEITABLE POSITION IS OWNER-ONLY
     // ═════════════════════════════════════════════════════════════════════
 
-    /// @notice increaseAmount is permissionless — anyone can add tokens to any position.
-    ///         Verify this works correctly for forfeitable positions and updates both curves.
-    function testNonOwnerIncreaseAmountOnForfeitablePosition() public onlyFork {
+    /// @notice increaseAmount is owner-only: a non-owner is refused with NotOwner. Verify the
+    ///         owner's top-up works correctly for forfeitable positions and updates both curves.
+    function testIncreaseAmountOnForfeitablePositionIsOwnerOnly() public onlyFork {
         _upgradeAndSeed();
 
         // Create a forfeitable position owned by 0xCAFE
@@ -2102,10 +2102,18 @@ contract ForkUpgradeLockedCurveTest is Test {
         uint256 lockedBefore = veHemi.nonTransferableTotalVeHemiSupply();
         uint256 forfeitableBefore = veHemi.forfeitableTotalVeHemiSupply();
 
-        // A DIFFERENT address (not the owner) increases the amount
-        address donator = address(0xD000);
-        deal(HEMI_TOKEN, donator, 50 ether);
-        vm.startPrank(donator);
+        // A DIFFERENT address (not the owner) is refused
+        address nonOwner = address(0xD000);
+        deal(HEMI_TOKEN, nonOwner, 50 ether);
+        vm.startPrank(nonOwner);
+        hemiToken.approve(address(veHemi), 50 ether);
+        vm.expectRevert(VeHemi.NotOwner.selector);
+        veHemi.increaseAmount(tokenId, 50 ether);
+        vm.stopPrank();
+
+        // The owner increases the amount
+        deal(HEMI_TOKEN, address(0xCAFE), 50 ether);
+        vm.startPrank(address(0xCAFE));
         hemiToken.approve(address(veHemi), 50 ether);
         veHemi.increaseAmount(tokenId, 50 ether);
         vm.stopPrank();
@@ -2298,8 +2306,8 @@ contract ForkUpgradeLockedCurveTest is Test {
         }
 
         // Seed should succeed — the expired position is silently skipped
-        // by the on-chain scan (the `idsWithExpired` array is a legacy
-        // artifact of the previous single-shot API and is unused here).
+        // by the on-chain scan (the `idsWithExpired` array is not passed
+        // to the contract: `seedBatch` takes no id list).
         vm.startPrank(GNOSIS_SAFE);
         veHemi.markSeedingStarted();
         veHemi.seedBatch(type(uint256).max);
@@ -2321,7 +2329,7 @@ contract ForkUpgradeLockedCurveTest is Test {
     //  47. LOCKED-ONLY MUTATION DOES NOT CORRUPT FORFEITABLE CURVE
     // ═════════════════════════════════════════════════════════════════════
 
-    /// @notice Closes mutation testing gap M2: increaseAmount/increaseUnlockTime on a
+    /// @notice increaseAmount/increaseUnlockTime on a
     ///         locked-only (non-forfeitable) position must NOT write to forfeitableSlopeChanges.
     ///         Verified by warping past the position's end and checking the forfeitable curve
     ///         is still exactly 0.
@@ -2343,7 +2351,9 @@ contract ForkUpgradeLockedCurveTest is Test {
         assertEq(veHemi.forfeitableTotalVeHemiSupply(), 0, "Forfeitable should be 0 before mutation");
 
         // increaseAmount on the locked-only position (triggers _scheduleSlopeChanges with curveFlags=1)
-        vm.startPrank(GNOSIS_SAFE);
+        deal(HEMI_TOKEN, address(0xBBBB), 100 ether);
+        vm.startPrank(address(0xBBBB));
+        hemiToken.approve(address(veHemi), 100 ether);
         veHemi.increaseAmount(tokenId, 100 ether);
         vm.stopPrank();
 
@@ -2816,10 +2826,10 @@ contract ForkUpgradeLockedCurveTest is Test {
     }
 
     // ═════════════════════════════════════════════════════════════════════
-    //  55. TRANSFER AFTER SUBCURVE EXIT (MEDIUM GAP #1)
+    //  55. TRANSFER AFTER SUBCURVE EXIT
     // ═════════════════════════════════════════════════════════════════════
 
-    /// @notice The #1 missing test: execute transferFrom on a position that has exited
+    /// @notice Execute transferFrom on a position that has exited
     ///         subcurves (post-TA transition). Verify supply unchanged via independent
     ///         shadow, new owner's user point is correctly written, and new owner can
     ///         withdraw and receive HEMI.
@@ -2847,7 +2857,7 @@ contract ForkUpgradeLockedCurveTest is Test {
 
         Test55Snapshot memory s;
         s.ta = veHemi.transferableAfter(tokenId);
-        // Verify totalLocked delta on create (R9)
+        // Verify totalLocked delta on create
         assertEq(veHemi.totalLocked(), preTotalLocked + 100 ether, "totalLocked +100 on create");
 
         vm.prank(address(0xAAAA));
@@ -2921,7 +2931,7 @@ contract ForkUpgradeLockedCurveTest is Test {
         assertEq(veHemi.forfeitableTotalVeHemiSupply(), s.seedForfeitableAtFuture, "Forfeitable unchanged");
         assertEq(veHemi.balanceOfNFT(tokenId), s.expectedPositionBias, "Position bias unchanged");
 
-        // N-11.3: new owner's user point was correctly written
+        // New owner's user point was correctly written
         // Transfer after warp always writes a new epoch (timestamps differ)
         uint256 epochAfter = veHemi.userPointEpoch(tokenId);
         assertEq(epochAfter, epochBefore + 1, "User point epoch advanced by 1");
@@ -2962,7 +2972,7 @@ contract ForkUpgradeLockedCurveTest is Test {
     }
 
     // ═════════════════════════════════════════════════════════════════════
-    //  56. EXTENDED FORFEITABLE FULL LIFECYCLE (MEDIUM GAP #2)
+    //  56. EXTENDED FORFEITABLE FULL LIFECYCLE
     // ═════════════════════════════════════════════════════════════════════
 
     /// @notice Full lifecycle: create forfeitable → extend → TA passes (subcurve exit) →
@@ -2979,7 +2989,7 @@ contract ForkUpgradeLockedCurveTest is Test {
         uint256 preForfeitable = veHemi.forfeitableTotalVeHemiSupply();
         uint256 preTotalLocked = veHemi.totalLocked();
 
-        // R1-5: Anchor snapshot — mainnet has zero forfeitable positions
+        // Anchor snapshot — mainnet has zero forfeitable positions
         assertEq(preForfeitable, 0, "mainnet seed forfeitable anchor = 0");
 
         // Create forfeitable with short duration
@@ -3052,7 +3062,7 @@ contract ForkUpgradeLockedCurveTest is Test {
         _warpAndRoll(phase1Time - block.timestamp);
         veHemi.checkpoint();
 
-        // L-9.2: BOTH subcurves drop to seed-only after TA
+        // BOTH subcurves drop to seed-only after TA
         // (the at-call already accounts for our position which contributes 0)
         assertEq(
             veHemi.forfeitableTotalVeHemiSupply(),
@@ -3101,7 +3111,7 @@ contract ForkUpgradeLockedCurveTest is Test {
         vm.prank(address(0xAAAA));
         veHemi.withdraw(tokenId);
 
-        // L-9.1: full cleanup verification
+        // Full cleanup verification
         assertEq(veHemi.getLockedBalance(tokenId).amount, 0, "amount cleared");
         assertEq(veHemi.getLockedBalance(tokenId).end, 0, "end cleared");
         assertEq(veHemi.transferableAfter(tokenId), 0, "transferableAfter cleared");
@@ -3122,7 +3132,7 @@ contract ForkUpgradeLockedCurveTest is Test {
     }
 
     // ═════════════════════════════════════════════════════════════════════
-    //  57. EXTENSION SUPPLY SEMANTICS FOR LOCKED-ONLY (MEDIUM GAP #3)
+    //  57. EXTENSION SUPPLY SEMANTICS FOR LOCKED-ONLY
     // ═════════════════════════════════════════════════════════════════════
 
     /// @notice Verify that extending a locked-only position increases global but does NOT
@@ -3144,7 +3154,7 @@ contract ForkUpgradeLockedCurveTest is Test {
         uint256 tokenId = veHemi.createLockFor(100 ether, MAX_TIME / 4, address(0xAAAA), false, false);
         vm.stopPrank();
 
-        // R9: totalLocked delta on create
+        // totalLocked delta on create
         assertEq(veHemi.totalLocked(), preTotalLocked + 100 ether, "totalLocked +100 on create");
 
         uint256 t0 = block.timestamp;
@@ -3171,7 +3181,7 @@ contract ForkUpgradeLockedCurveTest is Test {
             int128(0),
             "forfeitableSlopeChanges[TA] = 0 (locked-only)"
         );
-        // Locked slope change at TA: -slope (R6-M5 quantitative)
+        // Locked slope change at TA: -slope (exact value)
         assertEq(
             veHemi.lockedSlopeChanges(ta),
             expectedSlopeChange,
@@ -3205,7 +3215,7 @@ contract ForkUpgradeLockedCurveTest is Test {
         // transferableAfter stayed the same
         assertEq(veHemi.transferableAfter(tokenId), ta, "TA should not change");
 
-        // Locked slope change at TA UNCHANGED (R6-M5 + R8-M1 exact value)
+        // Locked slope change at TA UNCHANGED (exact value)
         assertEq(
             veHemi.lockedSlopeChanges(ta),
             expectedSlopeChange,
@@ -3218,7 +3228,7 @@ contract ForkUpgradeLockedCurveTest is Test {
             "No lockedSlopeChanges at newEnd"
         );
 
-        // R6-M2: Global slope change cancellation pattern.
+        // Global slope change cancellation pattern.
         // Prior to extension, lock.end == ta, so global slopeChanges[ta] = -slope.
         // After extension, the cancellation depends on whether ta is now an "active"
         // global endpoint for any other position. Since the extension moved this
@@ -3266,7 +3276,7 @@ contract ForkUpgradeLockedCurveTest is Test {
     }
 
     // ═════════════════════════════════════════════════════════════════════
-    //  58. MULTIPLE EXTENSIONS + INCREASEAMOUNT COMBO (MEDIUM GAP #4)
+    //  58. MULTIPLE EXTENSIONS + INCREASEAMOUNT COMBO
     // ═════════════════════════════════════════════════════════════════════
 
     struct Test58Snapshot {
@@ -3297,9 +3307,9 @@ contract ForkUpgradeLockedCurveTest is Test {
         snap.preTotal = veHemi.totalVeHemiSupply();
         snap.preLocked = veHemi.nonTransferableTotalVeHemiSupply();
         snap.preForfeitable = veHemi.forfeitableTotalVeHemiSupply();
-        uint256 preTotalLocked58 = veHemi.totalLocked();
+        uint256 totalLockedBeforeCreate = veHemi.totalLocked();
 
-        // R1-5: Anchor snapshot — mainnet has zero forfeitable positions
+        // Anchor snapshot — mainnet has zero forfeitable positions
         assertEq(snap.preForfeitable, 0, "mainnet seed forfeitable anchor = 0");
 
         // Create a forfeitable position with MAX_TIME/4 duration
@@ -3309,10 +3319,10 @@ contract ForkUpgradeLockedCurveTest is Test {
         uint256 tokenId = veHemi.createLockFor(100 ether, MAX_TIME / 4, address(0xAAAA), false, true);
         vm.stopPrank();
 
-        // R9: totalLocked delta on create
-        assertEq(veHemi.totalLocked(), preTotalLocked58 + 100 ether, "totalLocked +100 on create");
+        // totalLocked delta on create
+        assertEq(veHemi.totalLocked(), totalLockedBeforeCreate + 100 ether, "totalLocked +100 on create");
 
-        // Capture timestamp ONCE (R6-H4) — every expected value below uses this exact value.
+        // Capture timestamp ONCE — every expected value below uses this exact value.
         snap.t0 = block.timestamp;
         snap.ta = veHemi.transferableAfter(tokenId);
         // INDEPENDENT slope computation (not derived from any contract helper)
@@ -3333,7 +3343,7 @@ contract ForkUpgradeLockedCurveTest is Test {
     }
 
     function _verifyTest58CreatePhase(uint256 tokenId, Test58Snapshot memory snap) internal view {
-        // INDEPENDENT subcurve bias formula (R2-M1: explicit, not _computeBias coincidence)
+        // INDEPENDENT subcurve bias formula (explicit, not _computeBias coincidence)
         uint256 expectedForfCreate = snap.slope * (snap.ta - snap.t0);
 
         assertEq(
@@ -3352,7 +3362,7 @@ contract ForkUpgradeLockedCurveTest is Test {
             "Global delta matches slope*(end-t0) at creation"
         );
 
-        // R6-M5 quantitative slope changes
+        // Exact slope changes
         int128 expectedSlopeChange = -int128(int256(snap.slope));
         assertEq(veHemi.lockedSlopeChanges(snap.ta), expectedSlopeChange, "lockedSlopeChanges[TA] = -slope");
         assertEq(veHemi.forfeitableSlopeChanges(snap.ta), expectedSlopeChange, "forfeitableSlopeChanges[TA] = -slope");
@@ -3379,7 +3389,7 @@ contract ForkUpgradeLockedCurveTest is Test {
             "Global delta = slope*(endExt1-t0) after ext 1"
         );
 
-        // R6-M2: global slopeChanges[ta] cancelled, new at endExt1
+        // Global slopeChanges[ta] cancelled, new at endExt1
         assertEq(veHemi.slopeChanges(snap.ta), int128(0), "Global slopeChanges[ta] cancelled after ext 1");
         assertEq(veHemi.slopeChanges(endExt1), expectedSlopeChange, "Global slopeChanges[endExt1] = -slope after ext 1");
         // Subcurve slope change at TA UNCHANGED
@@ -3398,7 +3408,7 @@ contract ForkUpgradeLockedCurveTest is Test {
 
         int128 expectedSlopeChange = -int128(int256(snap.slope));
 
-        // R6-M2: global slopeChange at endExt1 cleared, new at endExt2
+        // Global slopeChange at endExt1 cleared, new at endExt2
         assertEq(veHemi.slopeChanges(endExt1), int128(0), "Global slopeChanges[endExt1] cancelled after ext 2");
         assertEq(veHemi.slopeChanges(endExt2), expectedSlopeChange, "Global slopeChanges[endExt2] = -slope after ext 2");
 
@@ -3425,7 +3435,7 @@ contract ForkUpgradeLockedCurveTest is Test {
         veHemi.increaseAmount(tokenId, 100 ether);
         vm.stopPrank();
 
-        // R9: user's HEMI balance delta exactly -100 ether
+        // User's HEMI balance delta exactly -100 ether
         assertEq(
             hemiToken.balanceOf(address(0xAAAA)),
             userHemiBefore - 100 ether,
@@ -3453,7 +3463,7 @@ contract ForkUpgradeLockedCurveTest is Test {
             "Global delta = newSlope*(endExt2-t0) after increaseAmount"
         );
 
-        // L-9.5/R4-M4: lockedSlopeChanges[TA] updated to -newSlope
+        // lockedSlopeChanges[TA] updated to -newSlope
         int128 expectedNewSlopeChange = -int128(int256(newSlope));
         assertEq(veHemi.lockedSlopeChanges(snap.ta), expectedNewSlopeChange, "lockedSlopeChanges[TA] = -newSlope");
         assertEq(veHemi.forfeitableSlopeChanges(snap.ta), expectedNewSlopeChange, "forfeitableSlopeChanges[TA] = -newSlope");
@@ -3496,7 +3506,7 @@ contract ForkUpgradeLockedCurveTest is Test {
         uint256 newSlope,
         Test58Snapshot memory snap
     ) internal {
-        // R5-M5: warp past TA, position must exit subcurves
+        // Warp past TA, position must exit subcurves
         // Capture seed-projected baselines at the future timestamp BEFORE warping
         uint256 futureTime = snap.ta + 1;
         uint256 seedLockedAtFuture = veHemi.nonTransferableTotalVeHemiSupplyAt(futureTime);
@@ -3542,7 +3552,7 @@ contract ForkUpgradeLockedCurveTest is Test {
         vm.prank(address(0xAAAA));
         veHemi.withdraw(tokenId);
 
-        // FULL cleanup verification (L-9.3, L-9.5, N-11.5)
+        // FULL cleanup verification
         assertEq(veHemi.getLockedBalance(tokenId).amount, 0, "amount cleared");
         assertEq(veHemi.getLockedBalance(tokenId).end, 0, "end cleared");
         assertEq(veHemi.transferableAfter(tokenId), 0, "transferableAfter cleared");
@@ -3561,7 +3571,7 @@ contract ForkUpgradeLockedCurveTest is Test {
     }
 
     // ═════════════════════════════════════════════════════════════════════
-    //  59. LOW GAPS: FORFEIT REVERT FOR EXTENDED POSITION
+    //  59. FORFEIT REVERT FOR EXTENDED POSITION + RELATED CASES
     // ═════════════════════════════════════════════════════════════════════
 
     /// @notice Forfeit revert when TA < now < lock.end (extended position past forfeit window).
@@ -3585,11 +3595,11 @@ contract ForkUpgradeLockedCurveTest is Test {
         uint256 lockEnd = veHemi.getLockedBalance(tokenId).end;
         assertGt(block.timestamp, ta, "Past TA");
         assertLt(block.timestamp, lockEnd, "Before lock.end");
-        // R1-2: exact bias instead of assertGt(x, 0)
-        uint256 slope59a = uint256(100 ether) / MAX_TIME;
+        // Exact bias instead of assertGt(x, 0)
+        uint256 expectedSlope = uint256(100 ether) / MAX_TIME;
         assertEq(
             veHemi.balanceOfNFT(tokenId),
-            slope59a * (lockEnd - block.timestamp),
+            expectedSlope * (lockEnd - block.timestamp),
             "Position bias = slope*(lockEnd-now)"
         );
 
@@ -3673,7 +3683,7 @@ contract ForkUpgradeLockedCurveTest is Test {
             "Forfeitable back to seed-only after forfeit"
         );
 
-        // R4-M5: FULL cleanup of forfeited token's storage
+        // FULL cleanup of forfeited token's storage
         assertEq(veHemi.getLockedBalance(tForf).amount, 0, "tForf amount cleared");
         assertEq(veHemi.getLockedBalance(tForf).end, 0, "tForf end cleared");
         assertEq(veHemi.transferableAfter(tForf), 0, "tForf transferableAfter cleared");
@@ -3695,7 +3705,7 @@ contract ForkUpgradeLockedCurveTest is Test {
             "totalLocked = preTotalLocked + locked + xfer (forfeited removed)"
         );
 
-        // Other tokens still exist with fully intact storage (R11: re-verify all fields)
+        // Other tokens still exist with fully intact storage (re-verify all fields)
         assertEq(veHemi.ownerOf(tLocked), address(0xAAAA), "tLocked owner intact");
         assertEq(veHemi.ownerOf(tXfer), address(0xCCCC), "tXfer owner intact");
         assertEq(veHemi.getLockedBalance(tLocked).amount, int128(int256(uint256(100 ether))), "tLocked amount intact");
@@ -3754,7 +3764,7 @@ contract ForkUpgradeLockedCurveTest is Test {
         );
         // Verify t1 and t2 have DIFFERENT TAs (proves recovery isn't aliasing)
         assertGt(ta2, ta1, "t2 TA > t1 TA");
-        // R4-1: forfeitable flag is retained until withdraw/forfeit (by design — not cleaned on subcurve exit)
+        // Forfeitable flag is retained until withdraw/forfeit (by design — not cleaned on subcurve exit)
         assertEq(veHemi.forfeitable(t1), true, "t1 forfeitable flag retained until withdraw/forfeit");
 
         // forfeitableSlopeChanges[ta2] is set to -slope2
@@ -3776,7 +3786,7 @@ contract ForkUpgradeLockedCurveTest is Test {
 
         uint256 preForfeitable = veHemi.forfeitableTotalVeHemiSupply();
         uint256 preTotal = veHemi.totalVeHemiSupply();
-        uint256 preTotalLocked59e = veHemi.totalLocked();
+        uint256 totalLockedBeforeCreate = veHemi.totalLocked();
 
         deal(HEMI_TOKEN, GNOSIS_SAFE, 100 ether);
         vm.startPrank(GNOSIS_SAFE);
@@ -3784,8 +3794,8 @@ contract ForkUpgradeLockedCurveTest is Test {
         uint256 tokenId = veHemi.createLockFor(100 ether, 2 * SIX_DAYS, address(0xAAAA), false, true);
         vm.stopPrank();
 
-        // R9: totalLocked delta on create
-        assertEq(veHemi.totalLocked(), preTotalLocked59e + 100 ether, "totalLocked +100 on create");
+        // totalLocked delta on create
+        assertEq(veHemi.totalLocked(), totalLockedBeforeCreate + 100 ether, "totalLocked +100 on create");
 
         uint256 t0 = block.timestamp;
         uint256 ta = veHemi.transferableAfter(tokenId);
@@ -3836,10 +3846,10 @@ contract ForkUpgradeLockedCurveTest is Test {
     }
 
     // ═════════════════════════════════════════════════════════════════════
-    //  60. NEW BOUNDARY/EDGE-CASE TESTS (R3-M1, R3-M2, R3-M3, N-11.4)
+    //  60. BOUNDARY/EDGE-CASE TESTS
     // ═════════════════════════════════════════════════════════════════════
 
-    /// @notice R3-M1: Transfer at the EXACT transferableAfter timestamp (boundary),
+    /// @notice Transfer at the EXACT transferableAfter timestamp (boundary),
     ///         not ta+1. The contract uses `<= block.timestamp` so the position
     ///         is transferable at exactly TA.
     function testTransferAtExactTransferableAfter() public onlyFork {
@@ -3871,7 +3881,7 @@ contract ForkUpgradeLockedCurveTest is Test {
         _assertOrdering("After exact-TA transfer");
     }
 
-    /// @notice R3-M2: increaseAmount during the post-TA pre-expiry phase (subcurve exited
+    /// @notice increaseAmount during the post-TA pre-expiry phase (subcurve exited
     ///         but lock still active). Verify that increase only affects global, not subcurves.
     function testIncreaseAmountPostTAOnExtended() public onlyFork {
         _upgradeAndSeed();
@@ -3912,7 +3922,7 @@ contract ForkUpgradeLockedCurveTest is Test {
         veHemi.increaseAmount(tokenId, 100 ether);
         vm.stopPrank();
 
-        // R9: totalLocked delta +100, user HEMI delta -100
+        // totalLocked delta +100, user HEMI delta -100
         assertEq(veHemi.totalLocked(), totalLockedBefore + 100 ether, "totalLocked +100 after increase");
         assertEq(
             hemiToken.balanceOf(address(0xAAAA)),
@@ -3953,7 +3963,7 @@ contract ForkUpgradeLockedCurveTest is Test {
         _assertTokenConservation("After post-TA increaseAmount");
     }
 
-    /// @notice R3-M3: Extending to a new unlock time that rounds to the SAME end as the
+    /// @notice Extending to a new unlock time that rounds to the SAME end as the
     ///         current end must revert with NewLockDurationNotGreater.
     function testExtendToSameUnlockTimeReverts() public onlyFork {
         _upgradeAndSeed();
@@ -3973,7 +3983,7 @@ contract ForkUpgradeLockedCurveTest is Test {
         veHemi.increaseUnlockTime(tokenId, currentDuration);
     }
 
-    /// @notice N-11.4: Positive-path forfeit on a position that has been EXTENDED but
+    /// @notice Positive-path forfeit on a position that has been EXTENDED but
     ///         is still BEFORE its original TA. Forfeit must succeed and clean up.
     function testForfeitOnExtendedPositionBeforeTA() public onlyFork {
         _upgradeAndSeed();
@@ -4063,7 +4073,7 @@ contract ForkUpgradeLockedCurveTest is Test {
     }
 
     // ═════════════════════════════════════════════════════════════════════
-    //  61. INDEPENDENT PER-POSITION SUBCURVE CROSS-CHECK (HIGH R8-11)
+    //  61. INDEPENDENT PER-POSITION SUBCURVE CROSS-CHECK
     // ═════════════════════════════════════════════════════════════════════
 
     /// @notice Breaks the *At view circularity by computing per-position subcurve
@@ -4121,7 +4131,7 @@ contract ForkUpgradeLockedCurveTest is Test {
     }
 
     // ═════════════════════════════════════════════════════════════════════
-    //  62. TWO FORFEITABLE POSITIONS SHARING SAME TA BOUNDARY (MEDIUM R8)
+    //  62. TWO FORFEITABLE POSITIONS SHARING SAME TA BOUNDARY
     // ═════════════════════════════════════════════════════════════════════
 
     /// @notice Two forfeitable positions created in the same block (same rounded TA),
@@ -4213,7 +4223,7 @@ contract ForkUpgradeLockedCurveTest is Test {
     }
 
     // ═════════════════════════════════════════════════════════════════════
-    //  63. EXACT BOUNDARY FORFEIT + WITHDRAW TESTS (MEDIUM R3/R5)
+    //  63. EXACT BOUNDARY FORFEIT + WITHDRAW TESTS
     // ═════════════════════════════════════════════════════════════════════
 
     /// @notice Forfeit at EXACTLY transferableAfter should revert (contract uses >=).
@@ -4342,7 +4352,7 @@ contract ForkUpgradeLockedCurveTest is Test {
     }
 
     // ═════════════════════════════════════════════════════════════════════
-    //  64. APPROVED OPERATOR TRANSFER (MEDIUM R3-4)
+    //  64. APPROVED OPERATOR TRANSFER
     // ═════════════════════════════════════════════════════════════════════
 
     /// @notice Verify transferFrom by an APPROVED operator (not the owner) works correctly
@@ -4383,7 +4393,7 @@ contract ForkUpgradeLockedCurveTest is Test {
     }
 
     // ═════════════════════════════════════════════════════════════════════
-    //  65. CONTINUITY ACROSS SEEDING BOUNDARY (N3-A14 follow-up)
+    //  65. CONTINUITY ACROSS SEEDING BOUNDARY
     // ═════════════════════════════════════════════════════════════════════
 
     /// @notice Verify that `totalVeHemiSupplyAt(t)` and per-position
@@ -4394,9 +4404,8 @@ contract ForkUpgradeLockedCurveTest is Test {
     ///         strictly additive on V1 history — no jump discontinuities
     ///         introduced at the boundary.
     ///
-    ///         This is the test N3-A14 flagged as missing: existing fork
-    ///         tests sample post-seed values but never compare against a
-    ///         pre-seed snapshot at the same timestamps.
+    ///         Each post-seed value is compared against a pre-seed
+    ///         snapshot taken at the same timestamp.
     function testContinuityAcrossSeedingBoundary() public onlyFork {
         _upgradeProxy(); // V2 impl deployed; seeding NOT yet run.
 
@@ -4532,8 +4541,8 @@ contract ForkUpgradeLockedCurveTest is Test {
     ///         real Hemi state: `markSeedingStarted` opens the window at
     ///         block T, an arbitrary keeper drives `seedBatch` across many
     ///         blocks (in small chunks), and an arbitrary caller finalizes
-    ///         once the cursor is complete. The single-block atomicity guard
-    ///         was removed — Hemi mainnet has thousands of non-transferable
+    ///         once the cursor is complete. Seeding is not confined to one
+    ///         block — Hemi mainnet has thousands of non-transferable
     ///         positions, far beyond a single-block budget. The seeded
     ///         totals must match a single-block execution; the latch only
     ///         flips when the cursor reaches `seedingTargetId - 1`.
@@ -4574,19 +4583,19 @@ contract ForkUpgradeLockedCurveTest is Test {
     }
 
     // ═════════════════════════════════════════════════════════════════════
-    //  R2-B7 FORK COVERAGE FOR THE FORFEIT-STALE-DELEGATION FIX
+    //  FORK COVERAGE FOR THE FORFEIT DELEGATION CLEANUP
     //
-    //  These three tests pin the post-upgrade behavior of the forfeit
-    //  cleanup carve-out and its companion changes (transferFrom super-
-    //  before-_delegate ordering) against real Hemi mainnet state. The
+    //  These two tests pin the post-upgrade behavior of the forfeit
+    //  cleanup carve-out and of the transferFrom super-before-_delegate
+    //  ordering against real Hemi mainnet state. The
     //  local DelegationBehavior.t.sol suite already covers the same
     //  properties against synthetic state; the fork tests add confidence
     //  that the proxy upgrade preserves them with the actual deployed
     //  storage layout and live HEMI token.
     // ═════════════════════════════════════════════════════════════════════
 
-    /// @notice Pin the post-fix invariant that forfeiting a position in the
-    ///         buggy `[lockEnd - 1h, lockEnd)` window:
+    /// @notice Pin the invariant that forfeiting a position in the
+    ///         final-hour `[lockEnd - 1h, lockEnd)` window:
     ///         (a) clears `voteDelegation.delegations[id]` to the zero
     ///             struct, and
     ///         (b) does NOT accumulate any state at `address(0)` in either
@@ -4594,10 +4603,9 @@ contract ForkUpgradeLockedCurveTest is Test {
     ///             `expiredDelegations[address(0)][end]` (verified
     ///             indirectly via `getVotes(address(0)) == 0`).
     ///
-    ///         Pre-fix this combination would have left `delegations[id]`
-    ///         stale forever and—via the now-removed
-    ///         `_moveVotingPowerToNewDelegate` path on address(0)—pushed a
-    ///         spurious checkpoint into the zero-address slot.
+    ///         Without the cleanup `delegations[id]` would stay populated
+    ///         after the burn; (b) pins that no write path books weight at
+    ///         `address(0)`.
     function testForkForfeitDoesNotAccumulateAtZeroAddress() public onlyFork {
         _upgradeAndSeed();
         _upgradeDelegationProxy();
@@ -4621,7 +4629,7 @@ contract ForkUpgradeLockedCurveTest is Test {
         uint256 zeroVotesBefore = voteDel.getVotes(address(0));
         assertEq(zeroVotesBefore, 0, "address(0) must hold zero votes pre-forfeit");
 
-        // Warp into the previously-buggy window: lockEnd - 30 minutes is
+        // Warp into the final-hour window: lockEnd - 30 minutes is
         // strictly inside `(lockEnd - 1h, lockEnd)`.
         uint256 lockEnd = veHemi.getLockedBalance(tokenId).end;
         _warpAndRoll(lockEnd - block.timestamp - 30 minutes);
@@ -4642,12 +4650,11 @@ contract ForkUpgradeLockedCurveTest is Test {
         assertEq(voteDel.getVotes(address(0)), 0, "address(0) accumulated votes from forfeit cleanup");
     }
 
-    /// @notice Pin the companion `transferFrom` ordering fix: after the
+    /// @notice Pin the `transferFrom` ordering: after the
     ///         upgrade, the `DelegateChanged` event emitted by VeHemi's
     ///         transferFrom uses `to_` as the owner at adapter-notify time
-    ///         (not the seller). This regression-pins the
-    ///         super-before-_delegate ordering in VeHemi.transferFrom that
-    ///         landed alongside the forfeit-cleanup carve-out.
+    ///         (not the seller). This pins the super-before-_delegate
+    ///         ordering in VeHemi.transferFrom.
     function testForkTransferFromAttributesToNewOwner() public onlyFork {
         _upgradeAndSeed();
         _upgradeDelegationProxy();
@@ -4683,7 +4690,7 @@ contract ForkUpgradeLockedCurveTest is Test {
         // super.transferFrom, `_resolveAutoDelegate(to_)` would still see
         // bob's autoDelegate, but the adapter notify would resolve
         // `ownerOf(tokenId) == alice` (stale) and attribute the change to
-        // alice. The post-fix ordering reverses this.
+        // alice. The super-before-_delegate ordering prevents this.
         assertEq(
             voteDel.delegation(tokenId).delegatee,
             bobAutoTarget,

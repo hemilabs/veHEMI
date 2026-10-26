@@ -187,7 +187,8 @@ contract VeHemiTest is Test {
         vm.expectRevert(VeHemi.NotOwner.selector);
         veHemi.increaseUnlockTime(tokenId, 4 weeks);
 
-        vm.expectRevert(VeHemi.NoExistingLock.selector);
+        // increaseAmount is owner-gated at its head, so a burned id reverts NotOwner.
+        vm.expectRevert(VeHemi.NotOwner.selector);
         veHemi.increaseAmount(tokenId, 2 weeks);
 
         vm.stopPrank();
@@ -238,17 +239,16 @@ contract VeHemiTest is Test {
         assertEq(veHemi.ownerOf(tokenId2), user, "Owner of tokenId2 should be user");
     }
 
-    function testDepositForIncreasesLockAmount() public {
+    function testIncreaseAmountIncreasesLockAmount() public {
         uint256 amount = 10 ether;
         uint256 extra = 15 ether;
 
         // User creates a lock
         (uint256 tokenId, , ) = createLock(user, amount, 4 weeks);
 
-        // Another user deposits for this lock
-        address depositor = address(0xCAFE);
-        hemi.mint(depositor, 100 ether);
-        vm.startPrank(depositor);
+        // The owner tops up her own lock (increaseAmount is owner-only)
+        hemi.mint(user, 100 ether);
+        vm.startPrank(user);
         hemi.approve(address(veHemi), type(uint256).max);
         veHemi.increaseAmount(tokenId, extra);
         vm.stopPrank();
@@ -258,7 +258,27 @@ contract VeHemiTest is Test {
         assertEq(
             uint256(uint128(lockedBalance.amount)),
             amount + extra,
-            "depositFor did not increase lock amount"
+            "increaseAmount did not increase lock amount"
+        );
+    }
+
+    /// A third party cannot top up somebody else's lock: NotOwner, lock untouched.
+    function testIncreaseAmountRevertsIfNotOwner() public {
+        uint256 amount = 10 ether;
+        (uint256 tokenId, , ) = createLock(user, amount, 4 weeks);
+
+        address nonOwner = address(0xCAFE);
+        hemi.mint(nonOwner, 100 ether);
+        vm.startPrank(nonOwner);
+        hemi.approve(address(veHemi), type(uint256).max);
+        vm.expectRevert(VeHemi.NotOwner.selector);
+        veHemi.increaseAmount(tokenId, 15 ether);
+        vm.stopPrank();
+
+        assertEq(
+            uint256(uint128(veHemi.getLockedBalance(tokenId).amount)),
+            amount,
+            "a refused third-party top-up must leave the lock untouched"
         );
     }
 
@@ -953,7 +973,8 @@ contract VeHemiTest is Test {
         vm.expectRevert(VeHemi.NotOwner.selector);
         veHemi.increaseUnlockTime(tokenId, 4 weeks);
 
-        vm.expectRevert(VeHemi.NoExistingLock.selector);
+        // increaseAmount is owner-gated at its head, so a burned id reverts NotOwner.
+        vm.expectRevert(VeHemi.NotOwner.selector);
         veHemi.increaseAmount(tokenId, 2 weeks);
 
         vm.stopPrank();
@@ -1286,10 +1307,9 @@ contract VeHemiTest is Test {
     // =========================================================================
     // Negative input-validation tests
     // -------------------------------------------------------------------------
-    // Each of these covers a single revert path that was previously unreachable
-    // by the existing test suite. Grouped here so future refactors that widen
-    // the input domain trip an obvious failure instead of silently dropping the
-    // guard.
+    // Each of these covers a single revert path. Grouped here so future
+    // refactors that widen the input domain trip an obvious failure instead
+    // of silently dropping the guard.
     // =========================================================================
 
     function test_constructor_revertsOnZeroHemi() public {
@@ -1447,11 +1467,11 @@ contract VeHemiTest is Test {
     }
 
     function test_withdraw_succeedsWhenDelegationReverts() public {
-        // L9R2-G13 (DelegationUpdateFailed behaviour, withdraw arm):
+        // DelegationUpdateFailed behaviour, withdraw arm:
         // PROPERTY: withdraw() is robust even when the live voteDelegation
         // contract reverts on every entry point.
         //
-        // Per LOW-9 fix, withdraw() routes through `_delegate(id, address(0))`
+        // withdraw() routes through `_delegate(id, address(0))`
         // BEFORE `_withdraw` (see VeHemi.withdraw). When the live VVD reverts,
         // the try/catch in `_delegate` swallows the revert and emits
         // DelegationUpdateFailed(tokenId), and withdraw completes normally —
@@ -1471,8 +1491,9 @@ contract VeHemiTest is Test {
         uint256 hemiBefore = hemi.balanceOf(user);
 
         // Withdraw must succeed and emit DelegationUpdateFailed(tokenId)
-        // because the LOW-9 cleanup `_delegate(id, 0)` reverts on the
-        // reverting VVD and the try/catch in `VeHemi._delegate` catches it.
+        // because the module call in the withdraw cleanup `_delegate(id, 0)`
+        // reverts on the reverting VVD and the try/catch in `_delegate`
+        // catches it.
         vm.expectEmit(true, false, false, false);
         emit IVeHemi.DelegationUpdateFailed(tokenId);
         vm.prank(user);
@@ -1490,7 +1511,7 @@ contract VeHemiTest is Test {
     }
 
     function test_forfeit_emitsDelegationUpdateFailedWhenDelegationReverts() public {
-        // L9R2-G13 (DelegationUpdateFailed behaviour, forfeit arm):
+        // DelegationUpdateFailed behaviour, forfeit arm:
         // PROPERTY: forfeit() routes through `_delegate(id, address(0))`
         // BEFORE `_withdraw` (see VeHemi.forfeit, lines ~222-233). When the
         // live VVD reverts, the try/catch in `_delegate` swallows the revert
@@ -1576,17 +1597,18 @@ contract VeHemiTest is Test {
 
         (uint256 tokenId, , ) = createLock(user, 11 ether, 2 * 365 days);
 
-        assertEq(recording.callCount(), 1, "distributor should be called exactly once on createLock");
+        // Each deposit notifies the distributor twice (before and after the checkpoint).
+        assertEq(recording.callCount(), 2, "distributor should be called twice on createLock");
         assertEq(recording.lastTokenId(), tokenId, "distributor should be called with the new tokenId");
-        assertEq(recording.callsForToken(tokenId), 1, "per-token call counter should match");
+        assertEq(recording.callsForToken(tokenId), 2, "per-token call counter should match");
 
         // A second deposit on the same lock should call the distributor again.
         vm.warp(block.timestamp + 1 days);
         vm.prank(user);
         veHemi.increaseAmount(tokenId, 5 ether);
 
-        assertEq(recording.callCount(), 2, "distributor should be called again on increaseAmount");
-        assertEq(recording.callsForToken(tokenId), 2, "per-token counter should increment");
+        assertEq(recording.callCount(), 4, "distributor should be called twice more on increaseAmount");
+        assertEq(recording.callsForToken(tokenId), 4, "per-token counter should increment by two");
     }
 
     // =========================================================================

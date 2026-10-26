@@ -5,10 +5,11 @@ A decentralized voting escrow system for HEMI tokens implementing time-locked st
 ## Overview
 
 veHemi consists of the following contracts:
-1. **VeHemi** - Main voting escrow contract (V2) handling token locking, stake weight calculation, NFT transfers, and parallel locked/forfeitable subcurve tracking
-2. **VeHemiVoteDelegation** - Delegation system for voting power with hourly epoch checkpoints and auto-delegation support
+1. **VeHemi** - Main voting escrow contract (v3.0.0: V2 subcurves plus auto-relock) handling token locking, stake weight calculation, NFT transfers, and parallel locked/forfeitable subcurve tracking
+2. **VeHemiVoteDelegation** (VVD) - Delegation of voting power with auto-delegation support. Delegation changes take effect at `block.timestamp + 1` (from the auto-relock upgrade block until the next hour boundary, dated at that boundary)
 3. **VeHemiAragonAdapter** - Stateless adapter that presents veHEMI through the IVotes + ERC20-like metadata interface (`balanceOf`, `totalSupply`, `decimals`, `name`, `symbol`) expected by Aragon's TokenVoting plugin
-4. **VeHemiStorageV2** - Storage extension appending locked/forfeitable subcurve state after the V1 storage layout
+4. **VeHemiStorageV2/V3, VeHemiDelegationStorageV4** - Append-only storage extensions after the V1 layouts (V2: locked/forfeitable subcurves; V3: auto-relock; V4: booking times and the upgrade-hour window)
+5. **VeHemiCurveLib / VeHemiSupplyLib** - Separately deployed libraries that VeHemi DELEGATECALLs for its curve and supply math
 
 ## Core Mechanics
 
@@ -19,6 +20,7 @@ veHemi uses a linear decay system where both voting power and incentives are cal
 - **Voting power**: Determines governance voting weight
 - **Incentive distribution**: Determines reward allocation proportion
 - **Longer locks = more weight**: Users locking for longer durations get proportionally more voting power and incentives
+- **Auto-relock**: positions armed with `enableAutoRelock` or `createLockWithAutoRelock` have the constant weight `slope * (R - SIX_DAYS/2)` instead (see [Auto-relock](#auto-relock))
 
 #### Example: Lock Duration Impact
 
@@ -37,8 +39,8 @@ Consider two users in veHemi:
 - **NFT representation**: Each lock is a unique NFT
 - **Transferability**: Default transferable, can be non-transferable
 - **Extensions**: Only NFT owner can extend lock duration
-- **Amount increases**: Anyone can increase locked amount
-- **Minimum amount**: All lock creation (`createLock` and `createLockFor`) requires at least 10 HEMI (`MIN_LOCK_AMOUNT`) to prevent dust lock griefing
+- **Amount increases**: Only the NFT owner can increase the locked amount (`increaseAmount` reverts `NotOwner` otherwise; in V2 it was permissionless)
+- **Minimum amount**: All lock creation (`createLock`, `createLockFor` and `createLockWithAutoRelock`) requires at least 10 HEMI (`MIN_LOCK_AMOUNT`) to prevent dust lock griefing
 
 ### NFT Transferability
 
@@ -46,10 +48,11 @@ Consider two users in veHemi:
 - **Non-transferable**: Created with `transferable = false` (e.g., protocol distributions)
 - **Auto-transferable**: Non-transferable NFTs become transferable after first lock duration ends
 - **Delegation on transfer**: Transfers re-delegate the lock to the recipient — or to the recipient's auto-delegate target if they set one via the Aragon adapter
+- **Auto-relock on transfer**: a transfer of an auto-relock position to another account disables auto-relock first. An approved operator cannot transfer a token to its own owner
 
 ### Delegation System
 
-- **Epoch-based**: Delegations take effect at the next hourly epoch boundary
+- **Next-second**: a delegation change takes effect at `block.timestamp + 1`; as in V2, an UNARMED position whose lock ends at or before the next hour boundary cannot be delegated (unless its record is a stranded flat term — a flat record, slope 0 and bias > 0, left on a position that is no longer auto-relocked — which `delegate` retires, booking nothing; an auto-relock position can always be delegated)
 - **Per-token**: Each veHEMI NFT can be delegated independently
 - **Flexible**: Delegate to any address or self
 - **Revocable**: Change or revoke at any time
@@ -64,16 +67,16 @@ VeHemi V2 maintains parallel subcurves alongside the global supply curve to trac
 - **Locked** (`nonTransferableTotalVeHemiSupply`): Non-transferable positions only, bounded by `transferableAfter`
 - **Forfeitable** (`forfeitableTotalVeHemiSupply`): Forfeitable subset of locked positions, also bounded by `transferableAfter`
 
-**Invariant:** `forfeitable <= locked <= total` always holds.
+**Ordering:** `forfeitable <= locked` always holds; `locked <= total` does NOT (an auto-relock non-transferable position counts its constant weight in `total` and its decaying weight in `locked`).
 
 **Subcurve transition:** When `block.timestamp >= transferableAfter`, a position exits both the locked and forfeitable subcurves while retaining its full global voting power until `lock.end`. This means:
 - A non-transferable position extended past its original `transferableAfter` becomes transferable at the originally promised time
 - `increaseUnlockTime` does NOT extend `transferableAfter` — the user's transferability promise is preserved
 - The forfeit window is bounded by `transferableAfter` — once a position becomes transferable, it can no longer be forfeited
 
-**Seeding:** The subcurves are initialized via a 3-phase on-chain enumeration: `markSeedingStarted()` opens the window and snapshots `nextTokenId` into `seedingTargetId`; `seedBatch(maxIterations)` (callable many times) iterates token IDs and accumulates per-position slope/bias deltas; `finalizeSeeding()` materializes the aggregate `LockedPoint`s for both subcurves and flips `lockedSeedingFinalized`. All three phases must execute in a single block (`block.timestamp == seedingStartedAt`), so the deploy script bundles them into one Gnosis Safe MultiSend. The on-chain scan replaces an earlier caller-supplied `tokenIds` array, eliminating both the operator-drift footgun and the adversarial front-run vector where someone could mint a non-transferable position into the gap between off-chain list derivation and Safe execution.
+**Seeding:** The subcurves are initialized via a 3-phase on-chain enumeration: `markSeedingStarted()` opens the window and snapshots `nextTokenId` into `seedingTargetId`; `seedBatch(maxIterations)` (callable many times) iterates token IDs and accumulates per-position slope/bias deltas; `finalizeSeeding()` materializes the aggregate `LockedPoint`s for both subcurves and flips `lockedSeedingFinalized`. `seedBatch` / `finalizeSeeding` do not check the block; the seeding window must not cross a SIX_DAYS boundary (see `finalizeSeeding`'s NatSpec), so the deploy script bundles them into one Gnosis Safe MultiSend. The on-chain scan replaces an earlier caller-supplied `tokenIds` array, eliminating both the operator-drift footgun and the adversarial front-run vector where someone could mint a non-transferable position into the gap between off-chain list derivation and Safe execution.
 
-**Combined supply view:** `supplyBreakdown()` returns `(total, locked, forfeitable, transferable)` in a single call with defensive caps enforcing the ordering invariant.
+**Combined supply view:** `supplyBreakdown()` returns `(total, locked, forfeitable, transferable)` in a single call: raw values; `transferable` saturates at 0.
 
 ### Forfeit Mechanism
 
@@ -92,22 +95,22 @@ The V2.1 implementation upgrade fixes a stale-cache bug in the forfeit path:
 - **Indexer impact**: post-upgrade, near-expiry forfeits emit `DelegateChanged(id, prev, address(0))` and `DelegateVotesChanged` events from the Aragon adapter that pre-upgrade were silently dropped. Event signatures are unchanged; consumers that already handle the regular forfeit path will absorb the new cases automatically. No back-fill events are emitted for pre-upgrade stale records (they remain frozen and benign — the NFT is burned, so `ownerOf` reverts and downstream reads can gate on that).
 - **Tests**: regression coverage lives in `test/DelegationBehavior.t.sol` (3 boundary tests including a sub-hour sweep at `{1, 60, 3599, 3600, 3601}` seconds before lock end), `test/VeHemiForfeitableCurve.t.sol::test_Forfeit_JointAccountingDecrement` (per-accumulator exact-delta pin), and `test/adapter/VeHemiAragonAdapter.t.sol::test_relay_onForfeit_nearExpiry` (adapter relay liveness on the previously-buggy path). Fuzzed by `invariant_pastVotesImmutability` and `invariant_adapterRelayParity` in `test/Invariant.t.sol` (20 invariants × 1024 runs × 128 depth).
 
-### V2.1 Patch Notes (HIGH-2 Mitigation — updateVoteDelegation Safety)
+### V2.1 Patch Notes (updateVoteDelegation Safety)
 
-The V2.1 implementation also addresses audit finding HIGH-2: `VeHemi.updateVoteDelegation` is a single-SSTORE pointer swap that performs zero state migration. Calling it on a freshly-deployed `VeHemiVoteDelegation` proxy silently zeros every voter's stake, breaks in-flight Aragon proposals, and severs the event-relay path until each user manually re-delegates. The mitigation has three parts:
+The V2.1 implementation also addresses a hazard of `VeHemi.updateVoteDelegation`, a single-SSTORE pointer swap that performs zero state migration. Calling it on a freshly-deployed `VeHemiVoteDelegation` proxy silently zeros every voter's stake, breaks in-flight Aragon proposals, and severs the event-relay path until each user manually re-delegates. The mitigation has three parts:
 
-- **Strong NatSpec warning** on `VeHemi.updateVoteDelegation` documenting the silent-orphaning failure mode, the in-flight-proposal brick risk, and the mandatory operator runbook. Operators reading the source see the exact pre-flight checklist (deploy new VVD → snapshot → import → seal → swap).
+- **Strong NatSpec warning** on `VeHemi.updateVoteDelegation` documenting the silent-orphaning failure mode, the in-flight-proposal brick risk, and the mandatory operator runbook. The checklist (deploy new VVD → snapshot → import → seal → swap) is in [`docs/VOTE_DELEGATION_RECOVERY.md`](docs/VOTE_DELEGATION_RECOVERY.md), which the NatSpec points to.
 - **State-migration tooling on `VeHemiVoteDelegation`** (new `VeHemiDelegationStorageV3` chain at slot 50):
   - `importDelegationsFromLegacy(legacy, tokenIds)` — owner-only (VeHemi owner). Reads `delegation(id)` from the legacy VVD and replays it via `_delegate` so checkpoint history begins building forward in the new contract. Idempotent. Emits `LegacyDelegationImported`.
   - `importAutoDelegatesFromLegacy(legacy, owners)` — same pattern for `autoDelegate` mappings. Emits `AutoDelegateSet` + `LegacyAutoDelegateImported`.
   - `finalizeMigration()` — one-way latch sealing the import path. After this call, the import functions revert permanently with `MigrationFinalizedError`, preventing any post-migration state injection that would corrupt future `getPastVotes` history.
-- **Mandatory Safe MultiSend operator runbook** (encoded in NatSpec on `updateVoteDelegation`): the new VVD's `importDelegationsFromLegacy` + `importAutoDelegatesFromLegacy` + `setTrustedAdapter` + `finalizeMigration` must all execute in the **same Safe MultiSend** as the final `veHemi.updateVoteDelegation(newVVD)` call. This makes the migration atomic from chain-state's perspective — no window where the new VVD is empty and live.
+- **Operator runbook** ([`docs/VOTE_DELEGATION_RECOVERY.md`](docs/VOTE_DELEGATION_RECOVERY.md); V2.1 shipped it in the NatSpec of `updateVoteDelegation`): the original V2.1 runbook required the new VVD's `importDelegationsFromLegacy` + `importAutoDelegatesFromLegacy` + `setTrustedAdapter` + `finalizeMigration` to execute in the same Safe MultiSend as the final `veHemi.updateVoteDelegation(newVVD)` call; at mainnet scale the imports span several Safe transactions, so `finalizeMigration` and the swap go last, in one MultiSend (optionally after late imports of entries still missing), forfeits are disabled for the whole import window, and a reconcile follows the swap (`scripts/plan-legacy-migration.ts` prints the transactions).
 - **Tests**: end-to-end runbook coverage in `test/HIGH2_LegacyImport.t.sol` (28 tests), including:
   - `test_endToEndMigrationRunbook_preservesVotes` — full operator flow → delegate votes preserved post-swap
-  - `test_withoutImport_swapZerosVotes_documentedBug` — proves the original HIGH-2 bug AND that operators who skip the import path lose state
+  - `test_withoutImport_swapZerosVotes_documentedBug` — proves that a swap with no import leaves the new module with no delegation record and zero votes, so operators who skip the import path lose state
   - Idempotency, access control (only VeHemi owner), legacy-address validation, finalize semantics, post-finalize reverts
-- **Bytecode impact**: zero on VeHemi (NatSpec only). VeHemiVoteDelegation grew from 14,185B to 16,364B (+2,179B), leaving an 8,212B EIP-170 margin (down from 10,391B pre-fix).
-- **Limitation (out-of-scope for V2)**: historical `getPastVotes` queries for blocks BEFORE the migration return zero on the new contract — the import replays delegations via `_delegate` which builds NEW checkpoints starting at the next epoch boundary. Operators MUST schedule the migration during a governance freeze (no in-flight proposals) to avoid bricking proposals whose snapshot block precedes the swap. The audit's strongest fix (full historical checkpoint copy) is deferred to V3 alongside the planned library extraction.
+- **Bytecode impact**: zero on VeHemi (NatSpec only). VeHemiVoteDelegation grew from 14,185B to 16,364B (+2,179B), leaving an 8,212B EIP-170 margin (down from 10,391B before the migration tooling) in V2.1.
+- **Limitation (out-of-scope for V2)**: historical `getPastVotes` queries for blocks BEFORE the migration return zero on the new contract — the import replays delegations via `_delegate` which builds NEW checkpoints starting at the next hour boundary. Operators MUST schedule the migration during a governance freeze (no in-flight proposals) to avoid bricking proposals whose snapshot block precedes the swap. V2.1 deferred a full historical checkpoint copy to V3, together with a library extraction; 3.0.0 has no historical copy either, and since the auto-relock upgrade a freshly deployed, initialized module dates imports at `block.timestamp + 1`.
 
 ### Aragon Governance Integration
 
@@ -121,9 +124,23 @@ The `VeHemiAragonAdapter` enables veHEMI to be used as the voting token for Arag
 - **Subgraph sync**: `refreshVotingPower` / `refreshVotingPowerBatch` re-emit events with current decayed voting power for keeper-driven subgraph updates
 - **Balance display**: `balanceOf` returns total locked HEMI across all positions (not NFT count), providing meaningful data for the Aragon member detail page
 - **`delegates(account)` semantics**: Returns the delegatee only when ALL of an account's veHEMI positions are delegated to the same address. Returns `address(0)` if the account has no positions or if positions are split across different delegatees (a consequence of veHEMI's per-NFT delegation model, where there isn't always a single account-wide delegatee)
-- **MED-7 mitigation (2026-05-04 audit)**: `DelegateChanged` is only emitted when the post-change state is account-wide consistent (all NFTs delegated to the same address, including `address(0)`). Mixed-state per-tokenId calls from multi-token owners are silently skipped, and `adapter.delegate(addr)` emits exactly one consolidated event after the batch (using an EIP-1153 transient flag to suppress the per-token relay). This keeps the Aragon subgraph in lock-step with `delegates(account)` and preserves `delegateAllFor`'s O(N) gas profile
+- **Account-wide `DelegateChanged`**: `DelegateChanged` is only emitted when the post-change state is account-wide consistent (all NFTs delegated to the same address, including `address(0)`). Mixed-state per-tokenId calls from multi-token owners are silently skipped, and `adapter.delegate(addr)` emits exactly one consolidated event after the batch (using an EIP-1153 transient flag to suppress the per-token relay). This preserves `delegateAllFor`'s O(N) gas profile
 
-**Hourly checkpoints**: Delegations activate at the next hourly epoch boundary (up to 1 hour delay). This provides anti-flash-delegation protection while keeping the governance experience responsive. The keeper should call `refreshVotingPowerBatch` periodically to keep the Aragon subgraph in sync with naturally decaying voting power.
+**Delegation timing**: delegations take effect at `block.timestamp + 1`, so a delegation is never counted in the block that makes it. Aragon's quorum denominator (`getPastTotalSupply(t)`) reads supply at `t - 1`. Voting power keeps decaying with no event; a keeper should call `refreshVotingPowerBatch` periodically to keep the Aragon subgraph in sync.
+
+**The deployed adapter predates the auto-relock upgrade.** Its verified NatSpec describes the hourly dating: `refreshVotingPower` now reports power at `block.timestamp + 1` (at the hour boundary only during the upgrade hour), and `delegate(addr)` also re-delegates auto-relock positions whose `getLockedBalance(id).end` is in the past.
+
+### Auto-relock
+
+An owner can freeze a position's remaining lock time so that its weight stops decaying: `enableAutoRelock(tokenId)` on an existing position, or `createLockWithAutoRelock(amount, duration, transferable, forfeitable)` for a new one.
+
+- **Weight**: constant at `slope * (R - SIX_DAYS/2)`, where R (`autoRelockRemaining`, in seconds) is the whole SIX_DAYS buckets from the start of the current bucket to `end`, at least two buckets.
+- **Unlocking**: `withdraw` reverts while auto-relock is enabled; `disableAutoRelock(tokenId)` resumes linear decay over R. Read `effectiveLockEnd(tokenId)` for the unlock time: while armed, `getLockedBalance(tokenId).end` is not one.
+- **Heartbeat**: the owner must call `refreshAutoRelock(tokenId)` at least every `STALE_FLAT_BUCKETS * SIX_DAYS` (365.25 days); from `autoRelockStaleAt(tokenId)` on, anyone may call `retireStaleAutoRelock(tokenId)`.
+- **Transfers**: a transfer to another account disables auto-relock inside the transfer.
+- **Gas limit**: when the position is delegated, calls that book or retire an auto-relock term (`enableAutoRelock`, `disableAutoRelock`, `retireStaleAutoRelock`, `increaseAmount`/`increaseUnlockTime` on an armed position, and the fallback removal of an armed transfer whose move was refused) need a gas LIMIT of about 8.8 million (with no reward distributor installed and the global point current; each distributor notification before the removal gas floor (below), and each six-day bucket of global catch-up, adds its cost, and the fallback removal needs more when the refused move's delegatees were not checkpointed for months) — far above the gas they use: the removal gas floor, 8,176,984 gas, must remain at the re-delegation, on top of what the call spends before it. `createLockWithAutoRelock` needs about 9.2 million with no distributor, more when the owner already holds many positions (up to about 17 million) or when its first booking goes to a delegatee not checkpointed for months; if the reward distributor spends more than about 6.8 million gas per `updateRewards` call (less for an owner with many positions) it cannot fit in a block (use `createLock`, then `enableAutoRelock`). A shorter limit reverts `DelegationCallStarved`, so an `eth_estimateGas` of a transaction that calls VeHemi directly already accounts for it; a caller that catches the revert (a try/catch loop, Multicall3 with `allowFailure`, a Safe transaction with `safeTxGas != 0`, an action allowed to fail) must pass on that much gas explicitly and check the result.
+
+The integrator-facing details — events, errors, armed semantics of existing views, monitoring — are in [`docs/AUTO_RELOCK_INTEGRATOR_NOTICE.md`](docs/AUTO_RELOCK_INTEGRATOR_NOTICE.md).
 
 ## Usage Examples
 
@@ -177,14 +194,14 @@ uint256 lockedSupply = veHemi.nonTransferableTotalVeHemiSupply();
 uint256 forfeitableSupply = veHemi.forfeitableTotalVeHemiSupply();
 ```
 
-All four values at once with defensive caps enforcing `forfeitable <= locked <= total`:
+All four values at once (raw values; `transferable` saturates at 0):
 ```solidity
 (uint256 total, uint256 locked, uint256 forfeitable, uint256 transferable) = veHemi.supplyBreakdown();
 ```
 
 Per-position queries:
 ```solidity
-// Stake weight: linearly-decaying bias (NOT the deposited HEMI amount)
+// Stake weight: linearly-decaying bias, or the constant weight of an auto-relock position (NOT the deposited HEMI amount)
 uint256 weight = veHemi.balanceOfNFT(tokenId);
 
 // Deposited HEMI amount (constant until withdraw)
@@ -203,13 +220,14 @@ forge test   # run tests
 
 ### Coverage
 
-`forge coverage` at default settings takes ~15 minutes on this codebase because
-it disables the Solidity optimizer (for accurate source-line mapping) and then
-runs all 131,072 invariant mutations × 6 invariants × unoptimized bytecode,
-plus 1,000-run fuzz tests. Fork tests are NOT a cause — they self-skip
-in microseconds when RPC URLs are unset.
+`forge coverage` at default settings takes well over an hour on this codebase
+(the invariant campaigns alone take about 45 minutes on 16 cores in a plain
+`forge test`, with the optimizer on) because it disables the Solidity optimizer
+(for accurate source-line mapping) and then runs every invariant campaign at
+1024 runs × 128 depth on unoptimized bytecode, plus 1,000-run fuzz tests. Fork
+tests are NOT a cause — they self-skip in microseconds when RPC URLs are unset.
 
-**Fast coverage (~5 seconds, smoke-test quality)** — override the
+**Fast coverage (smoke-test quality)** — override the
 fuzz/invariant run counts via env vars:
 
 ```sh
@@ -217,18 +235,14 @@ FOUNDRY_FUZZ_RUNS=1 FOUNDRY_INVARIANT_RUNS=1 FOUNDRY_INVARIANT_DEPTH=1 \
   forge coverage --report summary --report lcov
 ```
 
-Produces per-contract coverage of:
-- `src/VeHemi.sol`: **97.89%** lines, 81.38% branches, 95.56% functions
-- `src/VeHemiVoteDelegation.sol`: **98.10%** lines, 88.64% branches, **100%** functions
-- `src/adapter/VeHemiAragonAdapter.sol`: **100%** lines, branches, functions
-- `src/utils/PositionFactory.sol`: **100%** lines, branches, functions
+Run the command for current per-contract figures.
 
 The reduced run counts affect input-space exploration depth but not which
 branches of production code get hit (the deterministic test suite already
 reaches them all). Full fuzz/invariant exploration remains available by
 running `forge test` separately at default settings.
 
-**Full coverage (~15 minutes, default config)**:
+**Full coverage (well over an hour, default config)**:
 ```sh
 forge coverage --report summary --report lcov
 ```
@@ -242,16 +256,40 @@ Additional test-quality signals beyond line coverage:
 - **Shadow-accounting stress tests** (`test/VeHemiStressTest.t.sol`) prove
   algebraic equivalence between contract aggregates and an independent
   calculator at every mutation.
-- **Invariant suite** (`test/Invariant.t.sol`) with 6 invariants:
-  `invariant_tokenConservation`, `invariant_veHemiSupply`, `invariant_votingPower`,
-  `invariant_subcurveOrdering`, `invariant_supplyBreakdownConsistency`, and
-  `invariant_epochMonotonicity`. Runs 131,072 mutations per invariant per run.
-- **Fork tests** — 92 in `test/ForkUpgradeLockedCurve.t.sol` (against Hemi
+- **Invariant suites**: `test/Invariant.t.sol` (20 invariants over the escrow,
+  the subcurves, delegation and the adapter relay),
+  `test/AutoRelockInvariant.t.sol` (7 auto-relock invariants: flat weight,
+  restored end, past votes never above the past total supply) and
+  `test/autorelock-ledger/AutoRelockLedgerInvariant.t.sol` (one campaign that
+  checks the auto-relock laws against a ledger its handler writes from its own
+  calls and never reads back from the contract). The default profile runs
+  1024 runs x 128 depth; CI's `Foundry project` job (every push and pull
+  request) runs them at 128 x 128 (two campaigns carry inline overrides:
+  32 x 128 and 128 x 64) and the nightly job at the full budget.
+- **Removal gas floor** (`test/module-failure/RemovalGasFloor.t.sol`): for
+  every call that books or retires an auto-relock term, finds the smallest
+  committing gas limit and checks below it (refused with
+  `DelegationCallStarved`), above it (exact), and at an emulated
+  `eth_estimateGas` limit, with the delegation module called directly and behind
+  an ERC1967 proxy (the floor on the armed transfer's fallback removal is
+  covered in `test/armed-transfer/`).
+- **Auto-relock upgrade on a Hemi fork** (`test/autorelock-upgrade/`, fork
+  block from `AUTORELOCK_TEST_FORK_BLOCK`, default 5,524,738): the upgrade-hour
+  window at seven execution offsets, rollback and re-upgrade, state identity
+  with the live implementation, and reader continuity across the batch. The
+  deploy script itself is rehearsed end to end by
+  `npm run test:hardhat:fork:autorelock`.
+- **Fork tests** — 100 in `test/ForkUpgradeLockedCurve.t.sol` (against Hemi
   mainnet state via `HEMI_RPC_URL`) and 14 in `test/adapter/VeHemiAragonAdapterFork.t.sol`
   (against Ethereum mainnet Aragon OSx via `ETH_RPC_URL`).
-- **100% declared-error coverage** — every custom error is exercised by at
-  least one `expectRevert` test.
-- **Fuzz tests** (32 `testFuzz_*` across the suite) with 1,000 runs per test.
+- **Declared-error coverage** — every reachable custom error is exercised by at
+  least one test that checks its selector, except the zero-address refusal of
+  the `VeHemiVoteDelegation` constructor (`InvalidVeHemi`; the same selector is
+  checked on `PositionFactory`). `NoExistingLock`, `EndBelowTransferableAfter`,
+  `AdditiveBranchExpectsZeroEnd` and `InvalidSignature` are defensive and
+  unreachable by construction (`ECDSA.recover` reverts rather than return the
+  zero address that `InvalidSignature` checks for).
+- **Fuzz tests**: 37 `testFuzz_*` across the suite, most at 1,000 runs.
 
 ## Deployment
 
@@ -266,17 +304,21 @@ Make sure that the `.env` file has correct params and then run:
 ./scripts/test-next-deployment-on-fork.sh
 ```
 
-### Deployment
+### Initial deployment
 
-Make sure that the `.env` file has correct params and then run:
+The untagged run is V1/V2 history and does not complete on any chain today: it never gets past `deploy/03`, which deploys a contract this repository does not contain (`RestakeManager`). Never run it against Hemi: before it stops it redeploys implementations, queues their upgrade legs into the Safe batch file and overwrites the deployment records (see [`docs/AUTO_RELOCK_UPGRADE.md`](docs/AUTO_RELOCK_UPGRADE.md), section 5).
 
 ```sh
 npx hardhat deploy --network hemi
 ```
 
-### V1 → V2 Upgrade
+### Auto-relock upgrade
 
-The V2 upgrade introduces parallel locked/forfeitable subcurves, hourly delegation epochs, and the Aragon adapter. Two deploy scripts handle this:
+Run `npx hardhat --network hemi deploy --tags AutoRelockUpgrade` (NOT an untagged run). It deploys the two libraries and both implementations and proposes ONE MultiSend `[upgrade(VeHemi), upgradeAndCall(VVD, impl, armLegacyDatingWindow())]`; never split or hand-build it. After execution run `AUTORELOCK_POST_CHECK_ONLY=1 npx hardhat --network hemi deploy --tags AutoRelockUpgrade` (archive RPC). Rehearse with `HEMI_RPC_URL=<archive RPC> HEMI_FORK_BLOCK=<signing block> npm run test:hardhat:fork:autorelock` and `HEMI_RPC_URL=<archive RPC> AUTORELOCK_TEST_FORK_BLOCK=<same block> forge test --match-path 'test/autorelock-upgrade/*' --threads 1 -vv` (the block in digits only; the logged `fork block` must equal it; both must report no failure, the deploy rehearsal no pending test case, and the `test/autorelock-upgrade` summary 0 skipped, except at a signing block after an in-window rollback, where exactly the two `UpgradeWindowTransition` plain-upgrade fallback tests skip by design and the deploy rehearsal's `rollback limits, control` test case fails (deploy/08's pre-flight 5b, printed as `Window premises`, counts the rolled-back upgrade's VeHemi `Upgraded` log as a VeHemi-leg rollback, defined in the runbook, section 8); run the deploy rehearsal from a tree whose `deployments/hemi/` names the live implementations, e.g. a scratch clone of the reviewed commit; see the runbook, section 4; 5,524,738 is the default `AUTORELOCK_TEST_FORK_BLOCK`). The full runbook — signer checklist, upgrade-hour window, rollback limits, post-execution check and monitoring — is [`docs/AUTO_RELOCK_UPGRADE.md`](docs/AUTO_RELOCK_UPGRADE.md). The Aragon adapter is not part of this upgrade.
+
+### V1 → V2 Upgrade (history)
+
+The V2 upgrade introduces parallel locked/forfeitable subcurves, hourly delegation checkpoints, and the Aragon adapter. Two deploy scripts handle this:
 
 1. **`deploy/04_upgrade_vehemi_v2.ts`** — bundles `4 + N` transactions into a single Gnosis Safe MultiSend (executed atomically; all share `block.timestamp`):
    - `upgrade(VeHemiVoteDelegation proxy, new delegation impl)` — upgrades the delegation contract to add hourly checkpoints, `autoDelegate`/`delegateAllFor`/`clearAutoDelegate`, and the trusted-adapter hook consumed by the Aragon adapter.
@@ -289,14 +331,14 @@ The V2 upgrade introduces parallel locked/forfeitable subcurves, hourly delegati
 
 2. **`deploy/05_aragon_adapter.ts`** — deploys the immutable `VeHemiAragonAdapter` and calls `setTrustedAdapter(adapter)` on `VeHemiVoteDelegation` (owner-only, batched for the Gnosis Safe). Includes pre-flight checks (`voteDelegation() != address(0)`, `totalVeHemiSupply() > 0`) and post-deploy ERC-165 verification (`IVotes`, `ERC165`, `ERC6372`).
 
-⚠️ **The seeding flow is one-shot and irreversible.** `markSeedingStarted` sets a latch that is never cleared and `finalizeSeeding` sets `lockedSeedingFinalized = true`; both latches are monotonic. The on-chain scan removes the operator-drift and front-run risks of the prior caller-supplied list, but the **atomicity guard** is load-bearing: `seedBatch` and `finalizeSeeding` revert with `SeedingInProgress` if `block.timestamp != seedingStartedAt`. Cross-block execution would leave slope-change entries at past `subEnd` values as dead storage (the forward-only `_checkpoint` catchup never visits past timestamps).
+⚠️ **The seeding flow is one-shot and irreversible.** `markSeedingStarted` sets a latch that is never cleared and `finalizeSeeding` sets `lockedSeedingFinalized = true`; both latches are monotonic. The on-chain scan removes the operator-drift and front-run risks of the prior caller-supplied list, but `seedBatch` / `finalizeSeeding` do not check the block: the operator constraint is that the seeding window must not cross a SIX_DAYS boundary (see `finalizeSeeding`'s NatSpec). The Hemi mainnet seeding ran in a 252 s window inside one bucket.
 
-⚠️ **NEVER split scripts 04 and 05 across separate Safe proposals.** Run `npx hardhat --network hemi deploy` without a `--tags` filter so the full 00→07→99 sequence executes in one invocation; both scripts append to the same `multisig.batch.tmp.json` and script 99 (`runAtTheEnd: true`) proposes the accumulated batch as a single Safe MultiSend. Splitting them (e.g., `--tags VeHemiV2Upgrade` followed days later by `--tags VeHemiAragonAdapter`) creates an adapter-bootstrap window during which `trustedAdapter == address(0)` on the upgraded VVD: every `_delegate` notify hook is silently skipped (Aragon's subgraph sees zero `DelegateChanged`/`DelegateVotesChanged` events), and `delegateAllFor` reverts with `NotTrustedAdapter`, bricking `adapter.delegate(X)` entirely. Audit LOW-10 (2026-05-04). Script 05's pre-flight aborts if VVD is still V1 on-chain and the Safe batch file is empty; `helpers/safe.ts` auto-cleans any stale batch file from a prior aborted run at process start so a phantom-non-empty file can't bypass the gate.
+⚠️ **(History, V2 rollout.) NEVER split scripts 04 and 05 across separate Safe proposals.** Run `npx hardhat --network hemi deploy` without a `--tags` filter so the full 00→07→99 sequence executes in one invocation; both scripts append to the same `multisig.batch.tmp.json` and script 99 (`runAtTheEnd: true`) proposes the accumulated batch as a single Safe MultiSend. Splitting them (e.g., `--tags VeHemiV2Upgrade` followed days later by `--tags VeHemiAragonAdapter`) creates an adapter-bootstrap window during which `trustedAdapter == address(0)` on the upgraded VVD: every `_delegate` notify hook is silently skipped (Aragon's subgraph sees zero `DelegateChanged`/`DelegateVotesChanged` events), and `delegateAllFor` reverts with `NotTrustedAdapter`, bricking `adapter.delegate(X)` entirely. Script 05's pre-flight aborts if VVD is still V1 on-chain and the Safe batch file is empty. `helpers/safe.ts` refuses to run if a non-empty batch file from an earlier run is present: it moves it to `multisig.batch.tmp.json.stale-<time>` and prints how to restore and propose it (`PROPOSE_EXISTING_BATCH=1 … --tags safe`). Never `rm` it: it may be the only record of a queued upgrade.
 
-⚠️ **NEVER submit `markSeedingStarted` outside the same transaction as `seedBatch`/`finalizeSeeding`.** The Safe MultiSend guarantees same-tx execution by construction — DO NOT manually decompose the bundle into separate proposals. If `markSeedingStarted` lands in a different block from the follow-ups, the contract enters a permanent stuck state: the `seedingStarted` latch can't be re-armed, the cross-block atomicity guard rejects every subsequent `seedBatch`/`finalizeSeeding`, and new non-transferable position mints stay blocked until an implementation upgrade migrates the latch state. Existing positions and transferable operations remain unaffected, but the V2 subcurve features and new locked-mint flow are bricked. Recovery requires a fresh proxy upgrade with a custom storage migration — high-friction emergency. Both the contract NatSpec on `markSeedingStarted` and the deploy script structure document this; verify Safe calldata before signing.
+⚠️ **(History, V2 rollout; mainnet seeding is finalized.) NEVER submit `markSeedingStarted` outside the same transaction as `seedBatch`/`finalizeSeeding`.** The Safe MultiSend guarantees same-tx execution by construction — DO NOT manually decompose the bundle into separate proposals. `seedBatch` and `finalizeSeeding` have no same-block guard: anyone may run them, in later blocks. A single transaction executes at a single timestamp, so one MultiSend cannot cross the SIX_DAYS boundary above. Between `markSeedingStarted` and `finalizeSeeding`, non-transferable mints, `forfeit`, and `increaseAmount` / `increaseUnlockTime` on non-transferable positions revert `SeedingInProgress`; transferable positions are unaffected.
 
 **Pre-execution checklist:**
-- **Leftover Safe batch staging file is auto-cleaned at process start** by `helpers/safe.ts` at module-load time (the first `import` of the helper, before any deploy script body runs) (LOW-10 stale-batch defense). A loud `[LOW-10 safety]` warning prints if a stale `multisig.batch.tmp.json` is detected and removed. Belt-and-suspenders: manually `rm -f multisig.batch.tmp.json` before re-running if you want to silence the warning or eliminate any doubt.
+- **A leftover Safe batch staging file is refused at process start** by `helpers/safe.ts` (module load, before any deploy script body runs): a non-empty `multisig.batch.tmp.json` is moved to `multisig.batch.tmp.json.stale-<time>` and the run stops with instructions to restore and propose it. Never `rm` it.
 - Run `./scripts/check-storage-layouts.sh` to confirm the new implementation's storage layout matches the committed golden fixtures.
 - Run `forge test --match-path test/ForkUpgradeLockedCurve.t.sol --fork-url $HEMI_RPC_URL` to validate the upgrade against mainnet state.
 - Fork-simulate the full MultiSend (e.g., via `./scripts/test-next-deployment-on-fork.sh`) and verify each `seedBatch` sub-call's gas estimate stays under ~25M. If any batch approaches 30M, lower `SEED_BATCH_SIZE` in `deploy/04_upgrade_vehemi_v2.ts` — the `+1` slack means smaller batches just produce a few more no-op calls.

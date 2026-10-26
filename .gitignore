@@ -37,6 +37,7 @@ ignition/deployments/chain-31337
 /examples/
 /sdk/
 
-# Safe batch temp file
+# Safe batch temp file, and the copies helpers/safe.ts moves aside
 multisig.batch.tmp.json
+multisig.batch.tmp.json.*
 deployments/hardhat/

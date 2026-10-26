@@ -303,7 +303,7 @@ describeOrSkip("Hardhat fork: deploy/04 + deploy/05 → Safe MultiSend → seedB
         );
         expect(abortMsg).to.match(
             /Seeding margin violation/,
-            `expected SeedingMarginViolation, got: ${abortMsg}`
+            `expected a seeding margin violation, got: ${abortMsg}`
         );
         console.log(`        ✓ pre-flight correctly aborted: ${abortMsg.split("\n")[0]}`);
     });

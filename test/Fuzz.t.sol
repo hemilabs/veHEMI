@@ -61,7 +61,7 @@ contract FuzzTest is Test {
         return (amount * (unlockTime - block.timestamp)) / MAX_TIME;
     }
 
-    function _getNextCheckpoint() private view returns (uint256) {
+    function _nextHourBoundary() private view returns (uint256) {
         return ((block.timestamp / 1 hours) * 1 hours) + 1 hours;
     }
 
@@ -89,7 +89,7 @@ contract FuzzTest is Test {
         assertEq(veHemi.getLockedBalance(tokenId).amount.toUint256(), amount, "locked @ t0");
         assertApproxEqRel(balance_0, expected_0, 0.0005e18, "balance @ t0");
 
-        t_1 = bound(t_1, _getNextCheckpoint(), t_0 + duration / 2);
+        t_1 = bound(t_1, _nextHourBoundary(), t_0 + duration / 2);
         vm.warp(t_1);
 
         uint expected_1 = _getExpectedBalanceOf(tokenId);
@@ -100,7 +100,7 @@ contract FuzzTest is Test {
         assertEq(veHemi.balanceOfNFTAt(tokenId, t_0), balance_0, "past balance @ t1");
         assertEq(veHemi.totalVeHemiSupplyAt(t_0), balance_0, " past supply @ t1");
 
-        t_2 = bound(t_2, _getNextCheckpoint(), end - 1);
+        t_2 = bound(t_2, _nextHourBoundary(), end - 1);
         vm.warp(t_2);
 
         assertEq(veHemi.balanceOfNFTAt(tokenId, t_1), balance_1, "past balance @ t2");

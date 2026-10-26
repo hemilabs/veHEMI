@@ -9,8 +9,8 @@ import {MockERC20} from "./mocks/MockERC20.sol";
 import {IVeHemiVoteDelegation} from "../src/interfaces/IVeHemiVoteDelegation.sol";
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 
-/// @title HIGH-2 Legacy Import Tests
-/// @notice Audit HIGH-2 (`updateVoteDelegation` orphans every delegation) is
+/// @title Legacy Import Tests
+/// @notice `updateVoteDelegation` alone orphans every delegation; this is
 ///         mitigated by `importDelegationsFromLegacy` + `importAutoDelegatesFromLegacy`
 ///         + `finalizeMigration` on the new VVD. The operator runs these
 ///         BEFORE flipping `veHemi.voteDelegation()` in the same Safe MultiSend,
@@ -25,7 +25,7 @@ import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.s
 ///           - reverts after finalize
 ///           - the end-to-end migration runbook (deploy → import → seal → swap)
 ///             produces a contract that returns correct `getVotes` for the
-///             next epoch and beyond.
+///             next hour and beyond.
 contract HIGH2_LegacyImportTest is Test {
     VeHemi public veHemi;
     VeHemiVoteDelegation public legacyVVD;
@@ -217,7 +217,7 @@ contract HIGH2_LegacyImportTest is Test {
 
     // ─── End-to-end runbook ─────────────────────────────────────────────
 
-    /// @notice The full HIGH-2 mitigation runbook in one test. Demonstrates
+    /// @notice The full migration runbook in one test. Demonstrates
     ///         that votes are preserved across `updateVoteDelegation` when
     ///         the operator imports state first.
     function test_endToEndMigrationRunbook_preservesVotes() public {
@@ -270,7 +270,7 @@ contract HIGH2_LegacyImportTest is Test {
         vm.prank(OWNER);
         veHemi.updateVoteDelegation(newVVD);
 
-        // Warp to the next epoch so newVVD's checkpoints are queryable.
+        // Warp past the next hour boundary so newVVD's checkpoints are queryable.
         vm.warp(((block.timestamp / 1 hours) * 1 hours) + 1 hours + 1);
 
         // === Verification ===
@@ -296,8 +296,7 @@ contract HIGH2_LegacyImportTest is Test {
     }
 
     /// @notice WITHOUT the import step, the pointer swap silently zeros votes
-    ///         (this is the HIGH-2 bug). This test demonstrates the bug
-    ///         pre-fix and gives the fix a regression beacon.
+    ///         (the failure the import step prevents). This test pins it.
     function test_withoutImport_swapZerosVotes_documentedBug() public {
         uint256 aliceId = _mintLock(ALICE, LOCK_AMOUNT);
         vm.prank(ALICE);
@@ -312,7 +311,7 @@ contract HIGH2_LegacyImportTest is Test {
         veHemi.updateVoteDelegation(newVVD);
 
         // newVVD has no record of any delegation.
-        assertEq(newVVD.getVotes(DAVE), 0, "documented HIGH-2 bug: votes zeroed");
+        assertEq(newVVD.getVotes(DAVE), 0, "without the import, votes are zeroed");
         assertEq(newVVD.delegation(aliceId).delegatee, address(0), "delegation lost");
     }
 
@@ -360,10 +359,10 @@ contract HIGH2_LegacyImportTest is Test {
         assertEq(newVVD.autoDelegate(ALICE), address(0));
     }
 
-    // ─── Expired-lock skip (HR1-G6) ──────────────────────────────────────
+    // ─── Expired-lock skip ───────────────────────────────────────────────
     //
     // `importDelegationsFromLegacy` pre-checks each lock against the next
-    // epoch boundary so that a single expired lock does NOT revert the
+    // hour boundary so that a single expired lock does NOT revert the
     // whole batch via `_getNormalizedLockedInfo`'s CanNotDelegateExpiredLocks.
     //
     // Pre-check formula:
@@ -406,15 +405,15 @@ contract HIGH2_LegacyImportTest is Test {
         legacyVVD.delegate(bobId, CAROL);
         uint256 bobEnd = veHemi.getLockedBalance(bobId).end;
 
-        // Warp to bobEnd + 1 hour so next-checkpoint also passes bobEnd.
+        // Warp to bobEnd + 1 hour so the next hour boundary also passes bobEnd.
         vm.warp(bobEnd + 1 hours);
 
         // Confirm gate would trip: _nextCheckpoint > bobEnd.
-        uint256 nextCheckpoint = ((block.timestamp / 1 hours) * 1 hours) + 1 hours;
+        uint256 nextHourBoundary = ((block.timestamp / 1 hours) * 1 hours) + 1 hours;
         assertGt(
-            nextCheckpoint,
+            nextHourBoundary,
             bobEnd,
-            "test setup wrong: next-checkpoint must be past bobEnd"
+            "test setup wrong: the next hour boundary must be past bobEnd"
         );
 
         uint256[] memory bobIds = new uint256[](1);
@@ -431,48 +430,48 @@ contract HIGH2_LegacyImportTest is Test {
         );
     }
 
-    // Lock ending EXACTLY at the next checkpoint must be skipped (the
+    // Lock ending at or before the next hour boundary must be skipped (the
     // revert gate is `<=`, so the pre-check must also be `<=`).
-    function test_importDelegationsFromLegacy_skipsLockEndingExactlyAtNextCheckpoint() public {
+    function test_importDelegationsFromLegacy_skipsLockEndingAtOrBeforeNextHourBoundary() public {
         uint256 bobId = _mintLock(BOB, LOCK_AMOUNT);
         vm.prank(BOB);
         legacyVVD.delegate(bobId, CAROL);
         uint256 bobEnd = veHemi.getLockedBalance(bobId).end;
 
-        // Warp so the NEXT hourly checkpoint == bobEnd EXACTLY. nextCheckpoint
+        // Warp so the NEXT hour boundary == bobEnd EXACTLY. nextHourBoundary
         // = (ts/1h)*1h + 1h. Choose ts = bobEnd - 1 so floor(ts/1h)*1h + 1h
         // = bobEnd whenever bobEnd is hour-aligned; SIX_DAYS is NOT a multiple
         // of 1 hour (YEAR = 365.25d → SIX_DAYS = 526260s), so we instead pick
         // ts so that ((ts) / 1h) * 1h + 1h == bobEnd, i.e. ts ∈ [bobEnd-1h, bobEnd).
-        // The smallest such ts that yields nextCheckpoint >= bobEnd is ts = bobEnd - 1.
-        // But because bobEnd may not be hour-aligned, choose nextCheckpoint == bobEnd
+        // The smallest such ts that yields nextHourBoundary >= bobEnd is ts = bobEnd - 1.
+        // But because bobEnd may not be hour-aligned, choose nextHourBoundary == bobEnd
         // is only possible when bobEnd is hour-aligned. Instead, prove the
         // boundary case `_lock.end == _nextCheckpoint` by constructing ts so
-        // that nextCheckpoint == bobEnd exactly: warp to (bobEnd - 1) and
+        // that nextHourBoundary == bobEnd exactly: warp to (bobEnd - 1) and
         // bump forward until (ts/1h)*1h + 1h == bobEnd OR skip if impossible.
         // For SIX_DAYS-aligned ends (not hour-aligned), the closest we can
         // achieve is _nextCheckpoint > bobEnd (also a skip case, already
         // covered by the previous test). Therefore exercise the `==` branch
-        // by warping just before bobEnd so that nextCheckpoint > bobEnd by
+        // by warping just before bobEnd so that nextHourBoundary > bobEnd by
         // less than one hour, which still satisfies `_lock.end <= _nextCheckpoint`.
         vm.warp(bobEnd - 1);
-        uint256 nextCheckpoint = ((block.timestamp / 1 hours) * 1 hours) + 1 hours;
-        assertGe(nextCheckpoint, bobEnd, "next-checkpoint must >= lock end");
+        uint256 nextHourBoundary = ((block.timestamp / 1 hours) * 1 hours) + 1 hours;
+        assertGe(nextHourBoundary, bobEnd, "the next hour boundary must be >= lock end");
 
         uint256[] memory bobIds = new uint256[](1);
         bobIds[0] = bobId;
-        // Pre-check uses `<=` so end == nextCheckpoint is skipped, matching
+        // Pre-check uses `<=` so end == nextHourBoundary is skipped, matching
         // the revert condition `_end <= checkPointTimestamp_`.
         vm.prank(OWNER);
         newVVD.importDelegationsFromLegacy(legacyVVD, bobIds);
         assertEq(
             newVVD.delegation(bobId).delegatee,
             address(0),
-            "lock ending exactly at next-checkpoint must be skipped"
+            "lock ending at or before the next hour boundary must be skipped"
         );
     }
 
-    // ─── amount == 0 skip path (HR1-G14) ─────────────────────────────────
+    // ─── amount == 0 skip path ───────────────────────────────────────────
     //
     // After `withdraw()` on VeHemi the lock's `amount` is zeroed and the NFT
     // is burned. The import path must skip these tokens silently — they have
@@ -497,7 +496,7 @@ contract HIGH2_LegacyImportTest is Test {
             "withdraw should zero locked amount"
         );
 
-        // LOW-9: withdraw now clears the legacy delegation record as well
+        // withdraw clears the legacy delegation record as well
         // (the legacy VVD is the live `voteDelegation` in this test setup,
         // so its delegations[id] is cleaned up by the cleanup path). Both
         // guards in import — `legacyD.delegatee == 0` AND `_lock.amount == 0`
@@ -505,7 +504,7 @@ contract HIGH2_LegacyImportTest is Test {
         assertEq(
             legacyVVD.delegation(aliceId).delegatee,
             address(0),
-            "LOW-9: withdraw clears legacy delegation cache"
+            "withdraw clears legacy delegation cache"
         );
 
         // Import must skip silently (no revert) and write no record.
@@ -521,7 +520,7 @@ contract HIGH2_LegacyImportTest is Test {
         );
     }
 
-    // ─── Event emission (HR1-G14) ─────────────────────────────────────────
+    // ─── Event emission ───────────────────────────────────────────────────
     //
     // `finalizeMigration` must emit `MigrationFinalizedEvent` EXACTLY ONCE
     // — the second call is a no-op (idempotent) and must NOT re-emit, so
@@ -608,7 +607,7 @@ contract HIGH2_LegacyImportTest is Test {
         assertEq(finCount, 1, "finalize event must be emitted exactly once");
     }
 
-    // ─── HR2-G9: idempotency stress tests ────────────────────────────────
+    // ─── Idempotency stress tests ────────────────────────────────────────
     //
     // The guards `if (delegations[id].delegatee != address(0)) continue;`
     // and `if (autoDelegate[o] != address(0)) continue;` must hold under
@@ -757,7 +756,7 @@ contract HIGH2_LegacyImportTest is Test {
         assertEq(newVVD.delegation(dId).delegatee, ALICE, "d newly imported");
     }
 
-    // ─── HR2-G14: user-set autoDelegate preempts import ──────────────────
+    // ─── User-set autoDelegate preempts import ───────────────────────────
     //
     // Mirror of `userDelegationPreemptsImport` for the autoDelegate path.
     // Guard: `if (autoDelegate[o] != address(0)) continue;`. If a user has
@@ -785,7 +784,7 @@ contract HIGH2_LegacyImportTest is Test {
         );
     }
 
-    // ─── HR2-G14: event-arg correctness ──────────────────────────────────
+    // ─── Event-arg correctness ───────────────────────────────────────────
     //
     // The end-to-end event-order test only asserts on `topics[0]`
     // signatures. This test pins the FULL args of both legacy-import

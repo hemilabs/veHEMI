@@ -169,11 +169,11 @@ contract StorageLayoutRegressionTest is Test {
 
     /// @dev Third mutant: VeHemiVoteDelegation Delegation struct with
     ///      delegatee and end swapped. Parity with the LockedBalance swap
-    ///      mutant — proves the R-2 Delegation member-layout pin in
+    ///      mutant — proves the Delegation member-layout pin in
     ///      StorageLayoutGolden.t.sol would catch a real intra-struct swap.
     ///
-    ///      Note: unlike the other mutants (which etch onto a VeHemi proxy),
-    ///      this mutant is self-contained. The R-2 golden tests read a
+    ///      Note: unlike the first two mutants (etched onto a VeHemi proxy),
+    ///      this mutant is self-contained. The golden tests read a
     ///      fixture, not deployed bytecode, so the mutant here is used only
     ///      to DEMONSTRATE that the kind of fixture it would produce
     ///      disagrees with the pinned expectations.
@@ -192,7 +192,7 @@ contract StorageLayoutRegressionTest is Test {
 
         // Under correct layout the mutant's state would read as mismatched
         // sentinels — demonstrating that if a future refactor swapped these
-        // fields in source, the R-2 pin (delegatee@offset 0, end@offset 20)
+        // fields in source, the golden pin (delegatee@offset 0, end@offset 20)
         // would fire against the regenerated fixture.
         assertTrue(
             correctLayoutDelegatee != address(0xABCD) || correctLayoutEnd != uint48(0x123456),
@@ -202,11 +202,11 @@ contract StorageLayoutRegressionTest is Test {
 
     /// @dev Fourth mutant: V2 delegation storage with __gapV2 shrunk from
     ///      [44] to [43] and a new field appended in its place. Proves
-    ///      that `test_VeHemiVoteDelegation_GapIsExactly44Slots` in
+    ///      that `test_VeHemiVoteDelegation_GapV2IsExactly44Slots` in
     ///      StorageLayoutGolden.t.sol (which pins the `t_array(t_uint256)44_storage`
     ///      type key) would fire against a regenerated fixture for this layout.
-    ///      This closes mutation class M2 (gap-size reduction) that plain
-    ///      sentinel-at-zero gap tests miss.
+    ///      This covers a gap-size reduction, which plain sentinel-at-zero
+    ///      gap tests miss.
     function test_ShrunkGapV2_FixtureDisagreesWithGolden() public {
         BadDelegationGapShrunk mutant = new BadDelegationGapShrunk();
         // Write a sentinel into the newly-added field at the END of the
@@ -305,8 +305,8 @@ contract StorageLayoutRegressionTest is Test {
     ///      `totalSlope` ↔ `totalBias` swapped within slot 24 (the packed
     ///      int128 pair). Parallel to the `LockedBalance` and `Delegation`
     ///      swap mutants — proves that the
-    ///      `test_VeHemi_SeedingProgressMemberLayout` golden pin
-    ///      (StorageLayoutGolden.t.sol:286-330) discriminates an intra-struct
+    ///      `test_VeHemi_SeedingProgressMemberLayout` golden pin in
+    ///      StorageLayoutGolden.t.sol discriminates an intra-struct
     ///      reorder of the seeding accumulator.
     ///
     ///      Why this matters at runtime: `finalizeSeeding` computes
@@ -321,10 +321,10 @@ contract StorageLayoutRegressionTest is Test {
     ///      labeled `totalBias` at offset 0 (not `totalSlope`), failing the
     ///      pin.
     function test_SwappedSeedingProgress_DiscriminatesLayout() public {
-        // Pattern note: like mutants M3-M6 above (and unlike M1-M2 which
-        // use `vm.etch` onto a deployed proxy), this mutant is self-
-        // contained. The discriminator is the JSON fixture that
-        // `test_VeHemi_SeedingProgressMemberLayout` pins against, not
+        // Pattern note: like the third to sixth mutants above (and unlike
+        // the first two, which use `vm.etch` onto a deployed proxy), this
+        // mutant is self-contained. The discriminator is the JSON fixture
+        // that `test_VeHemi_SeedingProgressMemberLayout` pins against, not
         // runtime bytecode through a proxy. So we deploy the mutant
         // standalone, exercise its setters/raw-readers, and prove the
         // resulting storage layout disagrees with the canonical pin.
@@ -463,7 +463,7 @@ contract VeHemiBadLockedBalance {
 }
 
 /// @dev Mutant VoteDelegation with Delegation's first two fields swapped
-///      (end before delegatee). Proves the R-2 `DelegationMemberLayout`
+///      (end before delegatee). Proves the `DelegationMemberLayout`
 ///      golden-fixture pin discriminates real struct-field swaps.
 contract BadDelegation {
     struct DelegationSwapped {
@@ -485,8 +485,7 @@ contract BadDelegation {
 
 /// @dev Fourth mutant: V2 delegation layout with __gapV2 shrunk from [44]
 ///      to [43] and a new `extraSlot` field inserted in its place. This
-///      is a direct model of the "gap-size reduction" regression class
-///      (M2 in the external mutation analysis). Layout mirrors
+///      is a direct model of a gap-size reduction. Layout mirrors
 ///      VeHemiDelegationStorageV2 exactly through slot 48, then `extraSlot`
 ///      occupies slot 49 (the old last gap slot).
 contract BadDelegationGapShrunk {

@@ -13,7 +13,7 @@ import {MockERC20} from "./mocks/MockERC20.sol";
 /// @notice Behavioral coverage for the VeHemi ↔ VeHemiVoteDelegation
 ///         interaction surfaces that govern vote attribution. Each test
 ///         pins an observable property so a future refactor that
-///         re-introduces the original bug class fails loudly. Specifically:
+///         breaks it fails loudly. Specifically:
 ///
 ///         * `transferFrom` runs the ERC721 ownership swap BEFORE the
 ///           delegation hook, so the IVotes-shaped `DelegateChanged` event
@@ -317,19 +317,20 @@ contract DelegationBehaviorTest is Test {
     }
 
     // -------------------------------------------------------------------------
-    // NEAR-EXPIRY FORFEIT CLEANUP — regression for the stale-delegation bug
+    // NEAR-EXPIRY FORFEIT CLEANUP — every forfeit clears the delegation record
     // -------------------------------------------------------------------------
     //
-    // Bug (pre-fix, observed via fuzz seed perturbation): when `forfeit(id)`
-    // ran with `block.timestamp + 1 hour > locked[id].end`, VeHemi's
-    // `_delegate` outer guard (`_newDelegationStarts < locked.end`) skipped
-    // the inner `voteDelegation.delegate(id, address(0))` call entirely.
-    // `delegations[id]` was left populated even though the NFT was burned.
+    // A forfeit once the next hour boundary is at or past `locked[id].end`
+    // (at most the lock's last hour) must still run the inner
+    // `voteDelegation.delegate(id, address(0))` call and clear
+    // `delegations[id]`, although the `_newDelegationStarts < locked.end`
+    // clause of VeHemi's `_delegate` outer guard is false there. Otherwise
+    // the record would stay populated after the NFT is burned.
     //
-    // The fix is two parts:
-    //   1. VeHemi._delegate now lets `delegatee_ == address(0)` ALWAYS pass
+    // Two parts make the cleanup run to completion:
+    //   1. VeHemi._delegate lets `delegatee_ == address(0)` ALWAYS pass
     //      the outer guard (cleanup intent is never expiry-blocked).
-    //   2. VeHemiVoteDelegation._delegate now invokes
+    //   2. VeHemiVoteDelegation._delegate invokes
     //      `_getNormalizedLockedInfo` ONLY inside the new-delegatee branch,
     //      so the cleanup branch tolerates locks at/past expiry without
     //      reverting `CanNotDelegateExpiredLocks`.
@@ -338,9 +339,8 @@ contract DelegationBehaviorTest is Test {
     // path, regardless of how close to lock-end the forfeit lands.
 
     /// @notice Forfeit invoked within ~1 hour of `lock.end` MUST still clear
-    ///         `delegations[id]`. This is the exact bug the original fuzz
-    ///         surfaced: pre-fix, the cached delegatee stayed pointing at the
-    ///         original owner after the NFT was burned.
+    ///         `delegations[id]`; otherwise the cached delegatee would keep
+    ///         pointing at the original owner after the NFT is burned.
     function test_forfeit_nearLockEnd_clearsDelegationCache() public {
         veHemi.updateForfeitAdmin(owner);
 
@@ -358,13 +358,13 @@ contract DelegationBehaviorTest is Test {
         // Pre-state: delegation cache populated with alice (self-delegate default).
         assertEq(delegation.delegation(tokenId).delegatee, alice, "pre-forfeit: cache points at alice");
 
-        // Warp to 30 minutes before lock-end — strictly within the buggy
-        // window where the prior `_newDelegationStarts < locked.end` guard
-        // would have short-circuited the cleanup call.
+        // Warp to 30 minutes before lock-end — after the last hour boundary
+        // before it, where the `_newDelegationStarts < locked.end` clause
+        // is false.
         uint256 lockEnd = veHemi.getLockedBalance(tokenId).end;
         vm.warp(lockEnd - 30 minutes);
 
-        // Forfeit. With the fix, the cleanup call now propagates through
+        // Forfeit. The cleanup call propagates through
         // BOTH the outer VeHemi guard (carve-out for address(0)) AND the
         // inner `_getNormalizedLockedInfo` skip (cleanup branch doesn't
         // need normalized values). `delegations[id]` must be fully zeroed.
@@ -378,9 +378,9 @@ contract DelegationBehaviorTest is Test {
         assertEq(uint256(d.end), 0, "post-forfeit: end MUST be cleared");
     }
 
-    /// @notice SANITY companion: forfeit FAR from lock-end (the historically
-    ///         working path) still clears the cache. Confirms the fix didn't
-    ///         break the originally-correct case.
+    /// @notice SANITY companion: forfeit FAR from lock-end, where the
+    ///         `_newDelegationStarts < locked.end` clause is true anyway,
+    ///         also clears the cache.
     function test_forfeit_farFromLockEnd_clearsDelegationCache() public {
         veHemi.updateForfeitAdmin(owner);
 
@@ -390,8 +390,7 @@ contract DelegationBehaviorTest is Test {
         uint256 tokenId = veHemi.createLockFor(LOCK_AMOUNT, YEAR, alice, false, true);
         vm.stopPrank();
 
-        // Warp only 1 day forward — months until lock-end. The pre-fix code
-        // ALREADY worked here; this test pins that the fix preserves it.
+        // Warp only 1 day forward — months until lock-end.
         vm.warp(block.timestamp + 1 days);
 
         veHemi.forfeit(tokenId);
@@ -403,10 +402,11 @@ contract DelegationBehaviorTest is Test {
 
     /// @notice Parametric sweep across the boundary: forfeit at
     ///         `lock.end - {1, 60, 3599, 3600, 3601}` seconds. The exact
-    ///         off-by-one matters for the guard rewrite: `_newDelegationStarts`
-    ///         is `(now/1h)*1h + 1h`, so the boundary where the prior guard
-    ///         flipped is `block.timestamp ∈ [lock.end - 1h, lock.end)`.
-    ///         All five samples must clear the cache post-fix.
+    ///         off-by-one matters: `_newDelegationStarts` is
+    ///         `(now/1h)*1h + 1h`, so its `< lock.end` clause is false from
+    ///         the last hour boundary before `lock.end` up to `lock.end`
+    ///         (`[lock.end - 1h, lock.end)` only for an hour-aligned end).
+    ///         All five samples must clear the cache.
     function test_forfeit_nearLockEnd_boundarySweep_clearsCache() public {
         veHemi.updateForfeitAdmin(owner);
 
@@ -611,10 +611,10 @@ contract DelegationBehaviorTest is Test {
     }
 
     // -------------------------------------------------------------------------
-    // FR2-B4: expiredDelegations slope-change bookkeeping under near-expiry
-    //         forfeit. Verifies no double-apply / double-reverse occurs when
-    //         a rollover checkpoint lands between delegation creation and
-    //         the forfeit cleanup call.
+    // expiredDelegations slope-change bookkeeping under near-expiry
+    // forfeit. Verifies no double-apply / double-reverse occurs when
+    // a rollover checkpoint lands between delegation creation and
+    // the forfeit cleanup call.
     // -------------------------------------------------------------------------
 
     /// @notice After rollover materializes alice's expiration, a subsequent
@@ -702,7 +702,8 @@ contract DelegationBehaviorTest is Test {
         veHemi.forfeit(tokenId);
 
         // Voting power already zero (the only delegated weight was alice's
-        // own, which we just removed at the next epoch boundary).
+        // own, which the forfeit just removed; the removal lands at the next
+        // second).
         // Now warp PAST lockEnd. If the bucket retained ANY residual
         // entries, the rollover walk would either revert (underflow) or
         // produce a checkpoint with phantom negative deltas applied to a
@@ -723,7 +724,7 @@ contract DelegationBehaviorTest is Test {
     }
 
     // -------------------------------------------------------------------------
-    // LOW-9 / L9R2-G9: multi-NFT-per-address — withdrawing ONE expired token
+    // Multi-NFT-per-address — withdrawing ONE expired token
     // must not touch the delegations of the holder's OTHER tokens, and the
     // address-level IVotes view exposed by the Aragon adapter must drop by
     // exactly that token's (residual) contribution.
@@ -823,66 +824,66 @@ contract DelegationBehaviorTest is Test {
         address eve = makeAddr("eve");
 
         uint256 e0 = block.timestamp;
-        uint256 jid1 = _createLock(eve, LOCK_AMOUNT, 90 days);
+        uint256 eveId1 = _createLock(eve, LOCK_AMOUNT, 90 days);
         vm.warp(e0 + 30 days);
-        uint256 jid2 = _createLock(eve, LOCK_AMOUNT, 180 days);
+        uint256 eveId2 = _createLock(eve, LOCK_AMOUNT, 180 days);
         vm.warp(e0 + 60 days);
-        uint256 jid3 = _createLock(eve, LOCK_AMOUNT, 270 days);
+        uint256 eveId3 = _createLock(eve, LOCK_AMOUNT, 270 days);
 
-        assertEq(delegation.delegation(jid1).delegatee, eve, "jid1 self-delegated by mint");
-        assertEq(delegation.delegation(jid2).delegatee, eve, "jid2 self-delegated by mint");
-        assertEq(delegation.delegation(jid3).delegatee, eve, "jid3 self-delegated by mint");
+        assertEq(delegation.delegation(eveId1).delegatee, eve, "eveId1 self-delegated by mint");
+        assertEq(delegation.delegation(eveId2).delegatee, eve, "eveId2 self-delegated by mint");
+        assertEq(delegation.delegation(eveId3).delegatee, eve, "eveId3 self-delegated by mint");
 
         VeHemiAragonAdapter adapter = new VeHemiAragonAdapter(address(veHemi));
 
-        // Warp past jid1 only.
-        uint256 jend1 = veHemi.getLockedBalance(jid1).end;
-        vm.warp(jend1 + 1 hours);
+        // Warp past eveId1 only.
+        uint256 eveEnd1 = veHemi.getLockedBalance(eveId1).end;
+        vm.warp(eveEnd1 + 1 hours);
 
         // Snapshot eve's adapter.getVotes at the EXACT pre-withdraw timestamp.
         uint256 votesPre = adapter.getVotes(eve);
-        assertGt(votesPre, 0, "eve has votes from (still-live) jid2 + jid3");
+        assertGt(votesPre, 0, "eve has votes from (still-live) eveId2 + eveId3");
 
-        // jid1 is past its end → its bias has fully decayed to zero on the
+        // eveId1 is past its end → its bias has fully decayed to zero on the
         // veHEMI curve. Its "residual contribution" at this timestamp is 0,
         // so the withdraw's cleanup should be a vote-balance no-op for eve
-        // (it merely zeroes already-zero bookkeeping for jid1).
+        // (it merely zeroes already-zero bookkeeping for eveId1).
         vm.prank(eve);
-        veHemi.withdraw(jid1);
+        veHemi.withdraw(eveId1);
 
         uint256 votesPost = adapter.getVotes(eve);
 
-        // STRICT property: the drop is exactly jid1's residual (≈ 0 post-expiry).
+        // STRICT property: the drop is exactly eveId1's residual (≈ 0 post-expiry).
         // Tolerate ≤1% slippage to absorb any rounding inside the
         // checkpoint write at the SAME block (in practice this is 0).
         assertLe(votesPost, votesPre, "votes monotone non-increasing across withdraw");
         uint256 minExpected = (votesPre * 99) / 100;
-        assertGe(votesPost, minExpected, "drop bounded by jid1's residual (~0 post-expiry)");
+        assertGe(votesPost, minExpected, "drop bounded by eveId1's residual (~0 post-expiry)");
 
-        // jid2 and jid3 still self-delegated to eve → eve still has votes.
-        assertGt(votesPost, 0, "eve still has votes from jid2 + jid3");
-        assertEq(delegation.delegation(jid1).delegatee, address(0), "jid1 cleared");
-        assertEq(delegation.delegation(jid2).delegatee, eve, "jid2 still eve");
-        assertEq(delegation.delegation(jid3).delegatee, eve, "jid3 still eve");
+        // eveId2 and eveId3 still self-delegated to eve → eve still has votes.
+        assertGt(votesPost, 0, "eve still has votes from eveId2 + eveId3");
+        assertEq(delegation.delegation(eveId1).delegatee, address(0), "eveId1 cleared");
+        assertEq(delegation.delegation(eveId2).delegatee, eve, "eveId2 still eve");
+        assertEq(delegation.delegation(eveId3).delegatee, eve, "eveId3 still eve");
     }
 
     // -------------------------------------------------------------------------
-    // LOW-9 (L9R2-G11): event-order pin for natural-expiry withdraw
+    // Event-order pin for natural-expiry withdraw
     // -------------------------------------------------------------------------
 
     /// @notice Pin the exact ORDER of events emitted during a natural-expiry
-    ///         withdraw. R1-G11 verified the intended sequence by reading the
+    ///         withdraw. The intended sequence can be read from the
     ///         source; this test pins it on-chain so any future refactor that
     ///         re-orders the cleanup steps (e.g., emitting `Withdraw` before
-    ///         the delegation cleanup, or flipping `DelegateVotesChanged`
-    ///         past `DelegateChanged`) fails loudly.
+    ///         the delegation cleanup, or emitting `DelegateVotesChanged`
+    ///         before `DelegateChanged`) fails loudly.
     ///
     ///         Expected order in the recorded log stream:
-    ///           1. `DelegateVotesChanged(oldDelegate, prev, new)`
+    ///           1. `DelegateChanged(tokenId, oldDelegate, address(0))`
+    ///              from `address(delegation)` — cache retirement marker.
+    ///           2. `DelegateVotesChanged(oldDelegate, prev, new)`
     ///              from `address(delegation)` — checkpoint subtracts the
     ///              forfeited voting weight from the delegatee.
-    ///           2. `DelegateChanged(tokenId, oldDelegate, address(0))`
-    ///              from `address(delegation)` — cache retirement marker.
     ///           3. `Withdraw(provider, tokenId, amount, timestamp)`
     ///              from `address(veHemi)` — token-burn / refund.
     ///
@@ -897,8 +898,8 @@ contract DelegationBehaviorTest is Test {
         delegation.delegate(tokenId, bob);
 
         assertEq(delegation.delegation(tokenId).delegatee, bob, "pre: delegated to bob");
-        // Note: getVotes(bob) is 0 at this exact second because checkpoints
-        // apply at the NEXT hour boundary. The DelegateVotesChanged event is
+        // Note: getVotes(bob) is 0 at this exact second because a delegation
+        // change lands at block.timestamp + 1. The DelegateVotesChanged event is
         // still emitted unconditionally inside _moveVotingPowerFromPreviousDelegate,
         // so we don't need a non-zero precondition to pin the order.
 
@@ -910,7 +911,7 @@ contract DelegationBehaviorTest is Test {
         veHemi.withdraw(tokenId);
         Vm.Log[] memory logs = vm.getRecordedLogs();
 
-        // Canonical topic0 hashes for the three events we expect, in order.
+        // Canonical topic0 hashes for the three events we expect.
         bytes32 dvcSig = keccak256("DelegateVotesChanged(address,uint256,uint256)");
         bytes32 dcSig = keccak256("DelegateChanged(uint256,address,address)");
         bytes32 wSig = keccak256("Withdraw(address,uint256,uint256,uint256)");
@@ -966,9 +967,9 @@ contract DelegationBehaviorTest is Test {
         assertGt(idxDc, -1, "DelegateChanged not emitted");
         assertGt(idxW, -1, "Withdraw not emitted");
 
-        // Strict ordering: DelegateVotesChanged < DelegateChanged < Withdraw.
-        assertLt(idxDvc, idxDc, "order: DelegateVotesChanged must precede DelegateChanged");
-        assertLt(idxDc, idxW, "order: DelegateChanged must precede Withdraw");
+        // Strict ordering: DelegateChanged < DelegateVotesChanged < Withdraw.
+        assertLt(idxDc, idxDvc, "order: DelegateChanged must precede DelegateVotesChanged");
+        assertLt(idxDvc, idxW, "order: DelegateVotesChanged must precede Withdraw");
     }
 
     // -------------------------------------------------------------------------

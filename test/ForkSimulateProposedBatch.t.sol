@@ -339,8 +339,8 @@ contract ForkSimulateProposedBatchTest is Test {
     // ─────────────────────────────────────────────────────────────────────
     // Section B — Transferability gate
     //
-    // 1. Pick a known mainnet non-transferable position (token 28661,
-    //    owned by 0xE156…324B). Attempting transferFrom must revert with
+    // 1. Pick a known mainnet non-transferable position (the sample id
+    //    captured in Section A). Attempting transferFrom must revert with
     //    NotTransferable.
     // 2. Mint a fresh transferable position in-test (HEMI dealt to a test
     //    account). Owner must be able to transfer it freely.
@@ -348,8 +348,7 @@ contract ForkSimulateProposedBatchTest is Test {
     function _verifyTransferabilityGate(VeHemi veHemi) internal {
         // (1) Non-transferable position rejects transfer. Uses the
         // sample id captured during Section A's scan so the test
-        // self-heals if any specific id (e.g., 28661 we hardcoded
-        // previously) is later withdrawn.
+        // self-heals if any specific id (e.g., 28661) is later withdrawn.
         uint256 nonTransferableId = _ntSampleId;
         address ntOwner = _ntSampleOwner;
         require(veHemi.transferableAfter(nonTransferableId) > block.timestamp, "_ntSampleId is no longer non-transferable - reconstruction must have skipped");

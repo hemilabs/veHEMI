@@ -4,6 +4,12 @@ on:
     push:
     pull_request:
     workflow_dispatch:
+    schedule:
+        # Nightly: full invariant budgets, the Aragon lifecycle and the deploy rehearsal.
+        - cron: "17 3 * * *"
+
+permissions:
+    contents: read
 
 env:
     FOUNDRY_PROFILE: ci
@@ -15,13 +21,12 @@ jobs:
 
         name: Foundry project
         runs-on: ubuntu-latest
+        timeout-minutes: 90
         env:
-            HEMI_RPC_URL: ${{ secrets.HEMI_RPC_URL }}
-            # Optional reproducible fork block. Leave unset in CI to let the
-            # fork tests that don't require determinism use `latest`; set to a
-            # specific Hemi block in a variable or dispatch input when you
-            # want bit-reproducible state-preservation runs.
-            HEMI_FORK_BLOCK: ${{ vars.HEMI_FORK_BLOCK }}
+            # Whether the HEMI_RPC_URL secret is set. The `secrets` context is not
+            # available in a step `if:`, so it is evaluated here; the secret itself
+            # is passed only to the steps that need it.
+            HAS_HEMI_RPC: ${{ secrets.HEMI_RPC_URL != '' }}
         steps:
             - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
               with:
@@ -32,36 +37,50 @@ jobs:
               with:
                   node-version-file: ".nvmrc"
 
-            - name: Run npm install
-              run: npm i
+            # `npm ci` installs strictly from package-lock.json and fails if it
+            # disagrees with package.json.
+            - name: Run npm ci
+              run: npm ci
 
+            # The OpenZeppelin and solc sources in node_modules must be the ones the
+            # deployed contracts were compiled from (deployments/hemi/solcInputs).
+            - name: Dependency-source drift gate
+              run: |
+                  chmod +x scripts/check-oz-drift.sh
+                  scripts/check-oz-drift.sh .
+              id: oz-drift-gate
+
+            # Pinned: the EIP-170 attestation hashes the full deployedBytecode, CBOR
+            # metadata included, so another forge release can move it.
             - name: Install Foundry
               uses: foundry-rs/foundry-toolchain@8b0419c685ef46cb79ec93fbdc131174afceb730 # v1.6.0
+              with:
+                  version: v1.5.1
 
             - name: Show Forge version
               run: |
                   forge --version
 
             - name: Forge clean (drop orphan artifacts)
-              # Defense-in-depth against phantom tests: if a feature branch
-              # ever ships with a stale `out/<scratch-test>/` directory whose
-              # source file has been deleted, forge will still pick up the
-              # compiled bytecode and run it. Cleaning here guarantees the
-              # build below starts from source.
+              # Defense-in-depth against phantom tests from a stale out/ directory.
               run: |
                   forge clean
               id: clean
 
+            # The full build, tests included, then the size table for the deployed
+            # contracts only (`--sizes` exits 1 if any compiled contract exceeds
+            # EIP-170, and some test-only helpers do).
             - name: Run Forge build
               run: |
-                  forge build --sizes
+                  forge build
+                  forge build --sizes --skip 'test/**'
               id: build
 
             - name: Enforce EIP-170 contract-size limit
-              # `forge build --sizes` only PRINTS sizes — it exits 0 even on
-              # overflow. Production-shipped contracts must fit the 24,576-byte
-              # runtime limit. Fail the build if any contract under src/ is
-              # within 64 bytes of the cliff, giving reviewers a chance to
+              # Production-shipped contracts must fit the 24,576-byte runtime
+              # limit. Beyond the hard limit `forge build --sizes` enforces, warn
+              # when any contract under src/ is within 64 bytes of the cliff,
+              # giving reviewers a chance to
               # consider library extraction before a future PR pushes over.
               # Use `forge inspect` per contract under src/ (excluding test/,
               # script/, lib/, mocks/) to compute runtime size and compare.
@@ -70,9 +89,9 @@ jobs:
                   WARN=$((LIMIT - 64))
                   OVERFLOW=0
                   for f in $(find src -type f -name '*.sol'); do
-                      # Get every concrete contract name in the file (skip
-                      # interfaces and libraries — they don't deploy).
-                      contracts=$(grep -oE '^contract +[A-Za-z_][A-Za-z0-9_]*' "$f" | awk '{print $2}')
+                      # Get every contract and library name in the file (skip
+                      # interfaces and abstract contracts — they don't deploy).
+                      contracts=$(grep -oE '^(contract|library) +[A-Za-z_][A-Za-z0-9_]*' "$f" | awk '{print $2}')
                       for c in $contracts; do
                           # `forge inspect <name> bytecode` returns deployment
                           # bytecode; runtime is what's measured by EIP-170.
@@ -91,45 +110,178 @@ jobs:
                   exit $OVERFLOW
               id: size-gate
 
+            # The built bytecode must match the committed attestation
+            # (test/fixtures/eip170-attestation.json). Writes nothing.
+            - name: EIP-170 attestation
+              run: |
+                  chmod +x scripts/check-eip170.sh
+                  scripts/check-eip170.sh --no-build --verify
+              id: eip170-attestation
+
             - name: Check storage layouts against golden fixtures
               run: |
                   chmod +x scripts/check-storage-layouts.sh
                   scripts/check-storage-layouts.sh
               id: storage-layout-gate
 
+            # VeHemi's DELEGATECALL libraries address VeHemi storage through a
+            # mirror struct (src/lib/VeHemiLayout.sol); it must match VeHemi's layout
+            # member for member.
+            - name: Library storage-mirror gate
+              run: |
+                  chmod +x scripts/check-library-layout-mirror.sh
+                  scripts/check-library-layout-mirror.sh
+              id: library-mirror-gate
+
+            - name: TypeScript (hardhat compile + tsc)
+              run: |
+                  npx hardhat compile
+                  npx tsc --noEmit
+              id: typescript
+
+            # Fork suites self-skip without an RPC URL. Invariant campaigns run at
+            # the ci profile's reduced budget here and at full budget nightly.
             - name: Run Forge tests
-              # The E2E deployment fork tests (ForkE2EDeployment and
-              # ForkSimulateProposedBatch) are excluded from the gated CI
-              # path. They require a private Hemi RPC endpoint, take
-              # 30–60 minutes each, and are deploy-time validation tools
-              # rather than per-commit regression gates. Run them locally
-              # via `HEMI_RPC_URL=... forge test --match-contract
-              # ForkSimulateProposedBatch` before queuing a Safe MultiSend.
+              timeout-minutes: 45
               run: |
                   forge test \
                     --no-match-contract "ForkE2EDeployment|ForkSimulateProposedBatch" \
-                    -vvv
+                    -vv
               id: test
 
-            - name: Run Hemi-fork tests (optional — requires HEMI_RPC_URL secret)
-              if: env.HEMI_RPC_URL != ''
-              timeout-minutes: 10
-              # --threads 1 serializes test execution to keep the per-minute
-              # RPC burst under Hemi's public-RPC 300-req/min cap (parallel
-              # workers across 90+ fork tests otherwise trip HTTP 429).
-              # --fork-block-number pins the fork to a reproducible block
-              # when HEMI_FORK_BLOCK is set as a repo variable; unset leaves
-              # the fork at latest. Block pinning enables Foundry's on-disk
-              # RPC cache to absorb repeated reads across reruns.
+            # The auto-relock upgrade on a Hemi mainnet fork at a fixed block
+            # (test/autorelock-upgrade/AutoRelockUpgradeForkBase.sol;
+            # AUTORELOCK_TEST_FORK_BLOCK defaults to 5,524,738). With the RPC set, a
+            # skipped test in that directory is a fork premise that did not hold (for
+            # example a fork block after the upgrade executed), not a pass: it fails the step.
+            - name: Hemi-fork tests, auto-relock upgrade (requires HEMI_RPC_URL secret)
+              if: env.HAS_HEMI_RPC == 'true'
+              timeout-minutes: 30
+              env:
+                  HEMI_RPC_URL: ${{ secrets.HEMI_RPC_URL }}
+                  AUTORELOCK_TEST_FORK_BLOCK: ${{ vars.AUTORELOCK_TEST_FORK_BLOCK }}
+              # --threads 1 keeps the request rate under the public RPC's
+              # 300-request/minute cap. `shell: bash` adds pipefail, so a red
+              # forge run still fails through `tee`.
+              shell: bash
               run: |
-                  EXTRA_ARGS=""
-                  if [ -n "$HEMI_FORK_BLOCK" ]; then
-                      EXTRA_ARGS="--fork-block-number $HEMI_FORK_BLOCK"
+                  forge test --match-path 'test/autorelock-upgrade/*' --threads 1 -vv | tee autorelock-upgrade-fork.log
+                  summary=$(grep -E '^Ran [0-9]+ test suites? in ' autorelock-upgrade-fork.log | tail -1 || true)
+                  case "$summary" in
+                      *" failed, 0 skipped "*) ;;
+                      *)
+                          echo "::error::test/autorelock-upgrade on the Hemi fork must skip nothing; forge summary: ${summary:-none}"
+                          exit 1
+                          ;;
+                  esac
+                  forge test --match-contract StorageLayoutOnchainAnchor --threads 1 -vv
+              id: fork-test-autorelock
+
+            # The V1 -> V2 upgrade suites replay history: they need a block at or
+            # below 4,458,622 (markSeedingStarted ran at 4,458,623). They run only
+            # when the HEMI_FORK_BLOCK repository variable is set to such a block.
+            # Archival: known red at such a block (7 failing tests) and too slow on a
+            # cold cache.
+            - name: Hemi-fork tests, V2 upgrade history (requires HEMI_RPC_URL and HEMI_FORK_BLOCK)
+              if: env.HAS_HEMI_RPC == 'true' && vars.HEMI_FORK_BLOCK != ''
+              timeout-minutes: 10
+              env:
+                  HEMI_RPC_URL: ${{ secrets.HEMI_RPC_URL }}
+                  HEMI_FORK_BLOCK: ${{ vars.HEMI_FORK_BLOCK }}
+              run: |
+                  if [ "$HEMI_FORK_BLOCK" -gt 4458622 ]; then
+                      echo "::error::HEMI_FORK_BLOCK=$HEMI_FORK_BLOCK is above 4,458,622; these suites replay the V2 seeding"
+                      exit 1
                   fi
                   forge test \
                     --match-contract "ForkUpgradeVoteDelegation|ForkUpgradeLockedCurve" \
                     --fork-url hemi \
+                    --fork-block-number "$HEMI_FORK_BLOCK" \
                     --threads 1 \
-                    $EXTRA_ARGS \
-                    -vvv
-              id: fork-test
+                    -vv
+              id: fork-test-v2
+
+            # The Aragon OSx lifecycle against the real DAOFactory on Ethereum
+            # mainnet (14 tests; without an RPC URL they skip). Runs when the
+            # ETH_RPC_URL repository variable is set, and nightly. It must name a
+            # key-less public archive endpoint: repository variables are not masked
+            # in logs, so never put a keyed URL here.
+            - name: Aragon lifecycle fork tests (requires ETH_RPC_URL variable)
+              if: vars.ETH_RPC_URL != ''
+              timeout-minutes: 15
+              env:
+                  ETH_RPC_URL: ${{ vars.ETH_RPC_URL }}
+                  ETH_FORK_BLOCK: ${{ vars.ETH_FORK_BLOCK || '26000000' }}
+              run: |
+                  chmod +x scripts/check-aragon-lifecycle.sh scripts/rpc-retry.sh
+                  scripts/rpc-retry.sh scripts/check-aragon-lifecycle.sh .
+              id: aragon-lifecycle
+
+    nightly:
+        if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+        name: Full invariant budgets, Aragon lifecycle, deploy rehearsal
+        runs-on: ubuntu-latest
+        timeout-minutes: 360
+        env:
+            HAS_HEMI_RPC: ${{ secrets.HEMI_RPC_URL != '' }}
+        steps:
+            - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+              with:
+                  submodules: recursive
+
+            - name: Use nvmrc
+              uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+              with:
+                  node-version-file: ".nvmrc"
+
+            - name: Run npm ci
+              run: npm ci
+
+            # Pinned: the EIP-170 attestation hashes the full deployedBytecode, CBOR
+            # metadata included, so another forge release can move it.
+            - name: Install Foundry
+              uses: foundry-rs/foundry-toolchain@8b0419c685ef46cb79ec93fbdc131174afceb730 # v1.6.0
+              with:
+                  version: v1.5.1
+
+            # Every invariant campaign at the default profile's 1024 runs x 128 depth
+            # (the `Foundry project` job runs them at 128 x 128 on every push and
+            # pull request, except two inline ci overrides).
+            - name: Invariant campaigns, full budget
+              env:
+                  FOUNDRY_PROFILE: default
+              run: |
+                  forge test --match-test "^invariant" -vv
+              id: invariants
+
+            # The same key-less variable as above, else a free public archive endpoint.
+            # It runs even when the invariant step failed; only a cancelled run skips it.
+            - name: Aragon lifecycle fork tests
+              if: ${{ !cancelled() }}
+              timeout-minutes: 15
+              env:
+                  ETH_RPC_URL: ${{ vars.ETH_RPC_URL || 'https://eth.drpc.org' }}
+                  ETH_FORK_BLOCK: ${{ vars.ETH_FORK_BLOCK || '26000000' }}
+              run: |
+                  chmod +x scripts/check-aragon-lifecycle.sh scripts/rpc-retry.sh
+                  scripts/rpc-retry.sh scripts/check-aragon-lifecycle.sh .
+              id: aragon-lifecycle
+
+            # deploy/08 end to end on a Hemi mainnet fork (about 35 minutes). It runs
+            # even when an earlier nightly step failed; only a cancelled run skips it.
+            # Its fork block is the AUTORELOCK_REHEARSAL_FORK_BLOCK repository variable,
+            # passed below as the HEMI_FORK_BLOCK environment variable
+            # (AUTORELOCK_TEST_FORK_BLOCK sets the fork block of
+            # test/autorelock-upgrade; the repository variable HEMI_FORK_BLOCK sets
+            # the fork block of the V2-history step only). It loads the
+            # deployments/hemi records of the checked-out tree, which must name the
+            # live implementations (docs/AUTO_RELOCK_UPGRADE.md, section 4).
+            - name: Auto-relock deploy rehearsal (requires HEMI_RPC_URL secret)
+              if: ${{ !cancelled() && env.HAS_HEMI_RPC == 'true' }}
+              timeout-minutes: 90
+              env:
+                  HEMI_RPC_URL: ${{ secrets.HEMI_RPC_URL }}
+                  HEMI_FORK_BLOCK: ${{ vars.AUTORELOCK_REHEARSAL_FORK_BLOCK || '5524738' }}
+              run: |
+                  npm run test:hardhat:fork:autorelock
+              id: deploy-rehearsal

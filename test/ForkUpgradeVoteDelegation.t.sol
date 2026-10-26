@@ -84,6 +84,13 @@ contract ForkUpgradeVoteDelegationTest is Test {
     }
 
     function setUp() public {
+        // Skip cleanly when no Hemi RPC is configured (the `hemi` alias is empty).
+        string memory rpcUrl = vm.envOr("HEMI_RPC_URL", string(""));
+        if (bytes(rpcUrl).length == 0) {
+            vm.skip(true);
+            return;
+        }
+
         // Optional block pin: if HEMI_FORK_BLOCK is set in env, fork `hemi`
         // at that block (see foundry.toml [rpc_endpoints]). This gives
         // reproducible results and lets Foundry's RPC cache absorb repeated
@@ -270,7 +277,7 @@ contract ForkUpgradeVoteDelegationTest is Test {
     function testForkDelegationSetTrustedAdapterPostUpgrade() public onlyFork {
         _upgradeDelegationProxy();
 
-        // LOW-5 (2026-05-04 audit): setTrustedAdapter rejects zero-code
+        // setTrustedAdapter rejects zero-code
         // addresses, so the new adapter must be a real contract. Use the
         // in-test MockAdapter stub (defined at the bottom of this file).
         address newAdapter = address(new MockAdapter());
@@ -982,10 +989,9 @@ contract ForkUpgradeVoteDelegationTest is Test {
     ///             emits no event and writes no storage, and
     ///         (d) passing `address(0)` clears the setting.
     ///
-    ///         Pre-fix VVD has no `setAutoDelegate` entry — only the
-    ///         adapter-side `delegateAllFor` could populate `autoDelegate`.
-    ///         This test pins the new user-facing surface against the
-    ///         deployed proxy.
+    ///         `setAutoDelegate` lets a holder set `autoDelegate` directly,
+    ///         without the adapter-side `delegateAllFor`. This test pins
+    ///         that user-facing surface against the deployed proxy.
     function testForkSetAutoDelegateSelfPath() public onlyFork {
         _upgradeDelegationProxy();
 

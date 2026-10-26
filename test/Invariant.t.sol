@@ -19,6 +19,9 @@ contract InvariantTest is Test {
     ///      will silently drift — update both together.
     uint256 internal constant MAX_TIME = 4 * 365.25 days;
 
+    /// @dev SIX_DAYS from VeHemi.sol (`veHemi.SIX_DAYS()`), restated: MONTH / 5 = 525,960 s.
+    uint256 internal constant SIX_DAYS = 365.25 days / (12 * 5);
+
     address admin = makeAddr("admin");
     address alice = makeAddr("alice");
     address bob = makeAddr("bob");
@@ -61,7 +64,7 @@ contract InvariantTest is Test {
     }
 
     function invariant_votingPower() public {
-        // Warp to next hourly epoch boundary (delegation takes effect at hour boundaries),
+        // Warp to the next hour boundary, so every pending (hour-dated) change has landed,
         // then restore timestamp so we don't pollute handler state.
         uint256 savedTimestamp = block.timestamp;
         vm.warp(((block.timestamp / 1 hours) * 1 hours) + 1 hours);
@@ -161,13 +164,12 @@ contract InvariantTest is Test {
     ///      EVERY observation of `seedAttempts > 0` MUST coincide with
     ///      `seeded == true` at this invariant check point.
     ///
-    ///      Defends against the regression class where `markSeedingStarted`
-    ///      silently fails to set the latch (e.g., MUT-Q7 of N4-A2's
-    ///      mutation analysis: `seedingStartedAt = block.timestamp - 1`):
-    ///      `seedAttempts` would increment but the immediate cross-block
-    ///      revert from `_requireSeedingActive` would either fail the run
-    ///      under fail_on_revert (catching the bug) or leave `seeded ==
-    ///      false` (caught by THIS invariant).
+    ///      Defends against a `markSeedingStarted` that silently fails to
+    ///      set the latch (e.g., one that never sets `seedingStarted`): the
+    ///      `SeedingNotStarted` revert from `_requireSeedingActive` in the
+    ///      following `seedBatch` fails the run under fail_on_revert. (A
+    ///      reverted `seed()` also rolls back its `seedAttempts` increment,
+    ///      so without fail_on_revert this invariant would not see it.)
     function invariant_seedingAttemptCounterAndSeededLatchAreCoherent() public view {
         if (handler.seedAttempts() > 0) {
             assertTrue(
@@ -177,7 +179,8 @@ contract InvariantTest is Test {
         }
     }
 
-    /// @dev V2: After seeding, forfeitable <= locked <= total must always hold.
+    /// @dev V2: After seeding, forfeitable <= locked <= total + the flat positions'
+    ///      bucket-mean slack must always hold (with no flat position, locked <= total).
     function invariant_subcurveOrdering() public view {
         if (!handler.seeded()) return; // Subcurves not active yet
 
@@ -186,7 +189,49 @@ contract InvariantTest is Test {
         uint256 forfeitable_ = veHemi.forfeitableTotalVeHemiSupply();
 
         assertLe(forfeitable_, locked, "forfeitable > locked");
-        assertLe(locked, total, "locked > total");
+        // A flat (auto-relock) position books its bucket-mean level
+        // `slope * (R - SIX_DAYS/2)` into the global curve but its plain ramp
+        // to `transferableAfter` into the subcurves, so `locked` may exceed
+        // `total` by that position's excess (`_bucketMeanSlack`), which is at
+        // most `slope * SIX_DAYS/2`. With no flat position the slack is zero
+        // and this reduces to `locked <= total`.
+        (uint256 slack, uint256 cap) = _bucketMeanSlack();
+        assertLe(slack, cap, "bucket-mean subcurve slack exceeds slope * SIX_DAYS/2 per flat in-window position");
+        assertLe(locked, total + slack, "locked > total + bucket-mean half-bucket slack");
+    }
+
+    /// @dev The exact per-position excess of the subcurve over the global
+    ///      curve, and its cap, rebuilt from the contract's primitives:
+    ///        sub_i  = slope_i * (min(lock.end, transferableAfter) - now)
+    ///        glob_i = flat ? slope_i * (R - SIX_DAYS/2) : slope_i * (lock.end - now)
+    ///      with R = autoRelockRemaining(id), non-zero exactly when the position is flat.
+    ///      Only flat positions can have `sub_i > glob_i`; each adds
+    ///      `slope_i * SIX_DAYS/2` to the cap.
+    function _bucketMeanSlack() internal view returns (uint256 slack, uint256 cap) {
+        uint256 nowTs = block.timestamp;
+        uint256 nextId = veHemi.nextTokenId();
+        for (uint256 id = 1; id < nextId; ++id) {
+            // No `_ownerOf` probe (it is non-view): `withdraw` and `forfeit`
+            // delete `transferableAfter[id]` and zero the amount, so the two
+            // filters below already exclude burned tokens.
+            uint256 ta = veHemi.transferableAfter(id);
+            if (ta == 0 || ta <= nowTs) continue;
+            IVeHemi.LockedBalance memory lb = veHemi.getLockedBalance(id);
+            if (lb.amount <= 0) continue;
+            uint256 slope = uint256(uint128(lb.amount)) / MAX_TIME;
+            uint256 subEnd = lb.end < ta ? lb.end : ta;
+            if (subEnd <= nowTs) continue;
+            uint256 sub = slope * (subEnd - nowTs);
+            uint256 r = uint256(veHemi.autoRelockRemaining(id));
+            uint256 glob;
+            if (r != 0) {
+                cap += slope * (SIX_DAYS / 2);
+                glob = r > SIX_DAYS / 2 ? slope * (r - SIX_DAYS / 2) : 0;
+            } else {
+                glob = lb.end > nowTs ? slope * (lb.end - nowTs) : 0;
+            }
+            if (sub > glob) slack += sub - glob;
+        }
     }
 
     /// @dev The global epoch counter must only increase, and globalPointHistory timestamps
@@ -224,10 +269,18 @@ contract InvariantTest is Test {
 
         (uint256 total, uint256 locked_, uint256 forfeitable_, uint256 transferable) = veHemi.supplyBreakdown();
 
-        // Internal consistency
+        // Internal consistency. The ordering carries the same slack as
+        // `invariant_subcurveOrdering`, and `transferable` is the saturating
+        // difference the view computes (`locked_ > total` is a legal state).
         assertLe(forfeitable_, locked_, "breakdown: forfeitable > locked");
-        assertLe(locked_, total, "breakdown: locked > total");
-        assertEq(transferable, total - locked_, "breakdown: transferable != total - locked");
+        (uint256 slack, uint256 cap) = _bucketMeanSlack();
+        assertLe(slack, cap, "breakdown: bucket-mean slack exceeds slope * SIX_DAYS/2 per flat in-window position");
+        assertLe(locked_, total + slack, "breakdown: locked > total + bucket-mean half-bucket slack");
+        assertEq(
+            transferable,
+            total > locked_ ? total - locked_ : 0,
+            "breakdown: transferable != saturating(total - locked)"
+        );
 
         // Cross-check against individual supply functions. These MUST be
         // exactly equal — supplyBreakdown and the individual getters read the
@@ -296,17 +349,26 @@ contract InvariantTest is Test {
         );
     }
 
-    /// @dev Storage-gap integrity: V2's `__gapV2[37]` occupies slots 27–63.
-    ///      They must remain zero under all handler operations. Any non-zero
-    ///      slot in this range indicates a write ran off the end of a named
-    ///      field (would happen if a struct size calculation were wrong or
-    ///      storage was written beyond a mapping's expected layout).
+    /// @dev Storage-gap integrity: V2's `__gapV2[37]` occupies slots 27–63
+    ///      and V3's `__gapV3[48]` slots 66–113 (64 and 65 are the auto-relock
+    ///      mapping bases between them). They must remain zero under all
+    ///      handler operations. Any non-zero slot in these ranges indicates a
+    ///      write ran off the end of a named field (would happen if a struct
+    ///      size calculation were wrong or storage was written beyond a
+    ///      mapping's expected layout).
     function invariant_gapSlotsZero() public view {
         for (uint256 i = 27; i <= 63; ++i) {
             assertEq(
                 vm.load(address(veHemi), bytes32(i)),
                 bytes32(0),
                 string.concat("V2 gap slot ", vm.toString(i), " corrupted")
+            );
+        }
+        for (uint256 i = 66; i <= 113; ++i) {
+            assertEq(
+                vm.load(address(veHemi), bytes32(i)),
+                bytes32(0),
+                string.concat("V3 gap slot ", vm.toString(i), " corrupted")
             );
         }
     }
@@ -370,12 +432,14 @@ contract InvariantTest is Test {
     }
 
     /// @dev Every minted, live token must have a non-zero cached delegatee.
-    ///      Every mint path (createLock / createLockFor) and every transfer
-    ///      path runs `_delegate` against `_resolveAutoDelegate`, which
-    ///      falls back to the recipient itself when their autoDelegate is
-    ///      unset. The only legal way for `delegations[tokenId].delegatee`
-    ///      to be address(0) is on a burned tokenId (`ownerOf` reverts /
-    ///      returns 0 in that case).
+    ///      Every mint path (createLock / createLockFor / createLockWithAutoRelock)
+    ///      and every transfer path runs `_delegate` against
+    ///      `_resolveAutoDelegate`, which falls back to the recipient itself
+    ///      when their autoDelegate is unset. With the honest delegation
+    ///      module this handler installs, the only way for
+    ///      `delegations[tokenId].delegatee` to be address(0) is on a burned
+    ///      tokenId (`ownerOf` reverts / returns 0 in that case); a module
+    ///      that refuses a write can leave a live token with an empty record.
     function invariant_ownershipDelegateConsistency() public {
         uint256 nextId = veHemi.nextTokenId();
         for (uint256 id = 1; id < nextId; ++id) {
@@ -476,14 +540,10 @@ contract InvariantTest is Test {
 
     /// @notice The IAdapterNotify relay paths (`notifyDelegateChanged` and
     ///         `notifyVotesChanged` callbacks from `VeHemiVoteDelegation`
-    ///         to the configured `trustedAdapter`) were previously DEAD
-    ///         under fuzz — `setTrustedAdapter` was never called by any
-    ///         handler action, so the three relay sites in
-    ///         `VeHemiVoteDelegation._delegate` / `_moveVotingPowerTo*` /
-    ///         `refreshVotingPower*` had zero fuzz exposure.
-    ///
-    ///         The handler now installs a `CountingAdapter` at construction
-    ///         time. This invariant asserts:
+    ///         to the configured `trustedAdapter`) need an adapter to be
+    ///         reached under fuzz, so the handler installs a
+    ///         `CountingAdapter` at construction time. This invariant
+    ///         asserts:
     ///           (a) the adapter received at LEAST one notify call per
     ///               forfeited token (every forfeit fires
     ///               `notifyDelegateChanged(_, _, address(0))`), and

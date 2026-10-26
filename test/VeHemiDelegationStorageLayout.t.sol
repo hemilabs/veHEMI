@@ -194,13 +194,13 @@ contract VeHemiDelegationStorageLayoutTest is Test {
         assertEq(delegation.nonces(signer), sentinel, "V1 last original slot (nonces) is not at slot 3");
     }
 
-    function test_slot4_isFirstNewSlot() public {
-        // autoDelegate is the first NEW field added by the Aragon upgrade.
+    function test_slot4_isFirstV2Slot() public {
+        // autoDelegate is the first V2 field (added by the Aragon upgrade).
         address owner = address(0x7777);
         address sentinel = address(0xAAAA);
         bytes32 slot = keccak256(abi.encode(owner, uint256(4)));
         vm.store(delegationProxy, slot, bytes32(uint256(uint160(sentinel))));
-        assertEq(delegation.autoDelegate(owner), sentinel, "First new Aragon slot (autoDelegate) is not at slot 4");
+        assertEq(delegation.autoDelegate(owner), sentinel, "First V2 slot (autoDelegate) is not at slot 4");
     }
 
     // =========================================================================
@@ -209,7 +209,7 @@ contract VeHemiDelegationStorageLayoutTest is Test {
     // latch read as zero.
     // =========================================================================
 
-    function test_gap_isClean() public view {
+    function test_gapsThroughV3_areClean() public view {
         for (uint256 i = 6; i <= 49; ++i) {
             bytes32 val = vm.load(delegationProxy, bytes32(i));
             assertEq(val, bytes32(0), string.concat("V2 gap slot ", vm.toString(i), " is not zero"));
@@ -223,18 +223,18 @@ contract VeHemiDelegationStorageLayoutTest is Test {
         }
     }
 
-    function test_totalSlots_is100() public pure {
+    function test_slotsThroughV3_total100() public pure {
         // V1: 4 named (delegations, delegateCheckpoints, expiredDelegations, nonces)
         // V2: 2 named (autoDelegate, trustedAdapter) + 44 gap
         // V3: 1 named (migrationFinalized) + 49 gap
-        // Total reserved: 100 slots.
+        // Total reserved through V3: 100 slots.
         uint256 namedSlots = 4 + 2 + 1;
         uint256 gapSlots = 44 + 49;
-        assertEq(namedSlots + gapSlots, 100, "Total delegation storage slots must be 100");
+        assertEq(namedSlots + gapSlots, 100, "Delegation storage slots through V3 must total 100");
     }
 
     // =========================================================================
-    // Default values on a fresh proxy: verify that the NEW Aragon fields
+    // Default values on a fresh proxy: verify that the V2 (Aragon) fields
     // read as their expected zero defaults, which is what a V1 proxy would
     // have at those slots before the bytecode swap.
     // =========================================================================

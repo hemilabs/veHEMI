@@ -1,6 +1,7 @@
 import { DeployFunction } from "hardhat-deploy/types";
 import { Addresses } from "../helpers/addresses";
 import { saveForSafeBatchExecution } from "../helpers/safe";
+import { deployVeHemiLibraries } from "../helpers/vehemiLibraries";
 
 const VE_HEMI = "VeHemi";
 
@@ -15,11 +16,18 @@ const func: DeployFunction = async function (hre) {
         );
     }
 
+    // `src/VeHemi.sol` DELEGATECALLs two external libraries (helpers/vehemiLibraries.ts).
+    // Without `libraries:` below, the creation code still holds `__$<hash>$__`
+    // placeholders and the deploy fails on invalid hex. The libraries are deployed
+    // first because their addresses are compiled into the implementation.
+    const libraries = await deployVeHemiLibraries(hre, deployer);
+
     const deployFunction = () =>
         deploy(VE_HEMI, {
             from: deployer,
             log: true,
             args: [Addresses.Hemi.HEMI_TOKEN],
+            libraries,
             proxy: {
                 // Hardhat-deploy will deploy these proxy-related contracts:
                 // ProxyAdmin: https://github.com/wighawag/hardhat-deploy/blob/v1.0.4/solc_0.8/openzeppelin/proxy/transparent/ProxyAdmin.sol

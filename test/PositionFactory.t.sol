@@ -377,10 +377,10 @@ contract PositionFactoryTest is Test {
     }
 
     /// @notice End-to-end: PositionFactory → VeHemi.createLockFor → V2 subcurve
-    ///         tracking. Pre-fix this path had no integration coverage — the
-    ///         factory-side state was tested in isolation, but the resulting
-    ///         position's membership in `nonTransferableTotalVeHemiSupply` /
-    ///         `forfeitableTotalVeHemiSupply` was never asserted.
+    ///         tracking: asserts the resulting position's membership in
+    ///         `nonTransferableTotalVeHemiSupply` /
+    ///         `forfeitableTotalVeHemiSupply` (the factory-side state is tested
+    ///         in isolation elsewhere).
     function test_factory_createsNonTransferableForfeitable_endToEnd() public {
         // Run the V2 3-phase seeding flow first — non-transferable mints are
         // blocked until `lockedSeedingFinalized` is true. Zero pre-seeding

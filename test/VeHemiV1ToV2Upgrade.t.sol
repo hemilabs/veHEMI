@@ -17,10 +17,9 @@ import "./mocks/MockHemiVoteDelegation.sol";
 ///         to a FRESH V2 implementation and verify every sentinel is still
 ///         readable at the same slot through the same public getter.
 ///
-///         This catches ANY storage-layout regression — most importantly the
-///         class of bug introduced by reordering the inheritance base list
-///         (which was the motivation for switching from sibling to chain
-///         inheritance per Manoj's review comment).
+///         This catches ANY storage-layout regression — most importantly a
+///         reordering of the inheritance base list (the reason the storage
+///         contracts use chain rather than sibling inheritance).
 ///
 ///         This is complementary to VeHemiStorageLayout.t.sol (which tests
 ///         slot positions against fresh-deploy state) and ForkUpgradeLockedCurve.t.sol
@@ -79,7 +78,7 @@ contract VeHemiV1ToV2UpgradeTest is Test {
         _assertV2Sentinels();
     }
 
-    function test_AllSlotsSurviveUpgrade() public {
+    function test_V1AndV2SlotsSurviveUpgrade() public {
         _writeV1Sentinels();
         _writeV2Sentinels();
         _upgradeTo(address(v2Impl2));

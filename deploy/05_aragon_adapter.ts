@@ -109,11 +109,11 @@ const func: DeployFunction = async function (hre) {
 
     if (!vvdIsV2) {
         // VVD is still V1. The V2 upgrade must be queued in this same batch.
-        // `helpers/safe.ts` auto-cleans any stale `MULTI_SIG_TXS_FILE` at
-        // module-load time (the very first `import` of the helper, before
-        // any deploy script body runs), so a non-empty file here means
-        // script 04 (or another script earlier in this same invocation) just
-        // queued real txs.
+        // `helpers/safe.ts` refuses to start while a non-empty
+        // `MULTI_SIG_TXS_FILE` from an earlier run is on disk (it checks at
+        // module load, before any deploy script body runs), so a non-empty
+        // file here means script 04 (or another script earlier in this same
+        // invocation) just queued real txs.
         const batchHasContent =
             fs.existsSync(MULTI_SIG_TXS_FILE) &&
             fs.statSync(MULTI_SIG_TXS_FILE).size > 0;

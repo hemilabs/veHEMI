@@ -22,7 +22,7 @@ import {MockERC20} from "./mocks/MockERC20.sol";
 ///              execution.
 ///
 ///         Each test pins one observable property of the flow so a future
-///         refactor that re-introduces the original bug class fails loudly.
+///         refactor that breaks it fails loudly.
 contract SeedingFlowTest is Test {
     VeHemi internal veHemi;
     VeHemiVoteDelegation internal delegation;
@@ -121,7 +121,7 @@ contract SeedingFlowTest is Test {
 
         // `seedingStarted` is set on markSeedingStarted and never cleared, so
         // re-calling after finalization reverts with SeedingAlreadyStarted
-        // (the dead `lockedSeedingFinalized` check was removed for bytecode).
+        // (markSeedingStarted has no separate `lockedSeedingFinalized` check).
         vm.expectRevert(VeHemi.SeedingAlreadyStarted.selector);
         veHemi.markSeedingStarted();
     }
@@ -132,12 +132,12 @@ contract SeedingFlowTest is Test {
         veHemi.markSeedingStarted();
     }
 
-    /// @notice MULTI-BLOCK REGRESSION: the single-block atomicity guard that
-    ///         previously gated `seedBatch`/`finalizeSeeding` has been removed
-    ///         (Hemi mainnet has 30K+ non-transferable positions, far beyond a
-    ///         single-block budget). Cross-block execution must now SUCCEED
-    ///         and produce totals identical to a single-block scan, as long
-    ///         as the immutability guards on non-transferable positions hold
+    /// @notice MULTI-BLOCK SEEDING: `seedBatch`/`finalizeSeeding` have no
+    ///         single-block atomicity guard (Hemi mainnet has 30K+
+    ///         non-transferable positions, far beyond a single-block
+    ///         budget). Cross-block execution must SUCCEED and produce
+    ///         totals identical to a single-block scan, as long as the
+    ///         immutability guards on non-transferable positions hold
     ///         throughout the window.
     function test_seedingFlow_multiBlock_finalizeAcrossBlockBoundary_succeeds() public {
         // Mint a short-lived non-transferable so subEnd is close.
@@ -210,9 +210,9 @@ contract SeedingFlowTest is Test {
 
     /// @notice PERMISSIONLESS PRE-START: a non-owner call BEFORE
     ///         `markSeedingStarted` must revert with `SeedingNotStarted`
-    ///         (start-latch precondition), not with an owner error. The
-    ///         `onlyOwner` modifier on `seedBatch` was removed; ordering of
-    ///         remaining checks is verified here.
+    ///         (start-latch precondition), not with an owner error.
+    ///         `seedBatch` has no `onlyOwner` modifier; the ordering of its
+    ///         checks is verified here.
     function test_seedBatch_revertsForAnyCaller_beforeStart() public {
         vm.prank(attacker);
         vm.expectRevert(VeHemi.SeedingNotStarted.selector);
@@ -499,8 +499,7 @@ contract SeedingFlowTest is Test {
     ///
     ///         If either property regresses (e.g., MIN_LOCK_AMOUNT lowered
     ///         below MAX_TIME, or the `AmountTooSmall` revert is removed),
-    ///         this test fires loudly. Catches the exact regression that the
-    ///         prior `vm.skip(true)` documented but did not enforce.
+    ///         this test fires loudly.
     function test_seedBatch_minLockAmountGateForcesNonZeroSlope() public {
         // (a) The floor applies to every caller — including the test contract
         // (which is the owner). There is no owner bypass. Calling with
@@ -661,7 +660,7 @@ contract SeedingFlowTest is Test {
         veHemi.finalizeSeeding();
     }
 
-    /// @notice INCOMPLETE-CURSOR REGRESSION: with the multi-block refactor,
+    /// @notice INCOMPLETE-CURSOR REGRESSION: under multi-block seeding,
     ///         cross-block `finalizeSeeding` is allowed when the cursor is
     ///         complete. If the cursor is INCOMPLETE, `SeedingIncomplete`
     ///         must fire — the "latch does not unlatch until max position"
@@ -673,7 +672,7 @@ contract SeedingFlowTest is Test {
 
         veHemi.markSeedingStarted(); // Cursor stays at 0 — incomplete.
 
-        vm.warp(block.timestamp + 1); // Cross-block now allowed.
+        vm.warp(block.timestamp + 1); // Cross-block is allowed.
 
         // Cursor at 0, expected end at 2 — incomplete must surface.
         vm.expectRevert(abi.encodeWithSelector(VeHemi.SeedingIncomplete.selector, 0, 2));
@@ -713,7 +712,7 @@ contract SeedingFlowTest is Test {
 
     /// @notice PERMISSIONLESS PRE-START: a call BEFORE `markSeedingStarted`
     ///         must revert with `SeedingNotStarted`, not an owner error.
-    ///         Verifies the order of checks now that `onlyOwner` is gone.
+    ///         Verifies the order of checks (there is no `onlyOwner` gate).
     function test_finalizeSeeding_revertsForAnyCaller_beforeStart() public {
         vm.prank(attacker);
         vm.expectRevert(VeHemi.SeedingNotStarted.selector);
@@ -997,15 +996,14 @@ contract SeedingFlowTest is Test {
     }
 
     // ═════════════════════════════════════════════════════════════════════
-    // MULTI-BLOCK PERMISSIONLESS SEEDING — regression coverage
+    // MULTI-BLOCK PERMISSIONLESS SEEDING
     //
-    // The single-block atomicity guard (`block.timestamp == seedingStartedAt`
-    // in `_requireSeedingActive`) was removed because at Hemi mainnet scale
-    // (~30K non-transferable positions) the catchup cannot fit in one block.
-    // The seeded totals must remain identical to a single-block execution as
-    // long as the immutability guards on non-transferable positions hold for
-    // the whole window. These tests pin that property under realistic
-    // multi-block flows.
+    // `_requireSeedingActive` has no single-block atomicity guard: at Hemi
+    // mainnet scale (~30K non-transferable positions) the catchup cannot
+    // fit in one block. The seeded totals must remain identical to a
+    // single-block execution as long as the immutability guards on
+    // non-transferable positions hold for the whole window. These tests pin
+    // that property under realistic multi-block flows.
     // ═════════════════════════════════════════════════════════════════════
 
     /// @notice Drive `seedBatch` across many blocks in small chunks. Compare
@@ -1157,10 +1155,9 @@ contract SeedingFlowTest is Test {
         assertTrue(veHemi.lockedSeedingFinalized(), "latch flips only after cursor reaches target");
     }
 
-    /// @notice Adversary cannot lengthen the seed range mid-flow. The
-    ///         single-block guard previously made this trivially true; with
-    ///         multi-block seeding, the property must hold across the
-    ///         extended window.
+    /// @notice Adversary cannot lengthen the seed range mid-flow. With
+    ///         multi-block seeding the property must hold across the
+    ///         whole window.
     function test_multiBlock_adversarialMintDuringWindow_blockedAndTargetFrozen() public {
         _mintLocked(alice, LOCK_AMOUNT, LOCK_2Y);
         _mintLocked(bob, LOCK_AMOUNT, LOCK_2Y);
@@ -1275,11 +1272,11 @@ contract SeedingFlowTest is Test {
     ///         ≈ 12 days` while realistic seeding windows are minutes-to-hours.
     ///         But the contract MUST remain self-consistent if it does occur
     ///         in a stressed test environment: per the documented constraint
-    ///         (VeHemi.sol L1377-L1391), the seeded subcurve carries the
-    ///         position past its true subEnd because the slope-change at
-    ///         `subEnd` was already written by `seedBatch` and the
-    ///         post-finalize walk starts at `tsFinal > subEnd` (so the
-    ///         walk never revisits that bucket).
+    ///         (the OPERATIONAL CONSTRAINT paragraph of `finalizeSeeding`'s
+    ///         NatSpec in VeHemi.sol), the seeded subcurve carries the position
+    ///         past its true subEnd because the slope-change at `subEnd` was
+    ///         already written by `seedBatch` and the post-finalize walk starts
+    ///         at `tsFinal > subEnd` (so the walk never revisits that bucket).
     ///
     ///         Concretely we pin: with one short position (subEnd just inside
     ///         the window) and one long position, the finalized

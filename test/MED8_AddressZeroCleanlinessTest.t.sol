@@ -4,14 +4,14 @@ pragma solidity ^0.8.29;
 import "./LockedCurveTestBase.sol";
 
 /// @title MED8_AddressZeroCleanlinessTest
-/// @notice Empirical reproducer for MED-8.
+/// @notice A forfeit credits no voting power to `address(0)`.
 ///
 /// Hypothesis: after a `forfeit()` call, VeHemi calls `_delegate(tokenId, address(0))`
 /// which may cause voting power to accumulate against `address(0)` in
 /// VeHemiVoteDelegation. If so, `getVotes(address(0))` / `getPastVotes(address(0), ...)`
 /// would return non-zero, indicating leakage.
 ///
-/// If all assertions pass, MED-8 is empirically ADDRESSED.
+/// If all assertions pass, `address(0)` holds no votes after a forfeit.
 contract MED8_AddressZeroCleanlinessTest is LockedCurveTestBase {
     uint256 constant LOCK_AMOUNT = 100 ether;
     uint256 constant LOCK_DURATION = 2 * 365 days;
@@ -60,17 +60,17 @@ contract MED8_AddressZeroCleanlinessTest is LockedCurveTestBase {
         // getPastVotes requires timestamp_ <= block.timestamp; use preForfeitTs which is now in the past.
         uint256 votesAgo = delegation.getPastVotes(address(0), preForfeitTs - 1);
 
-        assertEq(votesNow, 0, "MED-8: getVotes(address(0)) != 0 post-forfeit");
-        assertEq(votesPast, 0, "MED-8: getPastVotes(address(0), now) != 0 post-forfeit");
-        assertEq(votesAgo, 0, "MED-8: getPastVotes(address(0), past) != 0 post-forfeit");
+        assertEq(votesNow, 0, "getVotes(address(0)) != 0 post-forfeit");
+        assertEq(votesPast, 0, "getPastVotes(address(0), now) != 0 post-forfeit");
+        assertEq(votesAgo, 0, "getPastVotes(address(0), past) != 0 post-forfeit");
 
         // 5. Warp 1 year, re-check
         vm.warp(block.timestamp + 365 days);
-        assertEq(delegation.getVotes(address(0)), 0, "MED-8: getVotes(address(0)) != 0 after 1y warp");
+        assertEq(delegation.getVotes(address(0)), 0, "getVotes(address(0)) != 0 after 1y warp");
         assertEq(
             delegation.getPastVotes(address(0), block.timestamp - 1),
             0,
-            "MED-8: getPastVotes(address(0), now-1) != 0 after 1y warp"
+            "getPastVotes(address(0), now-1) != 0 after 1y warp"
         );
     }
 }

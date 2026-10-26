@@ -9,28 +9,38 @@ via_ir = false
 evm_version = "cancun"  # Required for EIP-1153 transient storage (ReentrancyGuardTransient)
 block_timestamp = 1_738_368_000 # Feb 1, 2025 at 00:00 GMT
 
-# Allow reading the committed storage-layout goldens in test/fixtures/.
-# Needed by test/StorageLayoutGolden.t.sol to validate the fixtures directly
-# inside `forge test` (the CI shell gate is independent).
-fs_permissions = [{ access = "read", path = "test/fixtures/" }]
+# The storage-layout tests read the compiled layouts from out/.
+extra_output = ["storageLayout"]
+
+# Allow reading the committed storage-layout goldens and the EIP-170
+# attestation in test/fixtures/, and the compiled artifacts in out/
+# (test/StorageLayoutGolden.t.sol, test/StorageLayoutCompiledParity.t.sol,
+# test/deployability/EIP170Gate.t.sol). The CI shell gates are independent.
+fs_permissions = [
+    { access = "read", path = "test/fixtures/" },
+    { access = "read", path = "out/" },
+]
 
 # RPC aliases for fork tests.
 #
 # Use `--fork-url hemi` (the alias) rather than the raw URL so Foundry's
 # rate-limit-aware retry kicks in when public Hemi RPC returns HTTP 429.
 # `retries` = attempts per request (in addition to the first try); `retry_backoff`
-# is the initial delay in ms, doubled per retry. Values sized to absorb a short
-# burst of throttling without masking a sustained outage.
+# is the delay in ms between attempts.
 #
 # Block pinning is opt-in via the HEMI_FORK_BLOCK env var: fork tests that want
 # a reproducible snapshot read `vm.envOr("HEMI_FORK_BLOCK", uint256(0))` and
-# call `vm.createSelectFork("hemi", pinnedBlock)` from setUp when non-zero.
+# call `vm.createSelectFork("hemi", pinnedBlock)` from setUp when non-zero
+# (test/autorelock-upgrade forks at AUTORELOCK_TEST_FORK_BLOCK by default).
 [rpc_endpoints]
-# retries + retry_backoff sized so the cumulative retry window
-# (1s + 2s + 4s + 8s + 16s + 32s = 63s) exceeds Hemi's 60s rate-limit
-# reset window, guaranteeing that a throttled request sees a cleared
-# budget on the final retry.
+# Foundry 1.5.1 retries at a flat interval: 6 retries x 1,000 ms is a 6-second
+# window and does not outlast a 60-second rate-limit reset; the fork CI steps
+# run with --threads 1 for that reason.
 hemi = { endpoint = "${HEMI_RPC_URL}", retries = 6, retry_backoff = 1000 }
+# Ethereum mainnet, for the Aragon OSx lifecycle fork tests
+# (test/adapter/VeHemiAragonAdapterFork.t.sol). Public endpoints throttle, so
+# the retry window is longer.
+ethereum = { endpoint = "${ETH_RPC_URL}", retries = 12, retry_backoff = 6000 }
 
 # Dependencies with specific versions for reproducible builds
 # NOTE: Actual OZ contracts resolve via node_modules (see remappings.txt).
@@ -66,13 +76,22 @@ optimizer_runs = 1
 via_ir = false
 evm_version = "cancun"
 block_timestamp = 1_738_368_000
-fs_permissions = [{ access = "read", path = "test/fixtures/" }]
+extra_output = ["storageLayout"]
+fs_permissions = [
+    { access = "read", path = "test/fixtures/" },
+    { access = "read", path = "out/" },
+]
 
 [profile.ci.fuzz]
 runs = 1000
 
+# The invariant BUDGET is the one deliberate difference from the default
+# profile: it changes how many fuzz sequences run, not the compiled bytecode.
+# In .github/workflows/test.yml the `Foundry project` job (every push and pull
+# request) runs the campaigns at this budget; the nightly job runs them under
+# the default profile (1024 x 128).
 [profile.ci.invariant]
-runs = 1024
+runs = 128
 depth = 128
 fail_on_revert = true
 

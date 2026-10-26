@@ -9,16 +9,15 @@ import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.s
 import {MockERC20} from "./mocks/MockERC20.sol";
 
 /// @title  AuditBundleHardening
-/// @notice Behavioral coverage for the 2026-05-04 audit "low-risk LOW" bundle:
-///         LOW-3 (delegateBySig check ordering), LOW-5 (setTrustedAdapter
-///         contract probe), LOW-6 (isTransferable on burned/nonexistent),
-///         LOW-16 (bootstrap _delegate guard), MED-2 (DelegationSlopeOverflow).
-///         LOW-2 and LOW-15 are doc-only / dead-branch guards and are exercised
-///         transitively by the existing suite.
+/// @notice Behavioral coverage for a group of delegation hardening checks:
+///         the delegateBySig check ordering, the setTrustedAdapter contract
+///         probe and DelegationSlopeOverflow. isTransferable on
+///         burned/nonexistent ids and `_delegate` before `voteDelegation` is
+///         set are described in the notes below and have no test here.
 contract AuditBundleHardening is LockedCurveTestBase {
 
     // ─────────────────────────────────────────────────────────────────────
-    // LOW-3: delegateBySig expiry check fires before nonce burn / SLOADs
+    // delegateBySig expiry check fires before nonce burn / SLOADs
     // ─────────────────────────────────────────────────────────────────────
 
     function test_LOW3_delegateBySig_expiredSignature_revertsWithoutBurningNonce() public {
@@ -40,13 +39,13 @@ contract AuditBundleHardening is LockedCurveTestBase {
             bytes32(0)  // s
         );
 
-        // Critical: the signer's nonce slot must be unchanged. Pre-fix, the
-        // expiry check ran AFTER `nonces[_signer]++`, so an expired sig
-        // would still consume the nonce.
+        // Critical: the signer's nonce slot must be unchanged. The expiry
+        // check runs BEFORE `nonces[_signer]++`, so an expired sig does not
+        // consume the nonce.
         assertEq(delegation.nonces(alice), priorNonce, "nonce must not advance on expired sig");
     }
 
-    // --- LOW-3 EIP-712 helpers (BNR2-G7) ---
+    // --- EIP-712 helpers for delegateBySig ---
     bytes32 private constant _DELEGATION_TYPEHASH =
         keccak256("Delegation(uint256 delegator,address delegatee,uint256 nonce,uint256 expiry)");
     bytes32 private constant _DOMAIN_TYPEHASH =
@@ -109,8 +108,8 @@ contract AuditBundleHardening is LockedCurveTestBase {
         // And the revert must roll back the post-increment in
         // `nonces[_signer]++` — Solidity evaluates the post-inc before the
         // comparison reverts, but EVM revert semantics roll back the SSTORE.
-        // Locking the assertion in here pre-empts the "stale-nonce replay
-        // griefs the signer's nonce" misread (R2-G3 / R3-G11).
+        // The assertion shows that a stale-nonce replay does not grief the
+        // signer's nonce.
         assertEq(
             delegation.nonces(signer),
             priorNonce + 1,
@@ -120,10 +119,9 @@ contract AuditBundleHardening is LockedCurveTestBase {
 
     /// @notice A VALID signature (properly signed by the position owner) but
     ///         whose `expiry` has passed must revert `SignatureExpired` AND
-    ///         leave the signer's nonce untouched. This is the exact path the
-    ///         LOW-3 fix targets: pre-fix, the expiry check ran AFTER the
-    ///         nonce bump, so an attacker could burn a victim's nonce by
-    ///         relaying an old-but-genuine signature.
+    ///         leave the signer's nonce untouched: the expiry check runs
+    ///         BEFORE the nonce bump, so an attacker cannot burn a victim's
+    ///         nonce by relaying an old-but-genuine signature.
     function test_LOW3_validExpiredSig_doesNotBurnNonce() public {
         (address signer, uint256 signerPk) = makeAddrAndKey("low3-signer-expired");
 
@@ -155,7 +153,7 @@ contract AuditBundleHardening is LockedCurveTestBase {
     }
 
     // ─────────────────────────────────────────────────────────────────────
-    // LOW-5: setTrustedAdapter rejects zero-code addresses
+    // setTrustedAdapter rejects zero-code addresses
     // ─────────────────────────────────────────────────────────────────────
 
     function test_LOW5_setTrustedAdapter_rejectsEOA() public {
@@ -186,31 +184,29 @@ contract AuditBundleHardening is LockedCurveTestBase {
     }
 
     // ─────────────────────────────────────────────────────────────────────
-    // LOW-6: deferred (VeHemi bytecode-constrained — see VeHemi.isTransferable
-    // NatSpec). The pre-fix behavior is unchanged in this bundle.
+    // isTransferable returns true for burned/nonexistent ids (no test here;
+    // the VeHemi.isTransferable NatSpec says to pair it with `ownerOf`).
     // ─────────────────────────────────────────────────────────────────────
 
     // ─────────────────────────────────────────────────────────────────────
-    // LOW-16: _delegate emits DelegationUpdateFailed when voteDelegation==0
+    // `_delegate` while voteDelegation == address(0) (bootstrap window)
     // ─────────────────────────────────────────────────────────────────────
     //
-    // The fix adds an explicit `address(voteDelegation) == address(0)` guard
-    // at the top of `_delegate` so the function emits `DelegationUpdateFailed`
-    // and returns instead of silently CALLing a zero-code address. A unit
-    // test for this exact path is non-trivial to construct because the
-    // companion path `_reDelegate` (which runs inside `_depositFor` before
-    // `_delegate` is reached on the mint path) ALSO calls into
-    // `voteDelegation` and its try/catch around a struct-returning function
-    // bubbles up extcodesize reverts on zero-code addresses. Production
-    // deploy ordering closes the bootstrap window so the gap was already
-    // defensive in depth; the explicit guard makes the failure mode
-    // observable if any future deploy path momentarily reverts to
-    // `voteDelegation == address(0)`. Code review and the static analysis
-    // of `_delegate` (single-branch addition above existing try/catch)
-    // covers the change.
+    // `_delegate` has no `address(voteDelegation) == address(0)` guard. A
+    // call into the zero-code address fails the compiler's code-existence
+    // check, which reverts the calling frame and is not caught by the
+    // try/catch (see `VeHemi.updateVoteDelegation`), so `_delegate` reverts
+    // instead of emitting `DelegationUpdateFailed`. A unit test for this
+    // exact path is non-trivial to construct because the companion path
+    // `_reDelegate` (which runs inside `_depositFor` before `_delegate` is
+    // reached on the mint path) ALSO calls into `voteDelegation`, and its
+    // struct-returning call reverts the caller too: empty return data does
+    // not decode. Production deploy ordering closes the bootstrap window,
+    // and `updateVoteDelegation` rejects `address(0)`, so the pointer cannot
+    // return to zero once set.
 
     // ─────────────────────────────────────────────────────────────────────
-    // MED-2: DelegationSlopeOverflow surfaces a self-describing revert
+    // DelegationSlopeOverflow surfaces a self-describing revert
     // ─────────────────────────────────────────────────────────────────────
 
     function test_MED2_aggregateSlopeOverflow_revertsWithCustomError() public {
@@ -241,7 +237,7 @@ contract AuditBundleHardening is LockedCurveTestBase {
         vm.stopPrank();
     }
 
-    /// @notice Boundary test for MED-2 (R1-G4 / R1-G16): the overflow check is
+    /// @notice DelegationSlopeOverflow boundary test: the overflow check is
     ///         `_newSlope > type(uint64).max`, so an aggregate slope landing
     ///         *exactly* at `uint64.max` must succeed without reverting. This
     ///         locks in the strict-greater-than semantics — a future refactor

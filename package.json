@@ -13,6 +13,7 @@
         "test": "forge test",
         "test:gas": "forge test --gas-report",
         "test:hardhat:fork": "hardhat test test/hardhat/deploy-e2e.test.ts",
+        "test:hardhat:fork:autorelock": "hardhat test test/hardhat/autorelock-deploy-e2e.test.ts",
         "verify": "hardhat etherscan-verify",
         "verify:hemi": "hardhat etherscan-verify --network hemi --api-url https://explorer.hemi.xyz/api",
         "positions:create": "npx ts-node scripts/positions-factory.ts"
